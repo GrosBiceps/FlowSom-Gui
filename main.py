@@ -143,6 +143,12 @@ def load_config() -> Dict[str, Any]:
             'statistics_tab': True,
             'export_functions': True
         },
+        'onglets': {
+            'clusters_interactifs': True,
+            'score_lsc': True,
+            'suivi_patient': True,
+            'logs': True
+        },
         'modules_optionnels': {
             'data_transformations': True,
             'lsc_score': True,
@@ -2762,204 +2768,225 @@ class FlowSOMApp(QMainWindow):
         
         self.tabs.addTab(stats_tab, "Statistiques")
         
-        # Onglet Selection Clusters (avec ScrollArea)
-        cluster_tab = QWidget()
-        cluster_tab_outer_layout = QVBoxLayout(cluster_tab)
-        cluster_tab_outer_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # ScrollArea pour gerer le defilement
-        cluster_scroll = QScrollArea()
-        cluster_scroll.setWidgetResizable(True)
-        cluster_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        cluster_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        cluster_scroll.setStyleSheet("""
-            QScrollArea {
-                border: none;
-                background: transparent;
-            }
-        """)
-        
-        # Widget contenu dans le scroll
-        cluster_scroll_widget = QWidget()
-        cluster_tab_layout = QVBoxLayout(cluster_scroll_widget)
-        cluster_tab_layout.setContentsMargins(10, 10, 10, 10)
-        cluster_tab_layout.setSpacing(10)
-        
-        cluster_header = QLabel("Selection des Clusters a Afficher")
-        cluster_header.setStyleSheet("font-size: 12pt; font-weight: 600; color: #89b4fa; padding: 10px;")
-        cluster_tab_layout.addWidget(cluster_header)
-        
-        # Layout horizontal pour liste + star plot
-        cluster_main_layout = QHBoxLayout()
-        
-        # Panneau gauche: liste des clusters
-        cluster_left_panel = QWidget()
-        cluster_left_layout = QVBoxLayout(cluster_left_panel)
-        cluster_left_layout.setContentsMargins(0, 0, 5, 0)
-        
-        # Boutons selection rapide
-        cluster_btn_layout = QHBoxLayout()
-        self.btn_select_all = QPushButton("Tout selectionner")
-        self.btn_select_all.clicked.connect(self._select_all_clusters)
-        cluster_btn_layout.addWidget(self.btn_select_all)
-        
-        self.btn_deselect_all = QPushButton("Tout deselectionner")
-        self.btn_deselect_all.clicked.connect(self._deselect_all_clusters)
-        cluster_btn_layout.addWidget(self.btn_deselect_all)
-        cluster_left_layout.addLayout(cluster_btn_layout)
-        
-        # Liste des clusters (selection unique pour le star plot)
-        lbl_cluster_select = QLabel("Cliquez sur un cluster pour voir le Star Plot:")
-        lbl_cluster_select.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 5px;")
-        cluster_left_layout.addWidget(lbl_cluster_select)
-        
-        self.cluster_list = QListWidget()
-        self.cluster_list.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.cluster_list.itemSelectionChanged.connect(self._on_cluster_selection_changed)
-        self.cluster_list.setStyleSheet("""
-            QListWidget {
-                background: rgba(49, 50, 68, 0.6);
-                border: 1px solid rgba(137, 180, 250, 0.2);
-                border-radius: 8px;
-                padding: 5px;
-            }
-            QListWidget::item {
+        # Onglet Selection Clusters (avec ScrollArea) - Conditionnel selon config
+        if self.config.get('onglets', {}).get('clusters_interactifs', True):
+            cluster_tab = QWidget()
+            cluster_tab_outer_layout = QVBoxLayout(cluster_tab)
+            cluster_tab_outer_layout.setContentsMargins(0, 0, 0, 0)
+            
+            # ScrollArea pour gerer le defilement
+            cluster_scroll = QScrollArea()
+            cluster_scroll.setWidgetResizable(True)
+            cluster_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            cluster_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            cluster_scroll.setStyleSheet("""
+                QScrollArea {
+                    border: none;
+                    background: transparent;
+                }
+            """)
+            
+            # Widget contenu dans le scroll
+            cluster_scroll_widget = QWidget()
+            cluster_tab_layout = QVBoxLayout(cluster_scroll_widget)
+            cluster_tab_layout.setContentsMargins(10, 10, 10, 10)
+            cluster_tab_layout.setSpacing(10)
+            
+            cluster_header = QLabel("Selection des Clusters a Afficher")
+            cluster_header.setStyleSheet("font-size: 12pt; font-weight: 600; color: #89b4fa; padding: 10px;")
+            cluster_tab_layout.addWidget(cluster_header)
+            
+            # Layout horizontal pour liste + star plot
+            cluster_main_layout = QHBoxLayout()
+            
+            # Panneau gauche: liste des clusters
+            cluster_left_panel = QWidget()
+            cluster_left_layout = QVBoxLayout(cluster_left_panel)
+            cluster_left_layout.setContentsMargins(0, 0, 5, 0)
+            
+            # Boutons selection rapide
+            cluster_btn_layout = QHBoxLayout()
+            self.btn_select_all = QPushButton("Tout selectionner")
+            self.btn_select_all.clicked.connect(self._select_all_clusters)
+            cluster_btn_layout.addWidget(self.btn_select_all)
+            
+            self.btn_deselect_all = QPushButton("Tout deselectionner")
+            self.btn_deselect_all.clicked.connect(self._deselect_all_clusters)
+            cluster_btn_layout.addWidget(self.btn_deselect_all)
+            cluster_left_layout.addLayout(cluster_btn_layout)
+            
+            # Liste des clusters (selection unique pour le star plot)
+            lbl_cluster_select = QLabel("Cliquez sur un cluster pour voir le Star Plot:")
+            lbl_cluster_select.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 5px;")
+            cluster_left_layout.addWidget(lbl_cluster_select)
+            
+            self.cluster_list = QListWidget()
+            self.cluster_list.setSelectionMode(QAbstractItemView.SingleSelection)
+            self.cluster_list.itemSelectionChanged.connect(self._on_cluster_selection_changed)
+            self.cluster_list.setStyleSheet("""
+                QListWidget {
+                    background: rgba(49, 50, 68, 0.6);
+                    border: 1px solid rgba(137, 180, 250, 0.2);
+                    border-radius: 8px;
+                    padding: 5px;
+                }
+                QListWidget::item {
+                    padding: 8px;
+                    border-radius: 4px;
+                    margin: 2px;
+                }
+                QListWidget::item:selected {
+                    background: rgba(137, 180, 250, 0.4);
+                }
+                QListWidget::item:hover {
+                    background: rgba(137, 180, 250, 0.2);
+                }
+            """)
+            self.cluster_list.setMaximumWidth(220)
+            self.cluster_list.setMinimumHeight(200)
+            cluster_left_layout.addWidget(self.cluster_list)
+            
+            # Info cluster selectionne
+            self.lbl_cluster_info = QLabel("Aucun cluster selectionne")
+            self.lbl_cluster_info.setStyleSheet("""
+                color: #f9e2af;
+                font-size: 10pt;
+                font-weight: bold;
+                background: rgba(249, 226, 175, 0.1);
                 padding: 8px;
-                border-radius: 4px;
-                margin: 2px;
-            }
-            QListWidget::item:selected {
-                background: rgba(137, 180, 250, 0.4);
-            }
-            QListWidget::item:hover {
-                background: rgba(137, 180, 250, 0.2);
-            }
-        """)
-        self.cluster_list.setMaximumWidth(220)
-        self.cluster_list.setMinimumHeight(200)
-        cluster_left_layout.addWidget(self.cluster_list)
+                border-radius: 6px;
+            """)
+            self.lbl_cluster_info.setAlignment(Qt.AlignCenter)
+            cluster_left_layout.addWidget(self.lbl_cluster_info)
+            
+            cluster_main_layout.addWidget(cluster_left_panel)
+            
+            # Panneau droite: Star Plot du cluster
+            cluster_right_panel = QWidget()
+            cluster_right_layout = QVBoxLayout(cluster_right_panel)
+            cluster_right_layout.setContentsMargins(5, 0, 0, 0)
+            
+            lbl_star_plot = QLabel("Star Plot du Cluster Selectionne")
+            lbl_star_plot.setStyleSheet("font-size: 11pt; font-weight: 600; color: #cba6f7; padding: 5px;")
+            cluster_right_layout.addWidget(lbl_star_plot)
+            
+            # Canvas pour le Star Plot
+            self.star_canvas = MatplotlibCanvas(self, width=8, height=5, dpi=100)
+            self.star_canvas.setMinimumHeight(350)
+            cluster_right_layout.addWidget(self.star_canvas)
+            
+            cluster_main_layout.addWidget(cluster_right_panel, stretch=1)
+            
+            cluster_tab_layout.addLayout(cluster_main_layout)
+            
+            # Canvas pour le graphique de comparaison (en bas)
+            lbl_comparison = QLabel("Comparaison Sain vs Pathologique")
+            lbl_comparison.setStyleSheet("font-size: 11pt; font-weight: 600; color: #89b4fa; padding: 5px;")
+            cluster_tab_layout.addWidget(lbl_comparison)
+            
+            self.cluster_canvas = MatplotlibCanvas(self, width=10, height=3, dpi=100)
+            self.cluster_canvas.setMinimumHeight(250)
+            cluster_tab_layout.addWidget(self.cluster_canvas)
+            
+            # Canvas pour l'image FlowSOM Stars MST (en bas)
+            lbl_fsom_stars = QLabel("FlowSOM MST - Star Plot du Cluster")
+            lbl_fsom_stars.setStyleSheet("font-size: 11pt; font-weight: 600; color: #a6e3a1; padding: 5px;")
+            cluster_tab_layout.addWidget(lbl_fsom_stars)
+            
+            self.fsom_stars_canvas = MatplotlibCanvas(self, width=10, height=6, dpi=100)
+            self.fsom_stars_canvas.setMinimumHeight(450)
+            cluster_tab_layout.addWidget(self.fsom_stars_canvas)
+            
+            # Ajouter un stretch a la fin pour eviter l'etirement
+            cluster_tab_layout.addStretch()
+            
+            # Finaliser le scroll
+            cluster_scroll.setWidget(cluster_scroll_widget)
+            cluster_tab_outer_layout.addWidget(cluster_scroll)
+            
+            self.tabs.addTab(cluster_tab, "Clusters Interactifs")
+        else:
+            # Widgets par defaut si onglet desactive
+            self.cluster_list = None
+            self.lbl_cluster_info = None
+            self.star_canvas = None
+            self.cluster_canvas = None
+            self.fsom_stars_canvas = None
+            self.btn_select_all = None
+            self.btn_deselect_all = None
         
-        # Info cluster selectionne
-        self.lbl_cluster_info = QLabel("Aucun cluster selectionne")
-        self.lbl_cluster_info.setStyleSheet("""
-            color: #f9e2af;
-            font-size: 10pt;
-            font-weight: bold;
-            background: rgba(249, 226, 175, 0.1);
-            padding: 8px;
-            border-radius: 6px;
-        """)
-        self.lbl_cluster_info.setAlignment(Qt.AlignCenter)
-        cluster_left_layout.addWidget(self.lbl_cluster_info)
+        # Onglet Score LSC - Conditionnel selon config
+        if self.config.get('onglets', {}).get('score_lsc', True):
+            lsc_tab = QWidget()
+            lsc_tab_layout = QVBoxLayout(lsc_tab)
+            lsc_tab_layout.setContentsMargins(10, 10, 10, 10)
+            
+            lsc_header = QLabel("Score LSC - Cellules Souches Leucemiques")
+            lsc_header.setStyleSheet("font-size: 12pt; font-weight: 600; color: #f9e2af; padding: 10px;")
+            lsc_tab_layout.addWidget(lsc_header)
+            
+            # Tableau des resultats LSC
+            self.table_lsc = QTableWidget()
+            self.table_lsc.setColumnCount(2)
+            self.table_lsc.setHorizontalHeaderLabels(["Parametre", "Valeur"])
+            self.table_lsc.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            self.table_lsc.setAlternatingRowColors(True)
+            lsc_tab_layout.addWidget(self.table_lsc)
+            
+            # Canvas pour la visualisation LSC
+            self.lsc_canvas = MatplotlibCanvas(self, width=10, height=6, dpi=100)
+            lsc_tab_layout.addWidget(self.lsc_canvas)
+            
+            self.tabs.addTab(lsc_tab, "Score LSC")
+        else:
+            self.table_lsc = None
+            self.lsc_canvas = None
         
-        cluster_main_layout.addWidget(cluster_left_panel)
+        # Onglet Suivi Patient - Conditionnel selon config
+        if self.config.get('onglets', {}).get('suivi_patient', True):
+            patient_tab = QWidget()
+            patient_tab_layout = QVBoxLayout(patient_tab)
+            patient_tab_layout.setContentsMargins(10, 10, 10, 10)
+            
+            patient_header = QLabel("Suivi Longitudinal Patient")
+            patient_header.setStyleSheet("font-size: 12pt; font-weight: 600; color: #89b4fa; padding: 10px;")
+            patient_tab_layout.addWidget(patient_header)
+            
+            # Liste des timepoints
+            self.patient_timeline = QTableWidget()
+            self.patient_timeline.setColumnCount(4)
+            self.patient_timeline.setHorizontalHeaderLabels(["Timepoint", "Date", "LSC %", "Notes"])
+            self.patient_timeline.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            self.patient_timeline.setAlternatingRowColors(True)
+            patient_tab_layout.addWidget(self.patient_timeline)
+            
+            # Canvas pour l'evolution temporelle
+            self.patient_canvas = MatplotlibCanvas(self, width=10, height=5, dpi=100)
+            patient_tab_layout.addWidget(self.patient_canvas)
+            
+            self.tabs.addTab(patient_tab, "Suivi Patient")
+        else:
+            self.patient_timeline = None
+            self.patient_canvas = None
         
-        # Panneau droite: Star Plot du cluster
-        cluster_right_panel = QWidget()
-        cluster_right_layout = QVBoxLayout(cluster_right_panel)
-        cluster_right_layout.setContentsMargins(5, 0, 0, 0)
-        
-        lbl_star_plot = QLabel("Star Plot du Cluster Selectionne")
-        lbl_star_plot.setStyleSheet("font-size: 11pt; font-weight: 600; color: #cba6f7; padding: 5px;")
-        cluster_right_layout.addWidget(lbl_star_plot)
-        
-        # Canvas pour le Star Plot
-        self.star_canvas = MatplotlibCanvas(self, width=8, height=5, dpi=100)
-        self.star_canvas.setMinimumHeight(350)
-        cluster_right_layout.addWidget(self.star_canvas)
-        
-        cluster_main_layout.addWidget(cluster_right_panel, stretch=1)
-        
-        cluster_tab_layout.addLayout(cluster_main_layout)
-        
-        # Canvas pour le graphique de comparaison (en bas)
-        lbl_comparison = QLabel("Comparaison Sain vs Pathologique")
-        lbl_comparison.setStyleSheet("font-size: 11pt; font-weight: 600; color: #89b4fa; padding: 5px;")
-        cluster_tab_layout.addWidget(lbl_comparison)
-        
-        self.cluster_canvas = MatplotlibCanvas(self, width=10, height=3, dpi=100)
-        self.cluster_canvas.setMinimumHeight(250)
-        cluster_tab_layout.addWidget(self.cluster_canvas)
-        
-        # Canvas pour l'image FlowSOM Stars MST (en bas)
-        lbl_fsom_stars = QLabel("FlowSOM MST - Star Plot du Cluster")
-        lbl_fsom_stars.setStyleSheet("font-size: 11pt; font-weight: 600; color: #a6e3a1; padding: 5px;")
-        cluster_tab_layout.addWidget(lbl_fsom_stars)
-        
-        self.fsom_stars_canvas = MatplotlibCanvas(self, width=10, height=6, dpi=100)
-        self.fsom_stars_canvas.setMinimumHeight(450)
-        cluster_tab_layout.addWidget(self.fsom_stars_canvas)
-        
-        # Ajouter un stretch a la fin pour eviter l'etirement
-        cluster_tab_layout.addStretch()
-        
-        # Finaliser le scroll
-        cluster_scroll.setWidget(cluster_scroll_widget)
-        cluster_tab_outer_layout.addWidget(cluster_scroll)
-        
-        self.tabs.addTab(cluster_tab, "Clusters Interactifs")
-        
-        # Onglet Score LSC
-        lsc_tab = QWidget()
-        lsc_tab_layout = QVBoxLayout(lsc_tab)
-        lsc_tab_layout.setContentsMargins(10, 10, 10, 10)
-        
-        lsc_header = QLabel("Score LSC - Cellules Souches Leucemiques")
-        lsc_header.setStyleSheet("font-size: 12pt; font-weight: 600; color: #f9e2af; padding: 10px;")
-        lsc_tab_layout.addWidget(lsc_header)
-        
-        # Tableau des resultats LSC
-        self.table_lsc = QTableWidget()
-        self.table_lsc.setColumnCount(2)
-        self.table_lsc.setHorizontalHeaderLabels(["Parametre", "Valeur"])
-        self.table_lsc.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table_lsc.setAlternatingRowColors(True)
-        lsc_tab_layout.addWidget(self.table_lsc)
-        
-        # Canvas pour la visualisation LSC
-        self.lsc_canvas = MatplotlibCanvas(self, width=10, height=6, dpi=100)
-        lsc_tab_layout.addWidget(self.lsc_canvas)
-        
-        self.tabs.addTab(lsc_tab, "Score LSC")
-        
-        # Onglet Suivi Patient
-        patient_tab = QWidget()
-        patient_tab_layout = QVBoxLayout(patient_tab)
-        patient_tab_layout.setContentsMargins(10, 10, 10, 10)
-        
-        patient_header = QLabel("Suivi Longitudinal Patient")
-        patient_header.setStyleSheet("font-size: 12pt; font-weight: 600; color: #89b4fa; padding: 10px;")
-        patient_tab_layout.addWidget(patient_header)
-        
-        # Liste des timepoints
-        self.patient_timeline = QTableWidget()
-        self.patient_timeline.setColumnCount(4)
-        self.patient_timeline.setHorizontalHeaderLabels(["Timepoint", "Date", "LSC %", "Notes"])
-        self.patient_timeline.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.patient_timeline.setAlternatingRowColors(True)
-        patient_tab_layout.addWidget(self.patient_timeline)
-        
-        # Canvas pour l'evolution temporelle
-        self.patient_canvas = MatplotlibCanvas(self, width=10, height=5, dpi=100)
-        patient_tab_layout.addWidget(self.patient_canvas)
-        
-        self.tabs.addTab(patient_tab, "Suivi Patient")
-        
-        # Onglet Logs
-        logs_tab = QWidget()
-        logs_tab_layout = QVBoxLayout(logs_tab)
-        logs_tab_layout.setContentsMargins(10, 10, 10, 10)
-        
-        logs_header = QLabel("Journal d'Analyse")
-        logs_header.setStyleSheet("font-size: 12pt; font-weight: 600; color: #89b4fa; padding: 10px;")
-        logs_tab_layout.addWidget(logs_header)
-        
-        self.text_logs = QTextEdit()
-        self.text_logs.setReadOnly(True)
-        self.text_logs.setPlaceholderText("Les logs apparaitront ici...")
-        logs_tab_layout.addWidget(self.text_logs)
-        
-        self.tabs.addTab(logs_tab, "Logs")
+        # Onglet Logs - Conditionnel selon config
+        if self.config.get('onglets', {}).get('logs', True):
+            logs_tab = QWidget()
+            logs_tab_layout = QVBoxLayout(logs_tab)
+            logs_tab_layout.setContentsMargins(10, 10, 10, 10)
+            
+            logs_header = QLabel("Journal d'Analyse")
+            logs_header.setStyleSheet("font-size: 12pt; font-weight: 600; color: #89b4fa; padding: 10px;")
+            logs_tab_layout.addWidget(logs_header)
+            
+            self.text_logs = QTextEdit()
+            self.text_logs.setReadOnly(True)
+            self.text_logs.setPlaceholderText("Les logs apparaitront ici...")
+            logs_tab_layout.addWidget(self.text_logs)
+            
+            self.tabs.addTab(logs_tab, "Logs")
+        else:
+            self.text_logs = None
         
         right_layout.addWidget(self.tabs)
         
@@ -3435,9 +3462,12 @@ class FlowSOMApp(QMainWindow):
                 QMessageBox.critical(self, "Erreur", str(e))
                 
     def _log(self, message):
-        self.text_logs.append(message)
-        scrollbar = self.text_logs.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        if self.text_logs is not None:
+            self.text_logs.append(message)
+            scrollbar = self.text_logs.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+        # Toujours afficher dans la console pour debug
+        print(f"[LOG] {message}")
         
     # =========================================================================
     # METHODES UMAP / t-SNE (avec Worker Thread)
@@ -3598,7 +3628,7 @@ class FlowSOMApp(QMainWindow):
     
     def _populate_cluster_list(self):
         """Remplit la liste des clusters apres l'analyse."""
-        if not self.result:
+        if not self.result or self.cluster_list is None:
             return
             
         n_clusters = self.result['n_clusters']
@@ -3622,13 +3652,18 @@ class FlowSOMApp(QMainWindow):
         
     def _select_all_clusters(self):
         """Selectionne le premier cluster."""
+        if self.cluster_list is None:
+            return
         if self.cluster_list.count() > 0:
             self.cluster_list.setCurrentRow(0)
         
     def _deselect_all_clusters(self):
         """Deselectionne tous les clusters."""
+        if self.cluster_list is None:
+            return
         self.cluster_list.clearSelection()
-        self.lbl_cluster_info.setText("Aucun cluster selectionne")
+        if self.lbl_cluster_info is not None:
+            self.lbl_cluster_info.setText("Aucun cluster selectionne")
         self._clear_star_canvas()
         
     def _clear_star_canvas(self):
@@ -3662,7 +3697,7 @@ class FlowSOMApp(QMainWindow):
         
     def _update_star_plot(self):
         """Met a jour le Star Plot pour le cluster selectionne."""
-        if not self.result:
+        if not self.result or self.cluster_list is None:
             return
             
         selected_items = self.cluster_list.selectedItems()
@@ -3797,7 +3832,7 @@ class FlowSOMApp(QMainWindow):
         
     def _update_cluster_comparison(self):
         """Met a jour le graphique de comparaison pour le cluster selectionne."""
-        if not self.result:
+        if not self.result or self.cluster_list is None or self.cluster_canvas is None:
             return
             
         selected_items = self.cluster_list.selectedItems()
@@ -3882,7 +3917,7 @@ class FlowSOMApp(QMainWindow):
             fsom_subset = fsom.subset(fsom.get_cell_data().obs["metaclustering"] == cluster_id)
             p = fs.pl.plot_stars(fsom_subset, background_values=fsom_subset.get_cluster_data().obs.metaclustering)
         """
-        if not self.result:
+        if not self.result or self.cluster_list is None or self.fsom_stars_canvas is None:
             return
             
         selected_items = self.cluster_list.selectedItems()
@@ -4050,7 +4085,7 @@ class FlowSOMApp(QMainWindow):
             
     def _update_lsc_tab(self):
         """Met a jour l'onglet Score LSC."""
-        if not self.lsc_result:
+        if not self.lsc_result or self.table_lsc is None:
             return
             
         # Remplir le tableau
@@ -4074,6 +4109,8 @@ class FlowSOMApp(QMainWindow):
         
     def _draw_lsc_composition(self):
         """Dessine le graphique de composition des populations LSC."""
+        if self.lsc_canvas is None:
+            return
         self.lsc_canvas.clear_figure()
         
         if not self.lsc_result or not self.result:
@@ -4217,7 +4254,7 @@ class FlowSOMApp(QMainWindow):
                 
     def _update_patient_timeline(self):
         """Met a jour l'affichage de la timeline patient."""
-        if not self.current_patient:
+        if not self.current_patient or self.patient_timeline is None:
             return
         
         patient = self.current_patient
@@ -4246,6 +4283,8 @@ class FlowSOMApp(QMainWindow):
         
     def _draw_patient_evolution(self, dates: List[str], lsc_values: List[float]):
         """Dessine l'evolution du score LSC dans le temps."""
+        if self.patient_canvas is None:
+            return
         self.patient_canvas.clear_figure()
         
         if not dates or not lsc_values:

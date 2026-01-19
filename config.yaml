@@ -2,13 +2,16 @@
 # FlowSOM-GUI MRD Tracker - Configuration
 # =============================================================================
 # Fichier de configuration pour activer/désactiver les modules de l'interface.
-# Modifiez les valeurs TRUE/FALSE pour personnaliser votre expérience.
+# Modifiez les valeurs true/false pour personnaliser votre expérience.
+#
+# true  = Module activé et visible dans l'interface
+# false = Module complètement masqué (n'apparaît pas du tout)
 #
 # Référence: ELN Guidelines, ALFA LAM MRD LSCflow Protocol
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# MODULES PRINCIPAUX (toujours affichés)
+# MODULES PRINCIPAUX (recommandé de garder activé)
 # -----------------------------------------------------------------------------
 modules_principaux:
   flowsom_analysis: true          # Analyse FlowSOM de base (obligatoire)
@@ -17,54 +20,61 @@ modules_principaux:
   export_functions: true          # Fonctions d'export CSV/FCS/Figure
 
 # -----------------------------------------------------------------------------
-# MODULES OPTIONNELS - PROTOCOLE LAM MRD
+# ONGLETS - Activer/Désactiver complètement
 # -----------------------------------------------------------------------------
+# Si false, l'onglet n'apparaît pas du tout dans l'interface
+onglets:
+  clusters_interactifs: true      # Onglet "Clusters Interactifs"
+  score_lsc: true                 # Onglet "Score LSC"
+  suivi_patient: true             # Onglet "Suivi Patient"
+  logs: true                      # Onglet "Logs"
+
+# -----------------------------------------------------------------------------
+# MODULES OPTIONNELS - PANNEAU DE GAUCHE
+# -----------------------------------------------------------------------------
+# Si false, le groupe correspondant est masqué du panneau de contrôle
 modules_optionnels:
-  # Transformations de données
+  # Groupe "Transformation des données"
   data_transformations: true      # Logicle, Arcsinh, Log10, Z-score
   
-  # Score LSC (Leukemic Stem Cell)
+  # Groupe "Score LSC (LAM MRD)"
   lsc_score: true                 # Calcul CD34+/CD38-/CD123+
-  extended_lsc_markers: true      # Marqueurs étendus: CD90, TIM3, CLL-1, CD97, GPR56
+  extended_lsc_markers: true      # Checkbox marqueurs étendus dans le groupe LSC
   
-  # Suivi patient longitudinal
-  patient_tracking: true          # Suivi Time-Series par patient
+  # Groupe "Suivi Patient (Time-Series)"
+  patient_tracking: true          # Suivi longitudinal par patient
   
-  # Embeddings (UMAP / t-SNE)
+  # Options UMAP/t-SNE dans Visualisation
   umap_tsne: true                 # Projections dimensionnelles
   
-  # Clusters interactifs
+  # Fonctionnalités dans l'onglet Clusters
   interactive_clusters: true      # Star plots, comparaison clusters
   flowsom_mst_stars: true         # MST Star Plot FlowSOM
   
   # Export PDF
-  pdf_reports: true               # Génération de rapports PDF
+  pdf_reports: true               # Bouton "Générer Rapport PDF"
 
 # -----------------------------------------------------------------------------
-# MODULES AVANCÉS - CONFORMITÉ ELN [2][3]
+# MODULES AVANCÉS ELN - CONFORMITÉ [2][3]
 # -----------------------------------------------------------------------------
+# Si false, le groupe/fonctionnalité est complètement masqué
 modules_avances:
-  # Référence NBM (Normal Bone Marrow) - CRITIQUE selon [2]
+  # Groupe "Référence NBM (ELN [2])"
   nbm_reference: true             # Construction MST "frozen" depuis NBM sains
-  nbm_comparison: true            # Comparaison patient vs NBM
   
-  # Seuils MRD validés - CRITIQUE selon [2]
-  mrd_detection_limits: true      # LOD, LOQ, seuils Youden/Kappa
+  # Groupe "Seuils MRD (ELN [2])"
+  mrd_detection_limits: true      # LOD, LOQ, affichage seuils
   
-  # Détection de sous-clones - Important selon [2]
-  subclone_detection: true        # Identification sous-clones phénotypiques
+  # Groupe "Contrôle Qualité (ALFA [3])"
+  quality_control: true           # Validation analytique, QC
   
-  # Clone tracking - CRITIQUE selon [2]
-  clone_persistence: true         # Suivi persistance clonale T0 → FU
+  # Fonctionnalités dans Suivi Patient
+  clone_persistence: true         # Bouton "Analyser persistance clonale"
   
-  # Gating hiérarchique ISAC - CRITIQUE selon [2][3]
-  hierarchical_gating: true       # Singlets, viabilité, CD45+, CD34+
-  
-  # Multi-tube ALFA - Important selon [3]
-  multi_tube_alfa: true           # Tubes LAIP + LSC standardisés
-  
-  # Contrôle qualité - CRITIQUE selon [2][3]
-  quality_control: true           # Validation analytique, QC inter-labo
+  # Fonctionnalités internes (pas de UI visible)
+  subclone_detection: true        # Détection sous-clones (calcul interne)
+  hierarchical_gating: true       # Gating ISAC (calcul interne)
+  multi_tube_alfa: true           # Support multi-tube (calcul interne)
 
 # -----------------------------------------------------------------------------
 # PARAMÈTRES DE SEUILS MRD (selon [2])
