@@ -117,6 +117,110 @@ from scipy import stats
 from datetime import datetime
 import json
 
+# Import YAML pour la configuration
+try:
+    import yaml
+    YAML_AVAILABLE = True
+except ImportError:
+    YAML_AVAILABLE = False
+    print("INFO: PyYAML non installe (configuration YAML).")
+    print("   pip install pyyaml")
+
+
+# =============================================================================
+# CHARGEMENT DE LA CONFIGURATION
+# =============================================================================
+
+def load_config() -> Dict[str, Any]:
+    """
+    Charge la configuration depuis config.yaml.
+    Si le fichier n'existe pas ou YAML non disponible, retourne la config par defaut.
+    """
+    default_config = {
+        'modules_principaux': {
+            'flowsom_analysis': True,
+            'visualization_tab': True,
+            'statistics_tab': True,
+            'export_functions': True
+        },
+        'modules_optionnels': {
+            'data_transformations': True,
+            'lsc_score': True,
+            'extended_lsc_markers': True,
+            'patient_tracking': True,
+            'umap_tsne': True,
+            'interactive_clusters': True,
+            'flowsom_mst_stars': True,
+            'pdf_reports': True
+        },
+        'modules_avances': {
+            'nbm_reference': True,
+            'nbm_comparison': True,
+            'mrd_detection_limits': True,
+            'subclone_detection': True,
+            'clone_persistence': True,
+            'hierarchical_gating': True,
+            'multi_tube_alfa': True,
+            'quality_control': True
+        },
+        'mrd_thresholds': {
+            'lod_percent': 0.009,
+            'loq_percent': 0.005,
+            'nbm_freq_threshold': 0.011,
+            'fold_change_threshold': 1.9,
+            'min_events_per_node': 17
+        },
+        'lsc_parameters': {
+            'cd34_threshold': 0.5,
+            'cd38_threshold': 0.3,
+            'cd123_threshold': 0.5,
+            'cd45ra_threshold': 0.4,
+            'cd90_threshold': 0.3
+        },
+        'quality_control': {
+            'min_events': 500000,
+            'max_inter_lab_cv': 0.20,
+            'nbm_samples_required': 15
+        },
+        'ui_settings': {
+            'theme': 'dark',
+            'font_size': 10,
+            'show_tooltips': True,
+            'default_embedding_cells': 5000,
+            'show_references': True
+        }
+    }
+    
+    if not YAML_AVAILABLE:
+        return default_config
+    
+    config_path = Path(__file__).parent / 'config.yaml'
+    if not config_path.exists():
+        return default_config
+    
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            user_config = yaml.safe_load(f)
+        
+        # Merge avec la config par defaut
+        def deep_merge(base: Dict, overlay: Dict) -> Dict:
+            result = base.copy()
+            for key, value in overlay.items():
+                if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                    result[key] = deep_merge(result[key], value)
+                else:
+                    result[key] = value
+            return result
+        
+        return deep_merge(default_config, user_config)
+    except Exception as e:
+        print(f"Erreur chargement config.yaml: {e}")
+        return default_config
+
+
+# Configuration globale
+CONFIG = load_config()
+
 
 # =============================================================================
 # CONSTANTES POUR LE PROTOCOLE LAM MRD LSCflow
@@ -133,9 +237,36 @@ LSC_MARKERS = {
     'HLA-DR': ['HLA-DR', 'HLADR', 'hla-dr', 'MHCII']
 }
 
-# Panels standard LAM MRD
-TUBE1_MARKERS = ['CD45', 'CD34', 'CD117', 'CD33', 'CD13', 'CD15', 'CD7', 'HLA-DR']
-TUBE2_MARKERS = ['CD45', 'CD34', 'CD38', 'CD123', 'CD45RA', 'CD90', 'CD71', 'CD36']
+# Marqueurs LSC etendus (selon protocole ALFA [3] et Terwijn [1])
+LSC_MARKERS_EXTENDED = {
+    # Base - discrimination HSC vs LSC
+    'CD34': ['CD34', 'cd34'],
+    'CD38': ['CD38', 'cd38'],
+    'CD45RA': ['CD45RA', 'cd45ra', 'CD45-RA'],
+    
+    # Marqueurs LSC specifiques
+    'CD90': ['CD90', 'cd90', 'Thy-1', 'THY1'],          # Normal HSC marker (↓ in LSC)
+    'CD123': ['CD123', 'cd123', 'IL3R', 'IL-3R'],       # IL3-RA (↑ in LSC)
+    'TIM3': ['TIM3', 'tim3', 'HAVCR2', 'CD366'],        # Immune checkpoint (↑ LSC)
+    'CLL-1': ['CLL-1', 'CLL1', 'CLEC12A', 'CD371'],     # Adhesion (↑ LSC)
+    'CD97': ['CD97', 'cd97'],                           # Activating marker (↑ LSC)
+    'GPR56': ['GPR56', 'gpr56', 'ADGRG1'],              # nHSC enriched
+    'EPCR': ['EPCR', 'CD201', 'PROCR'],                 # nHSC enriched
+    'CD44': ['CD44', 'cd44'],                           # Adhesion (↑↑ LSC)
+    'VLA4': ['VLA4', 'CD49d', 'ITGA4'],                 # Integrin alpha-4
+    'CXCR4': ['CXCR4', 'CD184', 'cxcr4'],               # Homing receptor
+    'CD47': ['CD47', 'cd47'],                           # "Don't eat me" signal
+    
+    # Autres marqueurs diagnostiques
+    'CD33': ['CD33', 'cd33'],
+    'CD117': ['CD117', 'cd117', 'c-Kit', 'cKit'],
+    'HLA-DR': ['HLA-DR', 'HLADR', 'hla-dr', 'MHCII']
+}
+
+# Panels standard LAM MRD (ALFA [3])
+TUBE1_MARKERS = ['CD45', 'CD34', 'CD117', 'CD33', 'CD13', 'CD15', 'CD7', 'HLA-DR', 'CD38', 'CD56', 'CD19']
+TUBE2_MARKERS = ['CD45', 'CD34', 'CD38', 'CD123', 'CD45RA', 'CD90', 'CD117', 'HLA-DR', 'CD36', 'TIM3', 'CLL-1', 'CD97']
+TUBE3_MARKERS = ['CD45', 'CD14', 'CD64', 'CD11b', 'CD33', 'CD15', 'HLA-DR']  # Monocyte panel
 
 
 # =============================================================================
@@ -947,6 +1078,536 @@ class PreGating:
         return cd45_vals > threshold
 
 
+# =============================================================================
+# CLASSES CONFORMITÉ ELN - NBM REFERENCE & MRD DETECTION [2][3]
+# =============================================================================
+
+class NBMReferenceBuilder:
+    """
+    Construction d'une reference NBM (Normal Bone Marrow) "frozen" MST.
+    Selon [2]: "reference FlowSOM display was built from 19 healthy NBM samples"
+    
+    Cette classe permet de construire et sauvegarder une reference NBM
+    pour comparer les echantillons patients.
+    """
+    
+    def __init__(self, n_nodes: int = 100, seed: int = 42):
+        self.n_nodes = n_nodes
+        self.seed = seed
+        self.frozen_som = None
+        self.nbm_node_frequencies: Dict[int, float] = {}
+        self.nbm_node_phenotypes: Dict[int, np.ndarray] = {}
+        self.nbm_samples_count = 0
+        self.is_built = False
+        
+    def build_reference(self, nbm_data_list: List[np.ndarray], 
+                        var_names: List[str]) -> bool:
+        """
+        Construit la reference FlowSOM frozen depuis plusieurs NBM sains.
+        
+        Args:
+            nbm_data_list: Liste des matrices de donnees NBM
+            var_names: Noms des colonnes/marqueurs
+            
+        Returns:
+            True si construction reussie
+        """
+        if not FLOWSOM_AVAILABLE:
+            return False
+        
+        if len(nbm_data_list) < CONFIG['quality_control'].get('nbm_samples_required', 15):
+            print(f"ATTENTION: {len(nbm_data_list)} NBM < {CONFIG['quality_control']['nbm_samples_required']} recommandes [2]")
+        
+        try:
+            # Merge tous les NBM
+            merged_nbm = np.vstack(nbm_data_list)
+            self.nbm_samples_count = len(nbm_data_list)
+            
+            # Creer AnnData
+            adata = ad.AnnData(merged_nbm)
+            adata.var_names = var_names
+            
+            # Train FlowSOM avec n_nodes (standard ISAC: 100)
+            xdim = int(np.sqrt(self.n_nodes))
+            ydim = self.n_nodes // xdim
+            
+            self.frozen_som = fs.FlowSOM(
+                adata,
+                cols_to_use=list(range(len(var_names))),
+                xdim=xdim,
+                ydim=ydim,
+                n_clusters=10,  # Metaclusters
+                seed=self.seed
+            )
+            
+            # Calculer les frequences par node dans NBM
+            node_assignments = self.frozen_som.get_cell_data().obs['clustering'].values
+            total_cells = len(node_assignments)
+            
+            for node_id in range(self.n_nodes):
+                count = np.sum(node_assignments == str(node_id))
+                self.nbm_node_frequencies[node_id] = count / total_cells
+            
+            # Calculer les phenotypes moyens par node
+            cell_data = self.frozen_som.get_cell_data()
+            X = cell_data.X
+            for node_id in range(self.n_nodes):
+                mask = node_assignments == str(node_id)
+                if mask.sum() > 0:
+                    self.nbm_node_phenotypes[node_id] = np.mean(X[mask], axis=0)
+                else:
+                    self.nbm_node_phenotypes[node_id] = np.zeros(X.shape[1])
+            
+            self.is_built = True
+            return True
+            
+        except Exception as e:
+            print(f"Erreur construction NBM reference: {e}")
+            return False
+    
+    def save_reference(self, filepath: str) -> bool:
+        """Sauvegarde la reference NBM sur disque."""
+        if not self.is_built:
+            return False
+        
+        try:
+            data = {
+                'n_nodes': self.n_nodes,
+                'seed': self.seed,
+                'nbm_samples_count': self.nbm_samples_count,
+                'nbm_node_frequencies': self.nbm_node_frequencies,
+                'nbm_node_phenotypes': {k: v.tolist() for k, v in self.nbm_node_phenotypes.items()}
+            }
+            with open(filepath, 'w') as f:
+                json.dump(data, f, indent=2)
+            return True
+        except Exception as e:
+            print(f"Erreur sauvegarde NBM reference: {e}")
+            return False
+    
+    def load_reference(self, filepath: str) -> bool:
+        """Charge une reference NBM depuis le disque."""
+        try:
+            with open(filepath, 'r') as f:
+                data = json.load(f)
+            
+            self.n_nodes = data['n_nodes']
+            self.seed = data['seed']
+            self.nbm_samples_count = data['nbm_samples_count']
+            self.nbm_node_frequencies = {int(k): v for k, v in data['nbm_node_frequencies'].items()}
+            self.nbm_node_phenotypes = {int(k): np.array(v) for k, v in data['nbm_node_phenotypes'].items()}
+            self.is_built = True
+            return True
+        except Exception as e:
+            print(f"Erreur chargement NBM reference: {e}")
+            return False
+
+
+class MRDDetectionLimits:
+    """
+    Seuils de detection MRD valides selon [2].
+    
+    [2]: "The concordance between mMRD and MFC-MRD was 80.2%."
+    Seuils optimises par Youden & Kappa tests.
+    """
+    
+    def __init__(self):
+        thresholds = CONFIG.get('mrd_thresholds', {})
+        self.lod = thresholds.get('lod_percent', 0.009) / 100  # Limit of Detection
+        self.loq = thresholds.get('loq_percent', 0.005) / 100  # Limit of Quantification
+        self.nbm_freq_threshold = thresholds.get('nbm_freq_threshold', 0.011)
+        self.fold_change_threshold = thresholds.get('fold_change_threshold', 1.9)
+        self.min_events = thresholds.get('min_events_per_node', 17)
+    
+    def is_mrd_positive(self, node_freq_fu: float, node_freq_nbm: float) -> Tuple[bool, str]:
+        """
+        Determine si un node est MRD positif selon [2].
+        
+        MRD positive si BOTH:
+        1. freq(FU) >= 1.9 x freq(NBM)
+        2. freq(NBM) < 1.1%
+        
+        Returns:
+            Tuple (is_positive, reason)
+        """
+        if node_freq_nbm >= self.nbm_freq_threshold:
+            return False, f"NBM freq too high ({node_freq_nbm:.3%} >= {self.nbm_freq_threshold:.1%})"
+        
+        fold_change = node_freq_fu / (node_freq_nbm + 1e-10)
+        
+        if fold_change < self.fold_change_threshold:
+            return False, f"Fold-change insufficient ({fold_change:.1f}x < {self.fold_change_threshold}x)"
+        
+        return True, f"MRD+ (fold-change: {fold_change:.1f}x, NBM: {node_freq_nbm:.4%})"
+    
+    def classify_mrd(self, mrd_percent: float) -> Dict[str, Any]:
+        """
+        Classifie le resultat MRD selon les seuils [2].
+        
+        Returns:
+            Dict avec classification et details
+        """
+        result = {
+            'value': mrd_percent,
+            'classification': 'Unknown',
+            'is_quantifiable': False,
+            'is_detectable': False,
+            'clinical_significance': ''
+        }
+        
+        if mrd_percent < self.loq * 100:
+            result['classification'] = 'Undetectable'
+            result['clinical_significance'] = 'Complete molecular remission'
+        elif mrd_percent < self.lod * 100:
+            result['classification'] = 'Below LOQ'
+            result['is_detectable'] = True
+            result['clinical_significance'] = 'Detectable but not quantifiable'
+        else:
+            result['classification'] = 'Quantifiable MRD'
+            result['is_detectable'] = True
+            result['is_quantifiable'] = True
+            result['clinical_significance'] = 'Measurable residual disease'
+        
+        return result
+    
+    def validate_sensitivity(self, node_event_count: int, total_events: int,
+                            node_nbm_count: int, total_nbm_events: int) -> Tuple[bool, str]:
+        """
+        Valide la sensibilite de detection selon [2].
+        
+        [2]: "lowest number of FU cells yielding significant difference 
+             with NBM was a cluster of 17 events"
+        """
+        if node_event_count < self.min_events:
+            return False, f"Insufficient events ({node_event_count} < {self.min_events} minimum)"
+        
+        mrd_percent = (node_event_count / total_events) * 100
+        
+        if mrd_percent < self.loq * 100:
+            return True, f"Below LOQ ({mrd_percent:.4f}%) - detectable but not quantifiable"
+        else:
+            return True, f"Quantifiable MRD ({mrd_percent:.4f}%)"
+
+
+class SubcloneDetector:
+    """
+    Detection de sous-clones phenotypiques selon [2].
+    
+    [2]: "This strategy disclosed SUBCLONES with varying immunophenotype 
+         within single diagnosis and FU samples"
+    """
+    
+    def __init__(self, phenotype_similarity_min: float = 0.8,
+                 phenotype_similarity_max: float = 0.95):
+        self.similarity_min = phenotype_similarity_min
+        self.similarity_max = phenotype_similarity_max
+    
+    @staticmethod
+    def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+        """Calcule la similarite cosinus entre deux vecteurs."""
+        norm_a = np.linalg.norm(a)
+        norm_b = np.linalg.norm(b)
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return np.dot(a, b) / (norm_a * norm_b)
+    
+    def detect_subclones(self, node_phenotypes: Dict[int, np.ndarray],
+                         positive_nodes: List[int]) -> List[Dict[str, Any]]:
+        """
+        Detecte les sous-clones parmi les nodes positifs.
+        
+        Args:
+            node_phenotypes: Phenotypes moyens par node
+            positive_nodes: Liste des nodes identifies comme leucemiques
+            
+        Returns:
+            Liste des sous-clones detectes avec leurs caracteristiques
+        """
+        subclones = []
+        processed_pairs = set()
+        
+        for node_i in positive_nodes:
+            for node_j in positive_nodes:
+                if node_i >= node_j:
+                    continue
+                
+                pair_key = (min(node_i, node_j), max(node_i, node_j))
+                if pair_key in processed_pairs:
+                    continue
+                processed_pairs.add(pair_key)
+                
+                # Calculer similarite phenotypique
+                pheno_i = node_phenotypes.get(node_i, np.zeros(1))
+                pheno_j = node_phenotypes.get(node_j, np.zeros(1))
+                
+                similarity = self.cosine_similarity(pheno_i, pheno_j)
+                
+                # Sous-clones: phenotypes similaires mais pas identiques
+                if self.similarity_min < similarity < self.similarity_max:
+                    subclones.append({
+                        'nodes': [node_i, node_j],
+                        'phenotype_similarity': similarity,
+                        'biological_meaning': 'Potential phenotypic subclones',
+                        'risk_assessment': 'Monitor for differential evolution'
+                    })
+        
+        return subclones
+
+
+class ClonePersistenceTracker:
+    """
+    Suivi de la persistance clonale T0 -> FU selon [2].
+    
+    [2] Figure 1: Tracking clone T0 → FU1 → FU2
+    "residual minor clone (1.25% in AML FU vs. 4.97% at diagnosis)
+     however 10 times more abundant than in NBM"
+    """
+    
+    def __init__(self, nbm_reference: Optional[NBMReferenceBuilder] = None,
+                 mrd_detector: Optional[MRDDetectionLimits] = None):
+        self.nbm_reference = nbm_reference
+        self.mrd_detector = mrd_detector or MRDDetectionLimits()
+        self.timepoints: Dict[str, Dict[int, float]] = {}  # {timepoint: {node: freq}}
+    
+    def add_timepoint(self, timepoint_id: str, node_frequencies: Dict[int, float]):
+        """Ajoute un point de temps avec les frequences par node."""
+        self.timepoints[timepoint_id] = node_frequencies
+    
+    def track_clone_persistence(self, diagnosis_id: str, followup_id: str) -> Dict[str, Any]:
+        """
+        Compare les timepoints pour detecter la persistance clonale.
+        
+        Args:
+            diagnosis_id: ID du timepoint diagnostic (T0)
+            followup_id: ID du timepoint de suivi (FU)
+            
+        Returns:
+            Dict avec resultats du tracking
+        """
+        if diagnosis_id not in self.timepoints or followup_id not in self.timepoints:
+            return {'error': 'Timepoint not found'}
+        
+        diag_freqs = self.timepoints[diagnosis_id]
+        fu_freqs = self.timepoints[followup_id]
+        
+        result = {
+            'diagnosis_id': diagnosis_id,
+            'followup_id': followup_id,
+            'persistent_nodes': [],
+            'resolved_nodes': [],
+            'new_nodes': [],
+            'total_mrd_percent': 0.0,
+            'mrd_status': 'Unknown'
+        }
+        
+        all_nodes = set(diag_freqs.keys()) | set(fu_freqs.keys())
+        
+        for node_id in all_nodes:
+            diag_freq = diag_freqs.get(node_id, 0)
+            fu_freq = fu_freqs.get(node_id, 0)
+            
+            # Obtenir freq NBM si disponible
+            nbm_freq = 0.0
+            if self.nbm_reference and self.nbm_reference.is_built:
+                nbm_freq = self.nbm_reference.nbm_node_frequencies.get(node_id, 0)
+            
+            node_data = {
+                'node_id': node_id,
+                'diagnosis_freq': diag_freq,
+                'followup_freq': fu_freq,
+                'nbm_freq': nbm_freq,
+                'fold_change_to_diag': fu_freq / (diag_freq + 1e-10),
+                'fold_change_to_nbm': fu_freq / (nbm_freq + 1e-10) if nbm_freq > 0 else float('inf')
+            }
+            
+            # Determiner le status du node
+            is_mrd_positive, reason = self.mrd_detector.is_mrd_positive(fu_freq, nbm_freq)
+            node_data['mrd_positive'] = is_mrd_positive
+            node_data['mrd_reason'] = reason
+            
+            if diag_freq > 0.001 and fu_freq > 0.001:
+                # Clone present aux deux timepoints
+                node_data['status'] = 'Persistent'
+                result['persistent_nodes'].append(node_data)
+            elif diag_freq > 0.001 and fu_freq <= 0.001:
+                # Clone resolu
+                node_data['status'] = 'Resolved'
+                result['resolved_nodes'].append(node_data)
+            elif diag_freq <= 0.001 and fu_freq > 0.001:
+                # Nouveau clone (attention: possible sous-clone emergent)
+                node_data['status'] = 'New/Emerging'
+                result['new_nodes'].append(node_data)
+        
+        # Calculer MRD total
+        mrd_nodes = [n for n in result['persistent_nodes'] + result['new_nodes'] if n['mrd_positive']]
+        result['total_mrd_percent'] = sum(n['followup_freq'] for n in mrd_nodes) * 100
+        
+        # Classification MRD
+        mrd_classification = self.mrd_detector.classify_mrd(result['total_mrd_percent'])
+        result['mrd_status'] = mrd_classification['classification']
+        result['mrd_classification'] = mrd_classification
+        
+        return result
+
+
+class QualityControlALFA:
+    """
+    Controle qualite conforme au protocole ALFA [3].
+    
+    [3]: "Harmonisation of pre-analytical sample processing"
+    """
+    
+    def __init__(self):
+        qc_config = CONFIG.get('quality_control', {})
+        self.min_events = qc_config.get('min_events', 500000)
+        self.max_inter_lab_cv = qc_config.get('max_inter_lab_cv', 0.20)
+    
+    def validate_fcs_quality(self, n_events: int, 
+                             has_compensation: bool = True) -> Dict[str, Any]:
+        """
+        Valide la qualite d'un fichier FCS pour analyse MRD.
+        
+        [3]: "Acquisition: min 500,000 cells"
+        """
+        checks = {
+            'n_events': n_events,
+            'min_required': self.min_events,
+            'is_valid': n_events >= self.min_events,
+            'has_compensation': has_compensation,
+            'warnings': [],
+            'errors': []
+        }
+        
+        if n_events < self.min_events:
+            checks['errors'].append(
+                f"Insufficient events: {n_events:,} < {self.min_events:,} required"
+            )
+        
+        if n_events < self.min_events * 0.5:
+            checks['errors'].append("CRITICAL: Very low event count for MRD")
+        elif n_events < self.min_events:
+            checks['warnings'].append(
+                f"Low event count may reduce sensitivity (LOD affected)"
+            )
+        
+        if not has_compensation:
+            checks['warnings'].append("No compensation matrix detected")
+        
+        return checks
+    
+    def calculate_inter_lab_cv(self, mfi_values: List[float]) -> Dict[str, Any]:
+        """
+        Calcule le CV inter-laboratoire pour un marqueur.
+        
+        [3]: Fig 4 - 22 centres avec variation CV < 20% sur CD34+CD38-
+        """
+        if len(mfi_values) < 2:
+            return {'cv': 0, 'is_acceptable': True, 'message': 'Insufficient data'}
+        
+        mean_mfi = np.mean(mfi_values)
+        std_mfi = np.std(mfi_values)
+        cv = std_mfi / mean_mfi if mean_mfi > 0 else 0
+        
+        result = {
+            'cv': cv,
+            'cv_percent': cv * 100,
+            'mean': mean_mfi,
+            'std': std_mfi,
+            'is_acceptable': cv <= self.max_inter_lab_cv,
+            'threshold': self.max_inter_lab_cv
+        }
+        
+        if cv > self.max_inter_lab_cv:
+            result['message'] = f"CV too high: {cv:.1%} > {self.max_inter_lab_cv:.0%} threshold"
+        else:
+            result['message'] = f"CV acceptable: {cv:.1%}"
+        
+        return result
+
+
+class HierarchicalGating:
+    """
+    Gating hierarchique standardise ISAC/ELN [2][3].
+    
+    [2]: "MFC analysis strategies are highly operator-dependent"
+    Solution: Standardized gating via FlowSOM
+    """
+    
+    @staticmethod
+    def apply_full_gating(X: np.ndarray, var_names: List[str],
+                          apply_singlets: bool = True,
+                          apply_viability: bool = False,
+                          apply_cd45: bool = True,
+                          apply_cd34: bool = False) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        Applique le pipeline de gating hierarchique ISAC.
+        
+        Steps:
+        1. Singlets (FSC-A vs FSC-H)
+        2. Live cells (viability marker) - optionnel
+        3. CD45+ (hematopoietic cells)
+        4. CD34+ (progenitors) - optionnel
+        
+        Returns:
+            Tuple (masque_final, statistiques_gating)
+        """
+        n_cells = X.shape[0]
+        mask = np.ones(n_cells, dtype=bool)
+        stats = {
+            'total_events': n_cells,
+            'steps': []
+        }
+        
+        # Step 1: Singlets
+        if apply_singlets:
+            singlet_mask = PreGating.gate_singlets(X, var_names)
+            mask &= singlet_mask
+            stats['steps'].append({
+                'name': 'Singlets',
+                'remaining': mask.sum(),
+                'percent': mask.sum() / n_cells * 100
+            })
+        
+        # Step 2: Viable (si marqueur disponible)
+        if apply_viability:
+            viable_mask = PreGating.gate_viable_cells(X, var_names)
+            mask &= viable_mask
+            stats['steps'].append({
+                'name': 'Viable',
+                'remaining': mask.sum(),
+                'percent': mask.sum() / n_cells * 100
+            })
+        
+        # Step 3: CD45+
+        if apply_cd45:
+            cd45_mask = PreGating.gate_cd45_positive(X, var_names)
+            mask &= cd45_mask
+            stats['steps'].append({
+                'name': 'CD45+',
+                'remaining': mask.sum(),
+                'percent': mask.sum() / n_cells * 100
+            })
+        
+        # Step 4: CD34+ (optionnel - pour population progéniteurs)
+        if apply_cd34:
+            cd34_idx = PreGating.find_marker_index(var_names, ['CD34', 'cd34'])
+            if cd34_idx is not None:
+                cd34_vals = X[:, cd34_idx]
+                threshold = np.nanpercentile(cd34_vals[mask], 90)  # Top 10%
+                cd34_mask = cd34_vals > threshold
+                mask &= cd34_mask
+                stats['steps'].append({
+                    'name': 'CD34+',
+                    'remaining': mask.sum(),
+                    'percent': mask.sum() / n_cells * 100
+                })
+        
+        stats['final_count'] = mask.sum()
+        stats['final_percent'] = mask.sum() / n_cells * 100
+        
+        return mask, stats
+
+
 class PDFReportGenerator:
     """
     Generateur de rapports PDF pour les resultats FlowSOM.
@@ -1488,6 +2149,9 @@ class FlowSOMApp(QMainWindow):
     def __init__(self):
         super().__init__()
         
+        # Configuration chargee depuis config.yaml
+        self.config = CONFIG
+        
         self.healthy_folder: Optional[str] = None
         self.pathological_folder: Optional[str] = None
         self.healthy_files: List[str] = []
@@ -1503,7 +2167,15 @@ class FlowSOMApp(QMainWindow):
         self.patients_db: Dict[str, PatientData] = {}
         self.transformed_data: Optional[np.ndarray] = None
         
-        self.setWindowTitle("FlowSOM Analyzer - Analyse LAM MRD")
+        # Attributs conformite ELN [2][3]
+        self.nbm_reference: Optional[NBMReferenceBuilder] = None
+        self.mrd_detector = MRDDetectionLimits()
+        self.subclone_detector = SubcloneDetector()
+        self.clone_tracker: Optional[ClonePersistenceTracker] = None
+        self.quality_controller = QualityControlALFA()
+        self.nbm_files: List[str] = []  # Fichiers NBM pour reference
+        
+        self.setWindowTitle("FlowSOM Analyzer - Analyse LAM MRD (ELN Compliant)")
         self.setMinimumSize(1500, 950)
         self.setStyleSheet(STYLESHEET)
         
@@ -1685,95 +2357,224 @@ class FlowSOMApp(QMainWindow):
         
         scroll_layout.addWidget(params_group)
         
-        # ----- GROUPE: Transformation -----
-        transform_group = QGroupBox("Transformation des donnees")
-        transform_layout = QGridLayout(transform_group)
-        transform_layout.setSpacing(12)
+        # ----- GROUPE: Transformation ----- (conditionnel selon config)
+        if self.config['modules_optionnels'].get('data_transformations', True):
+            transform_group = QGroupBox("Transformation des donnees")
+            transform_layout = QGridLayout(transform_group)
+            transform_layout.setSpacing(12)
+            
+            lbl_transform = QLabel("Type:")
+            lbl_transform.setObjectName("sectionLabel")
+            transform_layout.addWidget(lbl_transform, 0, 0)
+            
+            self.combo_transform = QComboBox()
+            self.combo_transform.addItems([
+                "Aucune",
+                "Arcsinh (cofactor=5)",
+                "Arcsinh (cofactor=150)",
+                "Logicle",
+                "Log10",
+                "Z-score"
+            ])
+            self.combo_transform.setToolTip("Transformation appliquee aux donnees")
+            transform_layout.addWidget(self.combo_transform, 0, 1)
+            
+            lbl_cofactor = QLabel("Cofacteur:")
+            lbl_cofactor.setObjectName("sectionLabel")
+            transform_layout.addWidget(lbl_cofactor, 1, 0)
+            
+            self.spin_cofactor = QDoubleSpinBox()
+            self.spin_cofactor.setRange(1.0, 500.0)
+            self.spin_cofactor.setValue(5.0)
+            self.spin_cofactor.setToolTip("Cofacteur pour Arcsinh (5 flow, 150 CyTOF)")
+            transform_layout.addWidget(self.spin_cofactor, 1, 1)
+            
+            scroll_layout.addWidget(transform_group)
+        else:
+            # Widgets par defaut si module desactive
+            self.combo_transform = None
+            self.spin_cofactor = None
         
-        lbl_transform = QLabel("Type:")
-        lbl_transform.setObjectName("sectionLabel")
-        transform_layout.addWidget(lbl_transform, 0, 0)
+        # ----- GROUPE: Score LSC ----- (conditionnel selon config)
+        if self.config['modules_optionnels'].get('lsc_score', True):
+            lsc_group = QGroupBox("Score LSC (LAM MRD)")
+            lsc_layout = QVBoxLayout(lsc_group)
+            lsc_layout.setSpacing(10)
+            
+            self.chk_calc_lsc = QCheckBox("Calculer le score LSC")
+            self.chk_calc_lsc.setChecked(True)
+            self.chk_calc_lsc.setToolTip("CD34+/CD38-/CD123+ (cellules souches leucemiques)")
+            lsc_layout.addWidget(self.chk_calc_lsc)
+            
+            # Checkbox pour marqueurs etendus
+            if self.config['modules_optionnels'].get('extended_lsc_markers', True):
+                self.chk_extended_lsc = QCheckBox("Utiliser marqueurs LSC etendus")
+                self.chk_extended_lsc.setChecked(False)
+                self.chk_extended_lsc.setToolTip("CD90, TIM3, CLL-1, CD97, GPR56... selon [1][3]")
+                lsc_layout.addWidget(self.chk_extended_lsc)
+            else:
+                self.chk_extended_lsc = None
+            
+            # Affichage du score
+            self.lbl_lsc_score = QLabel("Score LSC: --")
+            self.lbl_lsc_score.setStyleSheet("""
+                font-size: 12pt;
+                font-weight: bold;
+                color: #f9e2af;
+                background: rgba(249, 226, 175, 0.1);
+                padding: 10px;
+                border-radius: 8px;
+            """)
+            self.lbl_lsc_score.setAlignment(Qt.AlignCenter)
+            lsc_layout.addWidget(self.lbl_lsc_score)
+            
+            scroll_layout.addWidget(lsc_group)
+        else:
+            self.chk_calc_lsc = None
+            self.chk_extended_lsc = None
+            self.lbl_lsc_score = None
         
-        self.combo_transform = QComboBox()
-        self.combo_transform.addItems([
-            "Aucune",
-            "Arcsinh (cofactor=5)",
-            "Arcsinh (cofactor=150)",
-            "Logicle",
-            "Log10",
-            "Z-score"
-        ])
-        self.combo_transform.setToolTip("Transformation appliquee aux donnees")
-        transform_layout.addWidget(self.combo_transform, 0, 1)
+        # ----- GROUPE: Reference NBM (ELN) ----- (conditionnel selon config)
+        if self.config['modules_avances'].get('nbm_reference', True):
+            nbm_group = QGroupBox("Reference NBM (ELN [2])")
+            nbm_layout = QVBoxLayout(nbm_group)
+            nbm_layout.setSpacing(10)
+            
+            self.btn_load_nbm = QPushButton("Charger dossier NBM (reference)")
+            self.btn_load_nbm.setToolTip("15-20 echantillons NBM sains pour reference [2]")
+            self.btn_load_nbm.clicked.connect(self._load_nbm_folder)
+            nbm_layout.addWidget(self.btn_load_nbm)
+            
+            self.lbl_nbm_status = QLabel("Reference NBM: Non chargee")
+            self.lbl_nbm_status.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 5px;")
+            nbm_layout.addWidget(self.lbl_nbm_status)
+            
+            self.btn_build_nbm_ref = QPushButton("Construire reference frozen MST")
+            self.btn_build_nbm_ref.setEnabled(False)
+            self.btn_build_nbm_ref.clicked.connect(self._build_nbm_reference)
+            nbm_layout.addWidget(self.btn_build_nbm_ref)
+            
+            self.btn_load_nbm_ref = QPushButton("Charger reference existante")
+            self.btn_load_nbm_ref.clicked.connect(self._load_nbm_reference)
+            nbm_layout.addWidget(self.btn_load_nbm_ref)
+            
+            scroll_layout.addWidget(nbm_group)
+        else:
+            self.btn_load_nbm = None
+            self.lbl_nbm_status = None
+            self.btn_build_nbm_ref = None
+            self.btn_load_nbm_ref = None
         
-        lbl_cofactor = QLabel("Cofacteur:")
-        lbl_cofactor.setObjectName("sectionLabel")
-        transform_layout.addWidget(lbl_cofactor, 1, 0)
+        # ----- GROUPE: Detection MRD (ELN) ----- (conditionnel selon config)
+        if self.config['modules_avances'].get('mrd_detection_limits', True):
+            mrd_group = QGroupBox("Seuils MRD (ELN [2])")
+            mrd_layout = QGridLayout(mrd_group)
+            mrd_layout.setSpacing(8)
+            
+            # Affichage des seuils configures
+            thresholds = self.config.get('mrd_thresholds', {})
+            
+            lbl_lod = QLabel(f"LOD: {thresholds.get('lod_percent', 0.009):.3f}%")
+            lbl_lod.setStyleSheet("color: #89b4fa; font-size: 9pt;")
+            mrd_layout.addWidget(lbl_lod, 0, 0)
+            
+            lbl_loq = QLabel(f"LOQ: {thresholds.get('loq_percent', 0.005):.3f}%")
+            lbl_loq.setStyleSheet("color: #89b4fa; font-size: 9pt;")
+            mrd_layout.addWidget(lbl_loq, 0, 1)
+            
+            lbl_fold = QLabel(f"Fold-change: ≥{thresholds.get('fold_change_threshold', 1.9)}x")
+            lbl_fold.setStyleSheet("color: #a6e3a1; font-size: 9pt;")
+            mrd_layout.addWidget(lbl_fold, 1, 0)
+            
+            lbl_min_ev = QLabel(f"Min events: {thresholds.get('min_events_per_node', 17)}")
+            lbl_min_ev.setStyleSheet("color: #a6e3a1; font-size: 9pt;")
+            mrd_layout.addWidget(lbl_min_ev, 1, 1)
+            
+            # Resultat MRD
+            self.lbl_mrd_result = QLabel("MRD: --")
+            self.lbl_mrd_result.setStyleSheet("""
+                font-size: 11pt;
+                font-weight: bold;
+                color: #cba6f7;
+                background: rgba(203, 166, 247, 0.1);
+                padding: 8px;
+                border-radius: 6px;
+            """)
+            self.lbl_mrd_result.setAlignment(Qt.AlignCenter)
+            mrd_layout.addWidget(self.lbl_mrd_result, 2, 0, 1, 2)
+            
+            scroll_layout.addWidget(mrd_group)
+        else:
+            self.lbl_mrd_result = None
         
-        self.spin_cofactor = QDoubleSpinBox()
-        self.spin_cofactor.setRange(1.0, 500.0)
-        self.spin_cofactor.setValue(5.0)
-        self.spin_cofactor.setToolTip("Cofacteur pour Arcsinh (5 flow, 150 CyTOF)")
-        transform_layout.addWidget(self.spin_cofactor, 1, 1)
+        # ----- GROUPE: Controle Qualite ----- (conditionnel selon config)
+        if self.config['modules_avances'].get('quality_control', True):
+            qc_group = QGroupBox("Controle Qualite (ALFA [3])")
+            qc_layout = QVBoxLayout(qc_group)
+            qc_layout.setSpacing(8)
+            
+            self.chk_validate_qc = QCheckBox("Valider QC avant analyse")
+            self.chk_validate_qc.setChecked(True)
+            self.chk_validate_qc.setToolTip(f"Min {self.config['quality_control'].get('min_events', 500000):,} events")
+            qc_layout.addWidget(self.chk_validate_qc)
+            
+            self.lbl_qc_status = QLabel("QC: En attente")
+            self.lbl_qc_status.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 5px;")
+            qc_layout.addWidget(self.lbl_qc_status)
+            
+            scroll_layout.addWidget(qc_group)
+        else:
+            self.chk_validate_qc = None
+            self.lbl_qc_status = None
         
-        scroll_layout.addWidget(transform_group)
-        
-        # ----- GROUPE: Score LSC -----
-        lsc_group = QGroupBox("Score LSC (LAM MRD)")
-        lsc_layout = QVBoxLayout(lsc_group)
-        lsc_layout.setSpacing(10)
-        
-        self.chk_calc_lsc = QCheckBox("Calculer le score LSC")
-        self.chk_calc_lsc.setChecked(True)
-        self.chk_calc_lsc.setToolTip("CD34+/CD38-/CD123+ (cellules souches leucemiques)")
-        lsc_layout.addWidget(self.chk_calc_lsc)
-        
-        # Affichage du score
-        self.lbl_lsc_score = QLabel("Score LSC: --")
-        self.lbl_lsc_score.setStyleSheet("""
-            font-size: 12pt;
-            font-weight: bold;
-            color: #f9e2af;
-            background: rgba(249, 226, 175, 0.1);
-            padding: 10px;
-            border-radius: 8px;
-        """)
-        self.lbl_lsc_score.setAlignment(Qt.AlignCenter)
-        lsc_layout.addWidget(self.lbl_lsc_score)
-        
-        scroll_layout.addWidget(lsc_group)
-        
-        # ----- GROUPE: Patient / Time-Series -----
-        patient_group = QGroupBox("Suivi Patient (Time-Series)")
-        patient_layout = QGridLayout(patient_group)
-        patient_layout.setSpacing(10)
-        
-        lbl_patient_id = QLabel("ID Patient:")
-        lbl_patient_id.setObjectName("sectionLabel")
-        patient_layout.addWidget(lbl_patient_id, 0, 0)
-        
-        self.edit_patient_id = QLineEdit()
-        self.edit_patient_id.setPlaceholderText("Ex: PAT-001")
-        patient_layout.addWidget(self.edit_patient_id, 0, 1)
-        
-        lbl_timepoint = QLabel("Point temps:")
-        lbl_timepoint.setObjectName("sectionLabel")
-        patient_layout.addWidget(lbl_timepoint, 1, 0)
-        
-        self.edit_timepoint = QLineEdit()
-        self.edit_timepoint.setPlaceholderText("Ex: T0, J30, M3...")
-        patient_layout.addWidget(self.edit_timepoint, 1, 1)
-        
-        self.btn_save_patient = QPushButton("Sauvegarder timepoint")
-        self.btn_save_patient.setEnabled(False)
-        self.btn_save_patient.clicked.connect(self._save_patient_timepoint)
-        patient_layout.addWidget(self.btn_save_patient, 2, 0, 1, 2)
-        
-        self.btn_load_patient = QPushButton("Charger historique patient")
-        self.btn_load_patient.clicked.connect(self._load_patient_history)
-        patient_layout.addWidget(self.btn_load_patient, 3, 0, 1, 2)
-        
-        scroll_layout.addWidget(patient_group)
+        # ----- GROUPE: Patient / Time-Series ----- (conditionnel selon config)
+        if self.config['modules_optionnels'].get('patient_tracking', True):
+            patient_group = QGroupBox("Suivi Patient (Time-Series)")
+            patient_layout = QGridLayout(patient_group)
+            patient_layout.setSpacing(10)
+            
+            lbl_patient_id = QLabel("ID Patient:")
+            lbl_patient_id.setObjectName("sectionLabel")
+            patient_layout.addWidget(lbl_patient_id, 0, 0)
+            
+            self.edit_patient_id = QLineEdit()
+            self.edit_patient_id.setPlaceholderText("Ex: PAT-001")
+            patient_layout.addWidget(self.edit_patient_id, 0, 1)
+            
+            lbl_timepoint = QLabel("Point temps:")
+            lbl_timepoint.setObjectName("sectionLabel")
+            patient_layout.addWidget(lbl_timepoint, 1, 0)
+            
+            self.edit_timepoint = QLineEdit()
+            self.edit_timepoint.setPlaceholderText("Ex: T0, J30, M3...")
+            patient_layout.addWidget(self.edit_timepoint, 1, 1)
+            
+            self.btn_save_patient = QPushButton("Sauvegarder timepoint")
+            self.btn_save_patient.setEnabled(False)
+            self.btn_save_patient.clicked.connect(self._save_patient_timepoint)
+            patient_layout.addWidget(self.btn_save_patient, 2, 0, 1, 2)
+            
+            self.btn_load_patient = QPushButton("Charger historique patient")
+            self.btn_load_patient.clicked.connect(self._load_patient_history)
+            patient_layout.addWidget(self.btn_load_patient, 3, 0, 1, 2)
+            
+            # Clone tracking (si active)
+            if self.config['modules_avances'].get('clone_persistence', True):
+                self.btn_track_clones = QPushButton("Analyser persistance clonale")
+                self.btn_track_clones.setEnabled(False)
+                self.btn_track_clones.setToolTip("Compare T0 vs FU pour detecter clones persistants [2]")
+                self.btn_track_clones.clicked.connect(self._analyze_clone_persistence)
+                patient_layout.addWidget(self.btn_track_clones, 4, 0, 1, 2)
+            else:
+                self.btn_track_clones = None
+            
+            scroll_layout.addWidget(patient_group)
+        else:
+            self.edit_patient_id = None
+            self.edit_timepoint = None
+            self.btn_save_patient = None
+            self.btn_load_patient = None
+            self.btn_track_clones = None
         
         # ----- GROUPE: Actions -----
         actions_group = QGroupBox("Actions")
@@ -3510,7 +4311,7 @@ class FlowSOMApp(QMainWindow):
                 fig_paths.append(tmp.name)
             
             # Figure LSC si disponible
-            if self.lsc_result:
+            if self.lsc_result and hasattr(self, 'lsc_canvas') and self.lsc_canvas:
                 with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
                     self.lsc_canvas.fig.savefig(tmp.name, dpi=150, bbox_inches='tight',
                                                facecolor='white', edgecolor='none')
@@ -3518,11 +4319,11 @@ class FlowSOMApp(QMainWindow):
             
             # Infos patient
             patient_info = None
-            if self.edit_patient_id.text().strip():
+            if self.edit_patient_id and self.edit_patient_id.text().strip():
                 patient_info = {
                     'patient_id': self.edit_patient_id.text().strip(),
                     'date': datetime.now().strftime('%d/%m/%Y'),
-                    'notes': self.edit_timepoint.text().strip()
+                    'notes': self.edit_timepoint.text().strip() if self.edit_timepoint else ''
                 }
             
             # Generer le PDF
@@ -3550,6 +4351,260 @@ class FlowSOMApp(QMainWindow):
         except Exception as e:
             self._log(f"Erreur export PDF: {str(e)}")
             QMessageBox.critical(self, "Erreur", f"Erreur: {str(e)}")
+    
+    # =========================================================================
+    # METHODES ELN CONFORMITE - NBM REFERENCE [2]
+    # =========================================================================
+    
+    def _load_nbm_folder(self):
+        """Charge un dossier de fichiers NBM pour construire la reference."""
+        folder = QFileDialog.getExistingDirectory(
+            self, "Selectionner le dossier NBM (Normal Bone Marrow)", "",
+            QFileDialog.ShowDirsOnly
+        )
+        if folder:
+            self.nbm_files = self._get_fcs_files(folder)
+            n = len(self.nbm_files)
+            
+            min_required = self.config['quality_control'].get('nbm_samples_required', 15)
+            
+            if self.lbl_nbm_status:
+                if n >= min_required:
+                    self.lbl_nbm_status.setText(f"NBM: {n} fichiers (OK)")
+                    self.lbl_nbm_status.setStyleSheet("color: #a6e3a1; font-size: 9pt; padding: 5px;")
+                else:
+                    self.lbl_nbm_status.setText(f"NBM: {n}/{min_required} fichiers (insuffisant)")
+                    self.lbl_nbm_status.setStyleSheet("color: #f9e2af; font-size: 9pt; padding: 5px;")
+            
+            if self.btn_build_nbm_ref:
+                self.btn_build_nbm_ref.setEnabled(n > 0)
+            
+            self._log(f"Dossier NBM: {folder} ({n} fichiers)")
+    
+    def _build_nbm_reference(self):
+        """Construit la reference NBM frozen MST."""
+        if not self.nbm_files:
+            QMessageBox.warning(self, "Attention", "Chargez d'abord un dossier NBM.")
+            return
+        
+        if not FLOWSOM_AVAILABLE:
+            QMessageBox.critical(self, "Erreur", "FlowSOM n'est pas installe.")
+            return
+        
+        try:
+            self._log("Construction de la reference NBM...")
+            self.statusBar().showMessage("Construction reference NBM...")
+            QApplication.processEvents()
+            
+            # Charger les donnees NBM
+            nbm_data_list = []
+            var_names = None
+            
+            for fpath in self.nbm_files:
+                try:
+                    adata = fs.io.read_FCS(fpath)
+                    nbm_data_list.append(adata.X)
+                    if var_names is None:
+                        var_names = list(adata.var_names)
+                except Exception as e:
+                    self._log(f"Erreur lecture {Path(fpath).name}: {e}")
+            
+            if not nbm_data_list:
+                QMessageBox.critical(self, "Erreur", "Aucun fichier NBM valide.")
+                return
+            
+            # Construire la reference
+            self.nbm_reference = NBMReferenceBuilder(n_nodes=100, seed=42)
+            success = self.nbm_reference.build_reference(nbm_data_list, var_names)
+            
+            if success:
+                if self.lbl_nbm_status:
+                    self.lbl_nbm_status.setText(f"Reference NBM: Construite ({len(nbm_data_list)} samples)")
+                    self.lbl_nbm_status.setStyleSheet("color: #a6e3a1; font-weight: bold; font-size: 9pt; padding: 5px;")
+                
+                # Initialiser le clone tracker avec la reference
+                self.clone_tracker = ClonePersistenceTracker(
+                    nbm_reference=self.nbm_reference,
+                    mrd_detector=self.mrd_detector
+                )
+                
+                self._log(f"Reference NBM construite avec {len(nbm_data_list)} echantillons")
+                self.statusBar().showMessage("Reference NBM construite avec succes!")
+                
+                # Proposer de sauvegarder
+                reply = QMessageBox.question(
+                    self, "Sauvegarder Reference",
+                    "Voulez-vous sauvegarder la reference NBM pour reutilisation?",
+                    QMessageBox.Yes | QMessageBox.No
+                )
+                
+                if reply == QMessageBox.Yes:
+                    file_path, _ = QFileDialog.getSaveFileName(
+                        self, "Sauvegarder Reference NBM",
+                        "nbm_reference.json",
+                        "Fichiers JSON (*.json)"
+                    )
+                    if file_path:
+                        self.nbm_reference.save_reference(file_path)
+                        self._log(f"Reference NBM sauvegardee: {file_path}")
+            else:
+                QMessageBox.critical(self, "Erreur", "Erreur construction reference NBM.")
+                
+        except Exception as e:
+            self._log(f"Erreur construction NBM: {str(e)}")
+            QMessageBox.critical(self, "Erreur", f"Erreur: {str(e)}")
+    
+    def _load_nbm_reference(self):
+        """Charge une reference NBM existante."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Charger Reference NBM",
+            "",
+            "Fichiers JSON (*.json)"
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            self.nbm_reference = NBMReferenceBuilder()
+            success = self.nbm_reference.load_reference(file_path)
+            
+            if success:
+                if self.lbl_nbm_status:
+                    self.lbl_nbm_status.setText(
+                        f"Reference NBM: Chargee ({self.nbm_reference.nbm_samples_count} samples)")
+                    self.lbl_nbm_status.setStyleSheet("color: #a6e3a1; font-weight: bold; font-size: 9pt; padding: 5px;")
+                
+                # Initialiser le clone tracker
+                self.clone_tracker = ClonePersistenceTracker(
+                    nbm_reference=self.nbm_reference,
+                    mrd_detector=self.mrd_detector
+                )
+                
+                self._log(f"Reference NBM chargee depuis {file_path}")
+            else:
+                QMessageBox.critical(self, "Erreur", "Erreur chargement reference NBM.")
+                
+        except Exception as e:
+            self._log(f"Erreur chargement NBM: {str(e)}")
+            QMessageBox.critical(self, "Erreur", f"Erreur: {str(e)}")
+    
+    # =========================================================================
+    # METHODES ELN CONFORMITE - CLONE PERSISTENCE [2]
+    # =========================================================================
+    
+    def _analyze_clone_persistence(self):
+        """Analyse la persistance clonale entre T0 et FU."""
+        if not self.result:
+            QMessageBox.warning(self, "Attention", "Lancez d'abord une analyse.")
+            return
+        
+        if not self.clone_tracker:
+            QMessageBox.warning(self, "Attention", 
+                "Construisez d'abord une reference NBM pour l'analyse de persistance clonale.")
+            return
+        
+        if not self.edit_patient_id or not self.edit_timepoint:
+            return
+        
+        patient_id = self.edit_patient_id.text().strip()
+        timepoint_id = self.edit_timepoint.text().strip()
+        
+        if not patient_id or not timepoint_id:
+            QMessageBox.warning(self, "Attention", "Renseignez l'ID patient et le timepoint.")
+            return
+        
+        try:
+            self._log(f"Analyse persistance clonale pour {patient_id}...")
+            
+            # Obtenir les frequences par node pour ce timepoint
+            fsom = self.result.get('fsom')
+            if fsom is None:
+                return
+            
+            cell_data = fsom.get_cell_data()
+            node_assignments = cell_data.obs['clustering'].values
+            total_cells = len(node_assignments)
+            
+            node_frequencies = {}
+            for node_id in range(100):  # 100 nodes standard
+                count = np.sum(node_assignments == str(node_id))
+                node_frequencies[node_id] = count / total_cells
+            
+            # Ajouter au tracker
+            self.clone_tracker.add_timepoint(timepoint_id, node_frequencies)
+            
+            # Si on a T0 et un FU, faire l'analyse
+            timepoints = list(self.clone_tracker.timepoints.keys())
+            if len(timepoints) >= 2:
+                # Comparer avec T0 (premier timepoint)
+                t0_id = sorted(timepoints)[0]
+                fu_id = timepoint_id
+                
+                if t0_id != fu_id:
+                    result = self.clone_tracker.track_clone_persistence(t0_id, fu_id)
+                    
+                    # Afficher les resultats
+                    self._display_clone_persistence_results(result)
+                    
+                    # Mettre a jour le label MRD
+                    if self.lbl_mrd_result:
+                        mrd_status = result.get('mrd_status', 'Unknown')
+                        mrd_percent = result.get('total_mrd_percent', 0)
+                        
+                        if mrd_status == 'Undetectable':
+                            color = "#a6e3a1"
+                        elif mrd_status == 'Below LOQ':
+                            color = "#f9e2af"
+                        else:
+                            color = "#f38ba8"
+                        
+                        self.lbl_mrd_result.setText(f"MRD: {mrd_status} ({mrd_percent:.4f}%)")
+                        self.lbl_mrd_result.setStyleSheet(f"""
+                            font-size: 11pt;
+                            font-weight: bold;
+                            color: {color};
+                            background: rgba({color[1:]}, 0.1);
+                            padding: 8px;
+                            border-radius: 6px;
+                        """)
+            else:
+                self._log(f"Timepoint {timepoint_id} enregistre. Ajoutez un 2eme timepoint pour l'analyse.")
+                QMessageBox.information(self, "Info", 
+                    f"Timepoint '{timepoint_id}' enregistre.\n"
+                    "Ajoutez un deuxieme timepoint pour l'analyse de persistance.")
+                
+        except Exception as e:
+            self._log(f"Erreur analyse persistance: {str(e)}")
+            QMessageBox.critical(self, "Erreur", f"Erreur: {str(e)}")
+    
+    def _display_clone_persistence_results(self, result: Dict[str, Any]):
+        """Affiche les resultats de persistance clonale."""
+        self._log("=" * 50)
+        self._log("ANALYSE PERSISTANCE CLONALE")
+        self._log("=" * 50)
+        self._log(f"Diagnostic: {result['diagnosis_id']} -> Follow-up: {result['followup_id']}")
+        self._log(f"MRD Total: {result['total_mrd_percent']:.4f}%")
+        self._log(f"Status: {result['mrd_status']}")
+        self._log("")
+        
+        # Clones persistants
+        self._log(f"Clones persistants: {len(result['persistent_nodes'])}")
+        for node in result['persistent_nodes'][:5]:  # Top 5
+            if node['mrd_positive']:
+                self._log(f"  Node {node['node_id']}: {node['followup_freq']:.4%} "
+                         f"(fold-change NBM: {node['fold_change_to_nbm']:.1f}x) - MRD+")
+        
+        # Clones resolus
+        self._log(f"Clones resolus: {len(result['resolved_nodes'])}")
+        
+        # Nouveaux clones
+        if result['new_nodes']:
+            self._log(f"ATTENTION - Nouveaux clones detectes: {len(result['new_nodes'])}")
+            for node in result['new_nodes'][:3]:
+                self._log(f"  Node {node['node_id']}: {node['followup_freq']:.4%}")
+        
+        self._log("=" * 50)
 
 
 # =============================================================================

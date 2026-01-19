@@ -34,5 +34,8 @@ flowkit>=1.0.0
 # Génération de rapports PDF
 reportlab>=3.6.0
 
+# Configuration YAML
+PyYAML>=6.0.0
+
 # Preprocessing cytométrie (optionnel mais recommandé)
 pytometry>=0.1.5

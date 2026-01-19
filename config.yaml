@@ -1,0 +1,203 @@
+# =============================================================================
+# FlowSOM-GUI MRD Tracker - Configuration
+# =============================================================================
+# Fichier de configuration pour activer/désactiver les modules de l'interface.
+# Modifiez les valeurs TRUE/FALSE pour personnaliser votre expérience.
+#
+# Référence: ELN Guidelines, ALFA LAM MRD LSCflow Protocol
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# MODULES PRINCIPAUX (toujours affichés)
+# -----------------------------------------------------------------------------
+modules_principaux:
+  flowsom_analysis: true          # Analyse FlowSOM de base (obligatoire)
+  visualization_tab: true         # Onglet Visualisation (obligatoire)
+  statistics_tab: true            # Onglet Statistiques (obligatoire)
+  export_functions: true          # Fonctions d'export CSV/FCS/Figure
+
+# -----------------------------------------------------------------------------
+# MODULES OPTIONNELS - PROTOCOLE LAM MRD
+# -----------------------------------------------------------------------------
+modules_optionnels:
+  # Transformations de données
+  data_transformations: true      # Logicle, Arcsinh, Log10, Z-score
+  
+  # Score LSC (Leukemic Stem Cell)
+  lsc_score: true                 # Calcul CD34+/CD38-/CD123+
+  extended_lsc_markers: true      # Marqueurs étendus: CD90, TIM3, CLL-1, CD97, GPR56
+  
+  # Suivi patient longitudinal
+  patient_tracking: true          # Suivi Time-Series par patient
+  
+  # Embeddings (UMAP / t-SNE)
+  umap_tsne: true                 # Projections dimensionnelles
+  
+  # Clusters interactifs
+  interactive_clusters: true      # Star plots, comparaison clusters
+  flowsom_mst_stars: true         # MST Star Plot FlowSOM
+  
+  # Export PDF
+  pdf_reports: true               # Génération de rapports PDF
+
+# -----------------------------------------------------------------------------
+# MODULES AVANCÉS - CONFORMITÉ ELN [2][3]
+# -----------------------------------------------------------------------------
+modules_avances:
+  # Référence NBM (Normal Bone Marrow) - CRITIQUE selon [2]
+  nbm_reference: true             # Construction MST "frozen" depuis NBM sains
+  nbm_comparison: true            # Comparaison patient vs NBM
+  
+  # Seuils MRD validés - CRITIQUE selon [2]
+  mrd_detection_limits: true      # LOD, LOQ, seuils Youden/Kappa
+  
+  # Détection de sous-clones - Important selon [2]
+  subclone_detection: true        # Identification sous-clones phénotypiques
+  
+  # Clone tracking - CRITIQUE selon [2]
+  clone_persistence: true         # Suivi persistance clonale T0 → FU
+  
+  # Gating hiérarchique ISAC - CRITIQUE selon [2][3]
+  hierarchical_gating: true       # Singlets, viabilité, CD45+, CD34+
+  
+  # Multi-tube ALFA - Important selon [3]
+  multi_tube_alfa: true           # Tubes LAIP + LSC standardisés
+  
+  # Contrôle qualité - CRITIQUE selon [2][3]
+  quality_control: true           # Validation analytique, QC inter-labo
+
+# -----------------------------------------------------------------------------
+# PARAMÈTRES DE SEUILS MRD (selon [2])
+# -----------------------------------------------------------------------------
+mrd_thresholds:
+  # Limite de détection (LOD) - 0.009% selon [2]
+  lod_percent: 0.009
+  
+  # Limite de quantification (LOQ) - 0.005% selon [2]
+  loq_percent: 0.005
+  
+  # Seuil fréquence NBM max - 1.1% selon [2]
+  nbm_freq_threshold: 0.011
+  
+  # Fold-change minimum FU/NBM - 1.9x selon [2]
+  fold_change_threshold: 1.9
+  
+  # Nombre minimum d'événements par node - 17 selon [2]
+  min_events_per_node: 17
+
+# -----------------------------------------------------------------------------
+# PARAMÈTRES LSC ÉTENDUS (selon [1][3])
+# -----------------------------------------------------------------------------
+lsc_parameters:
+  # Seuils par défaut pour le gating LSC
+  cd34_threshold: 0.5
+  cd38_threshold: 0.3
+  cd123_threshold: 0.5
+  cd45ra_threshold: 0.4
+  cd90_threshold: 0.3
+  
+  # Marqueurs LSC à rechercher (ordre de priorité)
+  primary_markers:
+    - CD34
+    - CD38
+    - CD123
+  
+  extended_markers:
+    - CD45RA
+    - CD90
+    - TIM3
+    - CLL-1
+    - CD97
+    - GPR56
+    - EPCR
+    - CD44
+    - VLA4
+    - CXCR4
+    - CD47
+
+# -----------------------------------------------------------------------------
+# TUBES ALFA STANDARDISÉS (selon [3])
+# -----------------------------------------------------------------------------
+alfa_tubes:
+  tube1_laip:
+    name: "Tube 1 - LAIP Standard"
+    markers:
+      - CD45
+      - CD34
+      - CD117
+      - CD33
+      - CD13
+      - CD15
+      - CD7
+      - HLA-DR
+      - CD38
+      - CD56
+      - CD19
+    gating_window: "CD34+ progenitors"
+  
+  tube2_lsc:
+    name: "Tube 2 - LSC Panel"
+    markers:
+      - CD45
+      - CD34
+      - CD38
+      - CD123
+      - CD45RA
+      - CD90
+      - CD117
+      - HLA-DR
+      - CD36
+      - TIM3
+      - CLL-1
+      - CD97
+    gating_window: "CD34+CD38- LSC population"
+  
+  tube3_monocyte:
+    name: "Tube 3 - Monocyte Panel (Optional)"
+    markers:
+      - CD45
+      - CD14
+      - CD64
+      - CD11b
+      - CD33
+      - CD15
+      - HLA-DR
+    gating_window: "Monocytic lineage"
+
+# -----------------------------------------------------------------------------
+# PARAMÈTRES CONTRÔLE QUALITÉ (selon [2][3])
+# -----------------------------------------------------------------------------
+quality_control:
+  # Nombre minimum d'événements pour analyse MRD
+  min_events: 500000
+  
+  # CV maximum inter-laboratoire (20% selon [3])
+  max_inter_lab_cv: 0.20
+  
+  # Nombre de NBM pour construire la référence (19 selon [2])
+  nbm_samples_required: 15
+  
+  # Validation compensation
+  check_compensation: true
+  
+  # Validation gating hiérarchique
+  validate_gating: true
+
+# -----------------------------------------------------------------------------
+# INTERFACE UTILISATEUR
+# -----------------------------------------------------------------------------
+ui_settings:
+  # Thème (dark, light)
+  theme: "dark"
+  
+  # Taille police de base
+  font_size: 10
+  
+  # Afficher les tooltips détaillés
+  show_tooltips: true
+  
+  # Nombre de cellules par défaut pour UMAP/t-SNE
+  default_embedding_cells: 5000
+  
+  # Afficher les références scientifiques dans l'UI
+  show_references: true
