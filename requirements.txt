@@ -25,5 +25,14 @@ flowsom>=0.2.0
 fcswrite>=0.6.0
 flowio>=1.0.0
 
+# UMAP / t-SNE (embeddings)
+umap-learn>=0.5.0
+
+# Transformations cytométrie (Logicle, etc.) - optionnel
+flowkit>=1.0.0
+
+# Génération de rapports PDF
+reportlab>=3.6.0
+
 # Preprocessing cytométrie (optionnel mais recommandé)
 pytometry>=0.1.5
