@@ -1,0 +1,37 @@
+{
+  "patient_id": "Pat1",
+  "created_at": "2026-01-22T21:04:20.996115",
+  "timepoints": [
+    {
+      "id": "T0",
+      "date": "2026-01-22 21:04",
+      "n_clusters": 14,
+      "total_cells": 2031454,
+      "files_analyzed": [
+        "C:\\Users\\Florian Travail\\Documents\\FlowSom\\Data\\Patho\\LAIP29_1_FU_P1.fcs",
+        "C:\\Users\\Florian Travail\\Documents\\FlowSom\\Data\\Patho\\LAIP29_1_FU_P1.fcs"
+      ],
+      "metacluster_distribution": {
+        "0": 69.52,
+        "1": 1.92,
+        "2": 14.76,
+        "3": 1.78,
+        "4": 0.2,
+        "5": 3.32,
+        "6": 0.23,
+        "7": 0.11,
+        "8": 4.67,
+        "9": 0.27,
+        "10": 0.31,
+        "11": 0.12,
+        "12": 1.46,
+        "13": 1.34
+      }
+    }
+  ],
+  "config": {
+    "xdim": 10,
+    "ydim": 10,
+    "n_clusters": 14
+  }
+}

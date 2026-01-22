@@ -1,13 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-Application Desktop FlowSOM - Analyse de Cytométrie en Flux
-============================================================
-Application GUI complète pour l'analyse FlowSOM automatisée et interactive.
-Permet de comparer des échantillons sains vs pathologiques.
-
-Auteur: Expert Senior en Développement Python & Data Science
-Version: 2.0.0
-"""
 
 import sys
 import os
@@ -145,14 +136,12 @@ def load_config() -> Dict[str, Any]:
         },
         'onglets': {
             'clusters_interactifs': True,
-            'score_lsc': True,
+            'fcs_visualization': True,
             'suivi_patient': True,
             'logs': True
         },
         'modules_optionnels': {
             'data_transformations': True,
-            'lsc_score': True,
-            'extended_lsc_markers': True,
             'patient_tracking': True,
             'umap_tsne': True,
             'interactive_clusters': True,
@@ -162,31 +151,7 @@ def load_config() -> Dict[str, Any]:
         'modules_avances': {
             'nbm_reference': True,
             'nbm_comparison': True,
-            'mrd_detection_limits': True,
-            'subclone_detection': True,
-            'clone_persistence': True,
-            'hierarchical_gating': True,
-            'multi_tube_alfa': True,
-            'quality_control': True
-        },
-        'mrd_thresholds': {
-            'lod_percent': 0.009,
-            'loq_percent': 0.005,
-            'nbm_freq_threshold': 0.011,
-            'fold_change_threshold': 1.9,
-            'min_events_per_node': 17
-        },
-        'lsc_parameters': {
-            'cd34_threshold': 0.5,
-            'cd38_threshold': 0.3,
-            'cd123_threshold': 0.5,
-            'cd45ra_threshold': 0.4,
-            'cd90_threshold': 0.3
-        },
-        'quality_control': {
-            'min_events': 500000,
-            'max_inter_lab_cv': 0.20,
-            'nbm_samples_required': 15
+            'clone_persistence': True
         },
         'ui_settings': {
             'theme': 'dark',
@@ -226,53 +191,6 @@ def load_config() -> Dict[str, Any]:
 
 # Configuration globale
 CONFIG = load_config()
-
-
-# =============================================================================
-# CONSTANTES POUR LE PROTOCOLE LAM MRD LSCflow
-# =============================================================================
-
-# Marqueurs LSC standard (adaptes selon le panel)
-LSC_MARKERS = {
-    'CD34': ['CD34', 'cd34'],
-    'CD38': ['CD38', 'cd38'],
-    'CD45RA': ['CD45RA', 'cd45ra', 'CD45-RA'],
-    'CD123': ['CD123', 'cd123', 'IL3R', 'IL-3R'],
-    'CD33': ['CD33', 'cd33'],
-    'CD117': ['CD117', 'cd117', 'c-Kit', 'cKit'],
-    'HLA-DR': ['HLA-DR', 'HLADR', 'hla-dr', 'MHCII']
-}
-
-# Marqueurs LSC etendus (selon protocole ALFA [3] et Terwijn [1])
-LSC_MARKERS_EXTENDED = {
-    # Base - discrimination HSC vs LSC
-    'CD34': ['CD34', 'cd34'],
-    'CD38': ['CD38', 'cd38'],
-    'CD45RA': ['CD45RA', 'cd45ra', 'CD45-RA'],
-    
-    # Marqueurs LSC specifiques
-    'CD90': ['CD90', 'cd90', 'Thy-1', 'THY1'],          # Normal HSC marker (↓ in LSC)
-    'CD123': ['CD123', 'cd123', 'IL3R', 'IL-3R'],       # IL3-RA (↑ in LSC)
-    'TIM3': ['TIM3', 'tim3', 'HAVCR2', 'CD366'],        # Immune checkpoint (↑ LSC)
-    'CLL-1': ['CLL-1', 'CLL1', 'CLEC12A', 'CD371'],     # Adhesion (↑ LSC)
-    'CD97': ['CD97', 'cd97'],                           # Activating marker (↑ LSC)
-    'GPR56': ['GPR56', 'gpr56', 'ADGRG1'],              # nHSC enriched
-    'EPCR': ['EPCR', 'CD201', 'PROCR'],                 # nHSC enriched
-    'CD44': ['CD44', 'cd44'],                           # Adhesion (↑↑ LSC)
-    'VLA4': ['VLA4', 'CD49d', 'ITGA4'],                 # Integrin alpha-4
-    'CXCR4': ['CXCR4', 'CD184', 'cxcr4'],               # Homing receptor
-    'CD47': ['CD47', 'cd47'],                           # "Don't eat me" signal
-    
-    # Autres marqueurs diagnostiques
-    'CD33': ['CD33', 'cd33'],
-    'CD117': ['CD117', 'cd117', 'c-Kit', 'cKit'],
-    'HLA-DR': ['HLA-DR', 'HLADR', 'hla-dr', 'MHCII']
-}
-
-# Panels standard LAM MRD (ALFA [3])
-TUBE1_MARKERS = ['CD45', 'CD34', 'CD117', 'CD33', 'CD13', 'CD15', 'CD7', 'HLA-DR', 'CD38', 'CD56', 'CD19']
-TUBE2_MARKERS = ['CD45', 'CD34', 'CD38', 'CD123', 'CD45RA', 'CD90', 'CD117', 'HLA-DR', 'CD36', 'TIM3', 'CLL-1', 'CD97']
-TUBE3_MARKERS = ['CD45', 'CD14', 'CD64', 'CD11b', 'CD33', 'CD15', 'HLA-DR']  # Monocyte panel
 
 
 # =============================================================================
@@ -912,105 +830,11 @@ class DataTransformer:
         return (data - min_val) / range_val
 
 
-class LSCScoreCalculator:
-    """
-    Calculateur de score LSC (Leukemic Stem Cell).
-    Basé sur les signatures CD34+/CD38-/CD123+ typiques des LSC de LAM.
-    """
-    
-    def __init__(self, var_names: List[str]):
-        self.var_names = [v.upper() for v in var_names]
-        self.marker_indices = self._find_marker_indices()
-        
-    def _find_marker_indices(self) -> Dict[str, Optional[int]]:
-        """Trouve les indices des marqueurs LSC dans les donnees."""
-        indices = {}
-        for marker, aliases in LSC_MARKERS.items():
-            indices[marker] = None
-            for alias in aliases:
-                alias_upper = alias.upper()
-                for i, name in enumerate(self.var_names):
-                    if alias_upper in name:
-                        indices[marker] = i
-                        break
-                if indices[marker] is not None:
-                    break
-        return indices
-    
-    def calculate_lsc_score(self, X: np.ndarray, 
-                            cd34_threshold: float = 0.5,
-                            cd38_threshold: float = 0.3,
-                            cd123_threshold: float = 0.5) -> Dict[str, Any]:
-        """
-        Calcule le score LSC basé sur la population CD34+/CD38-/CD123+.
-        
-        Returns:
-            Dict avec:
-            - lsc_percentage: Pourcentage de cellules LSC
-            - lsc_mask: Masque booléen des cellules LSC
-            - cd34_pos_percentage: % CD34+
-            - cd38_neg_percentage: % CD38- parmi CD34+
-            - cd123_pos_percentage: % CD123+ parmi CD34+/CD38-
-        """
-        n_cells = X.shape[0]
-        
-        result = {
-            'lsc_percentage': 0.0,
-            'lsc_mask': np.zeros(n_cells, dtype=bool),
-            'cd34_pos_percentage': 0.0,
-            'cd38_neg_percentage': 0.0,
-            'cd123_pos_percentage': 0.0,
-            'available_markers': [],
-            'missing_markers': []
-        }
-        
-        # Normaliser les donnees pour les seuils
-        X_norm = DataTransformer.min_max_normalize(X)
-        
-        # CD34+
-        cd34_idx = self.marker_indices.get('CD34')
-        if cd34_idx is not None:
-            result['available_markers'].append('CD34')
-            cd34_pos = X_norm[:, cd34_idx] > cd34_threshold
-            result['cd34_pos_percentage'] = cd34_pos.sum() / n_cells * 100
-        else:
-            result['missing_markers'].append('CD34')
-            cd34_pos = np.ones(n_cells, dtype=bool)
-        
-        # CD38- (parmi CD34+)
-        cd38_idx = self.marker_indices.get('CD38')
-        if cd38_idx is not None:
-            result['available_markers'].append('CD38')
-            cd38_neg = X_norm[:, cd38_idx] < cd38_threshold
-            cd34_cd38 = cd34_pos & cd38_neg
-            if cd34_pos.sum() > 0:
-                result['cd38_neg_percentage'] = cd34_cd38.sum() / cd34_pos.sum() * 100
-        else:
-            result['missing_markers'].append('CD38')
-            cd34_cd38 = cd34_pos
-        
-        # CD123+ (parmi CD34+/CD38-)
-        cd123_idx = self.marker_indices.get('CD123')
-        if cd123_idx is not None:
-            result['available_markers'].append('CD123')
-            cd123_pos = X_norm[:, cd123_idx] > cd123_threshold
-            lsc_mask = cd34_cd38 & cd123_pos
-            if cd34_cd38.sum() > 0:
-                result['cd123_pos_percentage'] = lsc_mask.sum() / cd34_cd38.sum() * 100
-        else:
-            result['missing_markers'].append('CD123')
-            lsc_mask = cd34_cd38
-        
-        result['lsc_mask'] = lsc_mask
-        result['lsc_percentage'] = lsc_mask.sum() / n_cells * 100
-        
-        return result
-
-
 class PreGating:
     """
     Pre-gating automatique pour la selection des populations d'interet.
-    Basé sur CD45/SSC pour exclure les debris et les doublets.
+    Basé sur FSC/SSC pour exclure les debris et les doublets.
+    Methode robuste avec gestion des valeurs aberrantes et NaN.
     """
     
     @staticmethod
@@ -1020,17 +844,22 @@ class PreGating:
         for pattern in patterns:
             pattern_upper = pattern.upper()
             for i, name in enumerate(var_upper):
-                if pattern_upper in name:
+                if pattern_upper in name or name == pattern_upper:
                     return i
         return None
     
     @staticmethod
     def gate_viable_cells(X: np.ndarray, var_names: List[str],
-                          min_fsc: float = 0.05, max_fsc: float = 0.95,
-                          min_ssc: float = 0.05, max_ssc: float = 0.95) -> np.ndarray:
+                          min_percentile: float = 2.0, max_percentile: float = 98.0) -> np.ndarray:
         """
         Gate les cellules viables basé sur FSC/SSC.
-        Exclut les debris (FSC-low) et les doublets (FSC-high).
+        Utilise les percentiles pour une detection robuste des outliers.
+        
+        Args:
+            X: Matrice des donnees (n_cells, n_markers)
+            var_names: Liste des noms de marqueurs
+            min_percentile: Percentile minimum pour exclusion (debris)
+            max_percentile: Percentile maximum pour exclusion (doublets)
         
         Returns:
             Masque booléen des cellules viables.
@@ -1038,28 +867,46 @@ class PreGating:
         n_cells = X.shape[0]
         mask = np.ones(n_cells, dtype=bool)
         
-        # Trouver FSC
+        # Trouver FSC (priorite a FSC-A)
         fsc_idx = PreGating.find_marker_index(var_names, ['FSC-A', 'FSC-H', 'FSC'])
         if fsc_idx is not None:
-            fsc_vals = X[:, fsc_idx]
-            fsc_norm = (fsc_vals - np.nanmin(fsc_vals)) / (np.nanmax(fsc_vals) - np.nanmin(fsc_vals) + 1e-10)
-            mask &= (fsc_norm >= min_fsc) & (fsc_norm <= max_fsc)
+            fsc_vals = X[:, fsc_idx].astype(np.float64)
+            # Remplacer les valeurs non-finies par NaN
+            fsc_vals = np.where(np.isfinite(fsc_vals), fsc_vals, np.nan)
+            
+            # Utiliser percentiles pour robustesse
+            fsc_min = np.nanpercentile(fsc_vals, min_percentile)
+            fsc_max = np.nanpercentile(fsc_vals, max_percentile)
+            
+            fsc_mask = (fsc_vals >= fsc_min) & (fsc_vals <= fsc_max)
+            mask &= np.where(np.isnan(fsc_vals), False, fsc_mask)
         
-        # Trouver SSC
+        # Trouver SSC (priorite a SSC-A)
         ssc_idx = PreGating.find_marker_index(var_names, ['SSC-A', 'SSC-H', 'SSC'])
         if ssc_idx is not None:
-            ssc_vals = X[:, ssc_idx]
-            ssc_norm = (ssc_vals - np.nanmin(ssc_vals)) / (np.nanmax(ssc_vals) - np.nanmin(ssc_vals) + 1e-10)
-            mask &= (ssc_norm >= min_ssc) & (ssc_norm <= max_ssc)
+            ssc_vals = X[:, ssc_idx].astype(np.float64)
+            ssc_vals = np.where(np.isfinite(ssc_vals), ssc_vals, np.nan)
+            
+            ssc_min = np.nanpercentile(ssc_vals, min_percentile)
+            ssc_max = np.nanpercentile(ssc_vals, max_percentile)
+            
+            ssc_mask = (ssc_vals >= ssc_min) & (ssc_vals <= ssc_max)
+            mask &= np.where(np.isnan(ssc_vals), False, ssc_mask)
         
         return mask
     
     @staticmethod
     def gate_singlets(X: np.ndarray, var_names: List[str],
-                      ratio_min: float = 0.7, ratio_max: float = 1.3) -> np.ndarray:
+                      ratio_min: float = 0.6, ratio_max: float = 1.5) -> np.ndarray:
         """
         Gate les singlets basé sur le ratio FSC-A/FSC-H.
-        Les doublets ont un ratio > 1.3 typiquement.
+        Les doublets ont typiquement un ratio > 1.3-1.5.
+        
+        Args:
+            X: Matrice des donnees
+            var_names: Liste des noms de marqueurs
+            ratio_min: Ratio minimum acceptable (default 0.6)
+            ratio_max: Ratio maximum acceptable (default 1.5)
         
         Returns:
             Masque booléen des singlets.
@@ -1070,16 +917,27 @@ class PreGating:
         fsc_h_idx = PreGating.find_marker_index(var_names, ['FSC-H'])
         
         if fsc_a_idx is None or fsc_h_idx is None:
+            # Si pas les deux canaux, retourner True pour toutes les cellules
             return np.ones(n_cells, dtype=bool)
         
-        fsc_a = X[:, fsc_a_idx]
-        fsc_h = X[:, fsc_h_idx]
+        fsc_a = X[:, fsc_a_idx].astype(np.float64)
+        fsc_h = X[:, fsc_h_idx].astype(np.float64)
         
-        # Eviter division par zero
-        fsc_h_safe = np.maximum(fsc_h, 1e-10)
-        ratio = fsc_a / fsc_h_safe
+        # Gerer les valeurs non-finies
+        fsc_a = np.where(np.isfinite(fsc_a), fsc_a, np.nan)
+        fsc_h = np.where(np.isfinite(fsc_h), fsc_h, np.nan)
         
-        return (ratio >= ratio_min) & (ratio <= ratio_max)
+        # Eviter division par zero - valeurs tres petites traitees comme invalides
+        min_val = 100  # Seuil minimum pour FSC-H valide
+        valid_h = fsc_h > min_val
+        
+        ratio = np.full(n_cells, np.nan)
+        ratio[valid_h] = fsc_a[valid_h] / fsc_h[valid_h]
+        
+        # Masque: ratio valide et dans les limites
+        mask = np.isfinite(ratio) & (ratio >= ratio_min) & (ratio <= ratio_max)
+        
+        return mask
     
     @staticmethod
     def gate_cd45_positive(X: np.ndarray, var_names: List[str],
@@ -1092,14 +950,16 @@ class PreGating:
         """
         n_cells = X.shape[0]
         
-        cd45_idx = PreGating.find_marker_index(var_names, ['CD45', 'cd45'])
+        cd45_idx = PreGating.find_marker_index(var_names, ['CD45', 'cd45', 'CD45-PECY5', 'CD45-PC5'])
         if cd45_idx is None:
             return np.ones(n_cells, dtype=bool)
         
-        cd45_vals = X[:, cd45_idx]
+        cd45_vals = X[:, cd45_idx].astype(np.float64)
+        cd45_vals = np.where(np.isfinite(cd45_vals), cd45_vals, np.nan)
+        
         threshold = np.nanpercentile(cd45_vals, threshold_percentile)
         
-        return cd45_vals > threshold
+        return np.where(np.isnan(cd45_vals), False, cd45_vals > threshold)
 
 
 # =============================================================================
@@ -1139,8 +999,8 @@ class NBMReferenceBuilder:
         if not FLOWSOM_AVAILABLE:
             return False
         
-        if len(nbm_data_list) < CONFIG['quality_control'].get('nbm_samples_required', 15):
-            print(f"ATTENTION: {len(nbm_data_list)} NBM < {CONFIG['quality_control']['nbm_samples_required']} recommandes [2]")
+        if len(nbm_data_list) < 15:
+            print(f"ATTENTION: {len(nbm_data_list)} NBM < 15 recommandes")
         
         try:
             # Merge tous les NBM
@@ -1227,170 +1087,14 @@ class NBMReferenceBuilder:
             return False
 
 
-class MRDDetectionLimits:
-    """
-    Seuils de detection MRD valides selon [2].
-    
-    [2]: "The concordance between mMRD and MFC-MRD was 80.2%."
-    Seuils optimises par Youden & Kappa tests.
-    """
-    
-    def __init__(self):
-        thresholds = CONFIG.get('mrd_thresholds', {})
-        self.lod = thresholds.get('lod_percent', 0.009) / 100  # Limit of Detection
-        self.loq = thresholds.get('loq_percent', 0.005) / 100  # Limit of Quantification
-        self.nbm_freq_threshold = thresholds.get('nbm_freq_threshold', 0.011)
-        self.fold_change_threshold = thresholds.get('fold_change_threshold', 1.9)
-        self.min_events = thresholds.get('min_events_per_node', 17)
-    
-    def is_mrd_positive(self, node_freq_fu: float, node_freq_nbm: float) -> Tuple[bool, str]:
-        """
-        Determine si un node est MRD positif selon [2].
-        
-        MRD positive si BOTH:
-        1. freq(FU) >= 1.9 x freq(NBM)
-        2. freq(NBM) < 1.1%
-        
-        Returns:
-            Tuple (is_positive, reason)
-        """
-        if node_freq_nbm >= self.nbm_freq_threshold:
-            return False, f"NBM freq too high ({node_freq_nbm:.3%} >= {self.nbm_freq_threshold:.1%})"
-        
-        fold_change = node_freq_fu / (node_freq_nbm + 1e-10)
-        
-        if fold_change < self.fold_change_threshold:
-            return False, f"Fold-change insufficient ({fold_change:.1f}x < {self.fold_change_threshold}x)"
-        
-        return True, f"MRD+ (fold-change: {fold_change:.1f}x, NBM: {node_freq_nbm:.4%})"
-    
-    def classify_mrd(self, mrd_percent: float) -> Dict[str, Any]:
-        """
-        Classifie le resultat MRD selon les seuils [2].
-        
-        Returns:
-            Dict avec classification et details
-        """
-        result = {
-            'value': mrd_percent,
-            'classification': 'Unknown',
-            'is_quantifiable': False,
-            'is_detectable': False,
-            'clinical_significance': ''
-        }
-        
-        if mrd_percent < self.loq * 100:
-            result['classification'] = 'Undetectable'
-            result['clinical_significance'] = 'Complete molecular remission'
-        elif mrd_percent < self.lod * 100:
-            result['classification'] = 'Below LOQ'
-            result['is_detectable'] = True
-            result['clinical_significance'] = 'Detectable but not quantifiable'
-        else:
-            result['classification'] = 'Quantifiable MRD'
-            result['is_detectable'] = True
-            result['is_quantifiable'] = True
-            result['clinical_significance'] = 'Measurable residual disease'
-        
-        return result
-    
-    def validate_sensitivity(self, node_event_count: int, total_events: int,
-                            node_nbm_count: int, total_nbm_events: int) -> Tuple[bool, str]:
-        """
-        Valide la sensibilite de detection selon [2].
-        
-        [2]: "lowest number of FU cells yielding significant difference 
-             with NBM was a cluster of 17 events"
-        """
-        if node_event_count < self.min_events:
-            return False, f"Insufficient events ({node_event_count} < {self.min_events} minimum)"
-        
-        mrd_percent = (node_event_count / total_events) * 100
-        
-        if mrd_percent < self.loq * 100:
-            return True, f"Below LOQ ({mrd_percent:.4f}%) - detectable but not quantifiable"
-        else:
-            return True, f"Quantifiable MRD ({mrd_percent:.4f}%)"
-
-
-class SubcloneDetector:
-    """
-    Detection de sous-clones phenotypiques selon [2].
-    
-    [2]: "This strategy disclosed SUBCLONES with varying immunophenotype 
-         within single diagnosis and FU samples"
-    """
-    
-    def __init__(self, phenotype_similarity_min: float = 0.8,
-                 phenotype_similarity_max: float = 0.95):
-        self.similarity_min = phenotype_similarity_min
-        self.similarity_max = phenotype_similarity_max
-    
-    @staticmethod
-    def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-        """Calcule la similarite cosinus entre deux vecteurs."""
-        norm_a = np.linalg.norm(a)
-        norm_b = np.linalg.norm(b)
-        if norm_a == 0 or norm_b == 0:
-            return 0.0
-        return np.dot(a, b) / (norm_a * norm_b)
-    
-    def detect_subclones(self, node_phenotypes: Dict[int, np.ndarray],
-                         positive_nodes: List[int]) -> List[Dict[str, Any]]:
-        """
-        Detecte les sous-clones parmi les nodes positifs.
-        
-        Args:
-            node_phenotypes: Phenotypes moyens par node
-            positive_nodes: Liste des nodes identifies comme leucemiques
-            
-        Returns:
-            Liste des sous-clones detectes avec leurs caracteristiques
-        """
-        subclones = []
-        processed_pairs = set()
-        
-        for node_i in positive_nodes:
-            for node_j in positive_nodes:
-                if node_i >= node_j:
-                    continue
-                
-                pair_key = (min(node_i, node_j), max(node_i, node_j))
-                if pair_key in processed_pairs:
-                    continue
-                processed_pairs.add(pair_key)
-                
-                # Calculer similarite phenotypique
-                pheno_i = node_phenotypes.get(node_i, np.zeros(1))
-                pheno_j = node_phenotypes.get(node_j, np.zeros(1))
-                
-                similarity = self.cosine_similarity(pheno_i, pheno_j)
-                
-                # Sous-clones: phenotypes similaires mais pas identiques
-                if self.similarity_min < similarity < self.similarity_max:
-                    subclones.append({
-                        'nodes': [node_i, node_j],
-                        'phenotype_similarity': similarity,
-                        'biological_meaning': 'Potential phenotypic subclones',
-                        'risk_assessment': 'Monitor for differential evolution'
-                    })
-        
-        return subclones
-
-
 class ClonePersistenceTracker:
     """
-    Suivi de la persistance clonale T0 -> FU selon [2].
-    
-    [2] Figure 1: Tracking clone T0 → FU1 → FU2
-    "residual minor clone (1.25% in AML FU vs. 4.97% at diagnosis)
-     however 10 times more abundant than in NBM"
+    Suivi de la persistance clonale T0 -> FU.
+    Tracking clone T0 → FU1 → FU2
     """
     
-    def __init__(self, nbm_reference: Optional[NBMReferenceBuilder] = None,
-                 mrd_detector: Optional[MRDDetectionLimits] = None):
+    def __init__(self, nbm_reference: Optional[NBMReferenceBuilder] = None):
         self.nbm_reference = nbm_reference
-        self.mrd_detector = mrd_detector or MRDDetectionLimits()
         self.timepoints: Dict[str, Dict[int, float]] = {}  # {timepoint: {node: freq}}
     
     def add_timepoint(self, timepoint_id: str, node_frequencies: Dict[int, float]):
@@ -1419,9 +1123,7 @@ class ClonePersistenceTracker:
             'followup_id': followup_id,
             'persistent_nodes': [],
             'resolved_nodes': [],
-            'new_nodes': [],
-            'total_mrd_percent': 0.0,
-            'mrd_status': 'Unknown'
+            'new_nodes': []
         }
         
         all_nodes = set(diag_freqs.keys()) | set(fu_freqs.keys())
@@ -1444,11 +1146,6 @@ class ClonePersistenceTracker:
                 'fold_change_to_nbm': fu_freq / (nbm_freq + 1e-10) if nbm_freq > 0 else float('inf')
             }
             
-            # Determiner le status du node
-            is_mrd_positive, reason = self.mrd_detector.is_mrd_positive(fu_freq, nbm_freq)
-            node_data['mrd_positive'] = is_mrd_positive
-            node_data['mrd_reason'] = reason
-            
             if diag_freq > 0.001 and fu_freq > 0.001:
                 # Clone present aux deux timepoints
                 node_data['status'] = 'Persistent'
@@ -1462,174 +1159,7 @@ class ClonePersistenceTracker:
                 node_data['status'] = 'New/Emerging'
                 result['new_nodes'].append(node_data)
         
-        # Calculer MRD total
-        mrd_nodes = [n for n in result['persistent_nodes'] + result['new_nodes'] if n['mrd_positive']]
-        result['total_mrd_percent'] = sum(n['followup_freq'] for n in mrd_nodes) * 100
-        
-        # Classification MRD
-        mrd_classification = self.mrd_detector.classify_mrd(result['total_mrd_percent'])
-        result['mrd_status'] = mrd_classification['classification']
-        result['mrd_classification'] = mrd_classification
-        
         return result
-
-
-class QualityControlALFA:
-    """
-    Controle qualite conforme au protocole ALFA [3].
-    
-    [3]: "Harmonisation of pre-analytical sample processing"
-    """
-    
-    def __init__(self):
-        qc_config = CONFIG.get('quality_control', {})
-        self.min_events = qc_config.get('min_events', 500000)
-        self.max_inter_lab_cv = qc_config.get('max_inter_lab_cv', 0.20)
-    
-    def validate_fcs_quality(self, n_events: int, 
-                             has_compensation: bool = True) -> Dict[str, Any]:
-        """
-        Valide la qualite d'un fichier FCS pour analyse MRD.
-        
-        [3]: "Acquisition: min 500,000 cells"
-        """
-        checks = {
-            'n_events': n_events,
-            'min_required': self.min_events,
-            'is_valid': n_events >= self.min_events,
-            'has_compensation': has_compensation,
-            'warnings': [],
-            'errors': []
-        }
-        
-        if n_events < self.min_events:
-            checks['errors'].append(
-                f"Insufficient events: {n_events:,} < {self.min_events:,} required"
-            )
-        
-        if n_events < self.min_events * 0.5:
-            checks['errors'].append("CRITICAL: Very low event count for MRD")
-        elif n_events < self.min_events:
-            checks['warnings'].append(
-                f"Low event count may reduce sensitivity (LOD affected)"
-            )
-        
-        if not has_compensation:
-            checks['warnings'].append("No compensation matrix detected")
-        
-        return checks
-    
-    def calculate_inter_lab_cv(self, mfi_values: List[float]) -> Dict[str, Any]:
-        """
-        Calcule le CV inter-laboratoire pour un marqueur.
-        
-        [3]: Fig 4 - 22 centres avec variation CV < 20% sur CD34+CD38-
-        """
-        if len(mfi_values) < 2:
-            return {'cv': 0, 'is_acceptable': True, 'message': 'Insufficient data'}
-        
-        mean_mfi = np.mean(mfi_values)
-        std_mfi = np.std(mfi_values)
-        cv = std_mfi / mean_mfi if mean_mfi > 0 else 0
-        
-        result = {
-            'cv': cv,
-            'cv_percent': cv * 100,
-            'mean': mean_mfi,
-            'std': std_mfi,
-            'is_acceptable': cv <= self.max_inter_lab_cv,
-            'threshold': self.max_inter_lab_cv
-        }
-        
-        if cv > self.max_inter_lab_cv:
-            result['message'] = f"CV too high: {cv:.1%} > {self.max_inter_lab_cv:.0%} threshold"
-        else:
-            result['message'] = f"CV acceptable: {cv:.1%}"
-        
-        return result
-
-
-class HierarchicalGating:
-    """
-    Gating hierarchique standardise ISAC/ELN [2][3].
-    
-    [2]: "MFC analysis strategies are highly operator-dependent"
-    Solution: Standardized gating via FlowSOM
-    """
-    
-    @staticmethod
-    def apply_full_gating(X: np.ndarray, var_names: List[str],
-                          apply_singlets: bool = True,
-                          apply_viability: bool = False,
-                          apply_cd45: bool = True,
-                          apply_cd34: bool = False) -> Tuple[np.ndarray, Dict[str, Any]]:
-        """
-        Applique le pipeline de gating hierarchique ISAC.
-        
-        Steps:
-        1. Singlets (FSC-A vs FSC-H)
-        2. Live cells (viability marker) - optionnel
-        3. CD45+ (hematopoietic cells)
-        4. CD34+ (progenitors) - optionnel
-        
-        Returns:
-            Tuple (masque_final, statistiques_gating)
-        """
-        n_cells = X.shape[0]
-        mask = np.ones(n_cells, dtype=bool)
-        stats = {
-            'total_events': n_cells,
-            'steps': []
-        }
-        
-        # Step 1: Singlets
-        if apply_singlets:
-            singlet_mask = PreGating.gate_singlets(X, var_names)
-            mask &= singlet_mask
-            stats['steps'].append({
-                'name': 'Singlets',
-                'remaining': mask.sum(),
-                'percent': mask.sum() / n_cells * 100
-            })
-        
-        # Step 2: Viable (si marqueur disponible)
-        if apply_viability:
-            viable_mask = PreGating.gate_viable_cells(X, var_names)
-            mask &= viable_mask
-            stats['steps'].append({
-                'name': 'Viable',
-                'remaining': mask.sum(),
-                'percent': mask.sum() / n_cells * 100
-            })
-        
-        # Step 3: CD45+
-        if apply_cd45:
-            cd45_mask = PreGating.gate_cd45_positive(X, var_names)
-            mask &= cd45_mask
-            stats['steps'].append({
-                'name': 'CD45+',
-                'remaining': mask.sum(),
-                'percent': mask.sum() / n_cells * 100
-            })
-        
-        # Step 4: CD34+ (optionnel - pour population progéniteurs)
-        if apply_cd34:
-            cd34_idx = PreGating.find_marker_index(var_names, ['CD34', 'cd34'])
-            if cd34_idx is not None:
-                cd34_vals = X[:, cd34_idx]
-                threshold = np.nanpercentile(cd34_vals[mask], 90)  # Top 10%
-                cd34_mask = cd34_vals > threshold
-                mask &= cd34_mask
-                stats['steps'].append({
-                    'name': 'CD34+',
-                    'remaining': mask.sum(),
-                    'percent': mask.sum() / n_cells * 100
-                })
-        
-        stats['final_count'] = mask.sum()
-        stats['final_percent'] = mask.sum() / n_cells * 100
-        
-        return mask, stats
 
 
 class PDFReportGenerator:
@@ -2185,21 +1715,20 @@ class FlowSOMApp(QMainWindow):
         self.embedding_worker: Optional[EmbeddingWorker] = None
         self.embedding_result: Optional[Dict[str, Any]] = None
         
-        # Nouvelles attributs pour LAM MRD
-        self.lsc_result: Optional[Dict[str, Any]] = None
+        # Attributs patient
         self.current_patient: Optional[PatientData] = None
         self.patients_db: Dict[str, PatientData] = {}
         self.transformed_data: Optional[np.ndarray] = None
         
-        # Attributs conformite ELN [2][3]
+        # Reference NBM
         self.nbm_reference: Optional[NBMReferenceBuilder] = None
-        self.mrd_detector = MRDDetectionLimits()
-        self.subclone_detector = SubcloneDetector()
         self.clone_tracker: Optional[ClonePersistenceTracker] = None
-        self.quality_controller = QualityControlALFA()
         self.nbm_files: List[str] = []  # Fichiers NBM pour reference
         
-        self.setWindowTitle("FlowSOM Analyzer - Analyse LAM MRD (ELN Compliant)")
+        # Fichier FCS charge pour visualisation
+        self.current_fcs_adata = None
+        
+        self.setWindowTitle("FlowSOM Analyzer - Analyse Cytométrie")
         self.setMinimumSize(1500, 950)
         self.setStyleSheet(STYLESHEET)
         
@@ -2251,7 +1780,7 @@ class FlowSOMApp(QMainWindow):
         title_layout.addStretch()
         header_layout.addLayout(title_layout)
         
-        subtitle = QLabel("Analyse comparative Sain vs Pathologique")
+        subtitle = QLabel("Analyse FlowSOM - Reference NBM vs Patient Diagnostic")
         subtitle.setObjectName("subtitleLabel")
         header_layout.addWidget(subtitle)
         
@@ -2277,32 +1806,49 @@ class FlowSOMApp(QMainWindow):
         data_layout = QVBoxLayout(data_group)
         data_layout.setSpacing(12)
         
-        # Dossier Sain
-        self.btn_healthy = QPushButton("Selectionner Dossier Sain")
+        # Mode d'analyse
+        mode_layout = QHBoxLayout()
+        lbl_mode = QLabel("Mode:")
+        lbl_mode.setObjectName("sectionLabel")
+        mode_layout.addWidget(lbl_mode)
+        
+        self.chk_compare_nbm = QCheckBox("Comparer avec NBM")
+        self.chk_compare_nbm.setChecked(False)
+        self.chk_compare_nbm.setToolTip("Cochez pour comparer Patient vs Reference NBM. Decochez pour analyser un patient seul.")
+        self.chk_compare_nbm.stateChanged.connect(self._toggle_nbm_mode)
+        mode_layout.addWidget(self.chk_compare_nbm)
+        mode_layout.addStretch()
+        data_layout.addLayout(mode_layout)
+        
+        # Reference NBM (Normal Bone Marrow)
+        self.btn_healthy = QPushButton("Reference NBM (Moelle Normale)")
         self.btn_healthy.setObjectName("successBtn")
         self.btn_healthy.setCursor(Qt.PointingHandCursor)
         self.btn_healthy.clicked.connect(self._load_healthy_folder)
+        self.btn_healthy.setToolTip("Fichier ou dossier de reference NBM sain")
+        self.btn_healthy.setEnabled(False)  # Desactive par defaut
         data_layout.addWidget(self.btn_healthy)
         
-        self.lbl_healthy = QLabel("Aucun dossier selectionne")
+        self.lbl_healthy = QLabel("Aucune reference selectionnee")
         self.lbl_healthy.setObjectName("fileLabel")
         self.lbl_healthy.setWordWrap(True)
         data_layout.addWidget(self.lbl_healthy)
         
-        # Dossier Pathologique
-        self.btn_pathological = QPushButton("Selectionner Dossier Pathologique")
+        # Patient Diagnostic
+        self.btn_pathological = QPushButton("Patient Diagnostic")
         self.btn_pathological.setObjectName("dangerBtn")
         self.btn_pathological.setCursor(Qt.PointingHandCursor)
         self.btn_pathological.clicked.connect(self._load_pathological_folder)
+        self.btn_pathological.setToolTip("Fichier ou dossier patient a analyser")
         data_layout.addWidget(self.btn_pathological)
         
-        self.lbl_pathological = QLabel("Aucun dossier selectionne")
+        self.lbl_pathological = QLabel("Aucun patient selectionne")
         self.lbl_pathological.setObjectName("fileLabel")
         self.lbl_pathological.setWordWrap(True)
         data_layout.addWidget(self.lbl_pathological)
         
         # Info fichiers
-        self.lbl_file_info = QLabel("Fichiers: 0 sain(s), 0 pathologique(s)")
+        self.lbl_file_info = QLabel("Fichiers: 0 reference, 0 patient")
         self.lbl_file_info.setStyleSheet("color: #a6adc8; font-weight: 500; padding: 5px;")
         data_layout.addWidget(self.lbl_file_info)
         
@@ -2419,53 +1965,14 @@ class FlowSOMApp(QMainWindow):
             self.combo_transform = None
             self.spin_cofactor = None
         
-        # ----- GROUPE: Score LSC ----- (conditionnel selon config)
-        if self.config['modules_optionnels'].get('lsc_score', True):
-            lsc_group = QGroupBox("Score LSC (LAM MRD)")
-            lsc_layout = QVBoxLayout(lsc_group)
-            lsc_layout.setSpacing(10)
-            
-            self.chk_calc_lsc = QCheckBox("Calculer le score LSC")
-            self.chk_calc_lsc.setChecked(True)
-            self.chk_calc_lsc.setToolTip("CD34+/CD38-/CD123+ (cellules souches leucemiques)")
-            lsc_layout.addWidget(self.chk_calc_lsc)
-            
-            # Checkbox pour marqueurs etendus
-            if self.config['modules_optionnels'].get('extended_lsc_markers', True):
-                self.chk_extended_lsc = QCheckBox("Utiliser marqueurs LSC etendus")
-                self.chk_extended_lsc.setChecked(False)
-                self.chk_extended_lsc.setToolTip("CD90, TIM3, CLL-1, CD97, GPR56... selon [1][3]")
-                lsc_layout.addWidget(self.chk_extended_lsc)
-            else:
-                self.chk_extended_lsc = None
-            
-            # Affichage du score
-            self.lbl_lsc_score = QLabel("Score LSC: --")
-            self.lbl_lsc_score.setStyleSheet("""
-                font-size: 12pt;
-                font-weight: bold;
-                color: #f9e2af;
-                background: rgba(249, 226, 175, 0.1);
-                padding: 10px;
-                border-radius: 8px;
-            """)
-            self.lbl_lsc_score.setAlignment(Qt.AlignCenter)
-            lsc_layout.addWidget(self.lbl_lsc_score)
-            
-            scroll_layout.addWidget(lsc_group)
-        else:
-            self.chk_calc_lsc = None
-            self.chk_extended_lsc = None
-            self.lbl_lsc_score = None
-        
         # ----- GROUPE: Reference NBM (ELN) ----- (conditionnel selon config)
         if self.config['modules_avances'].get('nbm_reference', True):
-            nbm_group = QGroupBox("Reference NBM (ELN [2])")
+            nbm_group = QGroupBox("Reference NBM (ELN)")
             nbm_layout = QVBoxLayout(nbm_group)
             nbm_layout.setSpacing(10)
             
             self.btn_load_nbm = QPushButton("Charger dossier NBM (reference)")
-            self.btn_load_nbm.setToolTip("15-20 echantillons NBM sains pour reference [2]")
+            self.btn_load_nbm.setToolTip("15-20 echantillons NBM sains pour reference")
             self.btn_load_nbm.clicked.connect(self._load_nbm_folder)
             nbm_layout.addWidget(self.btn_load_nbm)
             
@@ -2488,68 +1995,6 @@ class FlowSOMApp(QMainWindow):
             self.lbl_nbm_status = None
             self.btn_build_nbm_ref = None
             self.btn_load_nbm_ref = None
-        
-        # ----- GROUPE: Detection MRD (ELN) ----- (conditionnel selon config)
-        if self.config['modules_avances'].get('mrd_detection_limits', True):
-            mrd_group = QGroupBox("Seuils MRD (ELN [2])")
-            mrd_layout = QGridLayout(mrd_group)
-            mrd_layout.setSpacing(8)
-            
-            # Affichage des seuils configures
-            thresholds = self.config.get('mrd_thresholds', {})
-            
-            lbl_lod = QLabel(f"LOD: {thresholds.get('lod_percent', 0.009):.3f}%")
-            lbl_lod.setStyleSheet("color: #89b4fa; font-size: 9pt;")
-            mrd_layout.addWidget(lbl_lod, 0, 0)
-            
-            lbl_loq = QLabel(f"LOQ: {thresholds.get('loq_percent', 0.005):.3f}%")
-            lbl_loq.setStyleSheet("color: #89b4fa; font-size: 9pt;")
-            mrd_layout.addWidget(lbl_loq, 0, 1)
-            
-            lbl_fold = QLabel(f"Fold-change: ≥{thresholds.get('fold_change_threshold', 1.9)}x")
-            lbl_fold.setStyleSheet("color: #a6e3a1; font-size: 9pt;")
-            mrd_layout.addWidget(lbl_fold, 1, 0)
-            
-            lbl_min_ev = QLabel(f"Min events: {thresholds.get('min_events_per_node', 17)}")
-            lbl_min_ev.setStyleSheet("color: #a6e3a1; font-size: 9pt;")
-            mrd_layout.addWidget(lbl_min_ev, 1, 1)
-            
-            # Resultat MRD
-            self.lbl_mrd_result = QLabel("MRD: --")
-            self.lbl_mrd_result.setStyleSheet("""
-                font-size: 11pt;
-                font-weight: bold;
-                color: #cba6f7;
-                background: rgba(203, 166, 247, 0.1);
-                padding: 8px;
-                border-radius: 6px;
-            """)
-            self.lbl_mrd_result.setAlignment(Qt.AlignCenter)
-            mrd_layout.addWidget(self.lbl_mrd_result, 2, 0, 1, 2)
-            
-            scroll_layout.addWidget(mrd_group)
-        else:
-            self.lbl_mrd_result = None
-        
-        # ----- GROUPE: Controle Qualite ----- (conditionnel selon config)
-        if self.config['modules_avances'].get('quality_control', True):
-            qc_group = QGroupBox("Controle Qualite (ALFA [3])")
-            qc_layout = QVBoxLayout(qc_group)
-            qc_layout.setSpacing(8)
-            
-            self.chk_validate_qc = QCheckBox("Valider QC avant analyse")
-            self.chk_validate_qc.setChecked(True)
-            self.chk_validate_qc.setToolTip(f"Min {self.config['quality_control'].get('min_events', 500000):,} events")
-            qc_layout.addWidget(self.chk_validate_qc)
-            
-            self.lbl_qc_status = QLabel("QC: En attente")
-            self.lbl_qc_status.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 5px;")
-            qc_layout.addWidget(self.lbl_qc_status)
-            
-            scroll_layout.addWidget(qc_group)
-        else:
-            self.chk_validate_qc = None
-            self.lbl_qc_status = None
         
         # ----- GROUPE: Patient / Time-Series ----- (conditionnel selon config)
         if self.config['modules_optionnels'].get('patient_tracking', True):
@@ -2644,12 +2089,14 @@ class FlowSOMApp(QMainWindow):
         
         self.combo_viz_type = QComboBox()
         self.combo_viz_type.addItems([
-            "Star Chart (MST)",
-            "Grid View",
-            "Cluster Numbers",
-            "Marker Expression",
             "Heatmap",
-            "Distribution Sain/Patho",
+            "Distribution NBM/Patient",
+            "Cluster Numbers",
+            "Arbre MST (matplotlib)",
+            "Grille SOM (matplotlib)",
+            "Grid View",
+            "Star Chart (MST)",
+            "Marker Expression",
             "UMAP Metaclusters",
             "t-SNE Metaclusters"
         ])
@@ -2671,11 +2118,18 @@ class FlowSOMApp(QMainWindow):
         viz_layout.addWidget(lbl_n_cells)
         
         self.spin_embedding_cells = QSpinBox()
-        self.spin_embedding_cells.setRange(500, 50000)
+        self.spin_embedding_cells.setRange(500, 100000)
         self.spin_embedding_cells.setValue(5000)
-        self.spin_embedding_cells.setSingleStep(500)
+        self.spin_embedding_cells.setSingleStep(1000)
         self.spin_embedding_cells.setToolTip("Nombre max de cellules pour UMAP/t-SNE (plus = plus lent)")
         viz_layout.addWidget(self.spin_embedding_cells)
+        
+        # Checkbox pour utiliser toutes les cellules
+        self.chk_all_cells = QCheckBox("Toutes les cellules (lent)")
+        self.chk_all_cells.setChecked(False)
+        self.chk_all_cells.setToolTip("Utiliser toutes les cellules pour UMAP/t-SNE (peut etre tres lent)")
+        self.chk_all_cells.stateChanged.connect(self._toggle_all_cells)
+        viz_layout.addWidget(self.chk_all_cells)
         
         scroll_layout.addWidget(viz_group)
         
@@ -2736,7 +2190,7 @@ class FlowSOMApp(QMainWindow):
         viz_tab_layout = QVBoxLayout(viz_tab)
         viz_tab_layout.setContentsMargins(10, 10, 10, 10)
         
-        self.canvas = MatplotlibCanvas(self, width=12, height=9, dpi=100)
+        self.canvas = MatplotlibCanvas(self, width=12, height=9)
         
         self.toolbar = NavigationToolbar(self.canvas, self)
         self.toolbar.setStyleSheet("""
@@ -2761,7 +2215,7 @@ class FlowSOMApp(QMainWindow):
         
         self.table_stats = QTableWidget()
         self.table_stats.setColumnCount(4)
-        self.table_stats.setHorizontalHeaderLabels(["Metacluster", "Sain (%)", "Pathologique (%)", "Difference"])
+        self.table_stats.setHorizontalHeaderLabels(["Metacluster", "NBM (%)", "Patient (%)", "Difference"])
         self.table_stats.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table_stats.setAlternatingRowColors(True)
         stats_tab_layout.addWidget(self.table_stats)
@@ -2871,7 +2325,7 @@ class FlowSOMApp(QMainWindow):
             cluster_right_layout.addWidget(lbl_star_plot)
             
             # Canvas pour le Star Plot
-            self.star_canvas = MatplotlibCanvas(self, width=8, height=5, dpi=100)
+            self.star_canvas = MatplotlibCanvas(self, width=8, height=5)
             self.star_canvas.setMinimumHeight(350)
             cluster_right_layout.addWidget(self.star_canvas)
             
@@ -2880,20 +2334,31 @@ class FlowSOMApp(QMainWindow):
             cluster_tab_layout.addLayout(cluster_main_layout)
             
             # Canvas pour le graphique de comparaison (en bas)
-            lbl_comparison = QLabel("Comparaison Sain vs Pathologique")
+            lbl_comparison = QLabel("Comparaison NBM vs Patient")
             lbl_comparison.setStyleSheet("font-size: 11pt; font-weight: 600; color: #89b4fa; padding: 5px;")
             cluster_tab_layout.addWidget(lbl_comparison)
             
-            self.cluster_canvas = MatplotlibCanvas(self, width=10, height=3, dpi=100)
+            self.cluster_canvas = MatplotlibCanvas(self, width=10, height=3)
             self.cluster_canvas.setMinimumHeight(250)
             cluster_tab_layout.addWidget(self.cluster_canvas)
             
             # Canvas pour l'image FlowSOM Stars MST (en bas)
+            fsom_stars_header = QHBoxLayout()
             lbl_fsom_stars = QLabel("FlowSOM MST - Star Plot du Cluster")
             lbl_fsom_stars.setStyleSheet("font-size: 11pt; font-weight: 600; color: #a6e3a1; padding: 5px;")
-            cluster_tab_layout.addWidget(lbl_fsom_stars)
+            fsom_stars_header.addWidget(lbl_fsom_stars)
             
-            self.fsom_stars_canvas = MatplotlibCanvas(self, width=10, height=6, dpi=100)
+            self.btn_generate_mst = QPushButton("Generer MST")
+            self.btn_generate_mst.setObjectName("successBtn")
+            self.btn_generate_mst.setFixedWidth(150)
+            self.btn_generate_mst.setEnabled(False)
+            self.btn_generate_mst.clicked.connect(self._update_fsom_stars_mst)
+            fsom_stars_header.addWidget(self.btn_generate_mst)
+            fsom_stars_header.addStretch()
+            
+            cluster_tab_layout.addLayout(fsom_stars_header)
+            
+            self.fsom_stars_canvas = MatplotlibCanvas(self, width=10, height=6)
             self.fsom_stars_canvas.setMinimumHeight(450)
             cluster_tab_layout.addWidget(self.fsom_stars_canvas)
             
@@ -2914,33 +2379,120 @@ class FlowSOMApp(QMainWindow):
             self.fsom_stars_canvas = None
             self.btn_select_all = None
             self.btn_deselect_all = None
+            self.btn_generate_mst = None
         
-        # Onglet Score LSC - Conditionnel selon config
-        if self.config.get('onglets', {}).get('score_lsc', True):
-            lsc_tab = QWidget()
-            lsc_tab_layout = QVBoxLayout(lsc_tab)
-            lsc_tab_layout.setContentsMargins(10, 10, 10, 10)
+        # Onglet Visualisation FCS - Style Kaluza
+        if self.config.get('onglets', {}).get('fcs_viewer', True):
+            fcs_tab = QWidget()
+            fcs_tab_layout = QVBoxLayout(fcs_tab)
+            fcs_tab_layout.setContentsMargins(10, 10, 10, 10)
             
-            lsc_header = QLabel("Score LSC - Cellules Souches Leucemiques")
-            lsc_header.setStyleSheet("font-size: 12pt; font-weight: 600; color: #f9e2af; padding: 10px;")
-            lsc_tab_layout.addWidget(lsc_header)
+            fcs_header = QLabel("Visualisation FCS - Cytometrie")
+            fcs_header.setStyleSheet("font-size: 12pt; font-weight: 600; color: #89b4fa; padding: 10px;")
+            fcs_tab_layout.addWidget(fcs_header)
             
-            # Tableau des resultats LSC
-            self.table_lsc = QTableWidget()
-            self.table_lsc.setColumnCount(2)
-            self.table_lsc.setHorizontalHeaderLabels(["Parametre", "Valeur"])
-            self.table_lsc.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-            self.table_lsc.setAlternatingRowColors(True)
-            lsc_tab_layout.addWidget(self.table_lsc)
+            # Panel de controle
+            fcs_control_panel = QWidget()
+            fcs_control_layout = QHBoxLayout(fcs_control_panel)
+            fcs_control_layout.setContentsMargins(0, 0, 0, 0)
             
-            # Canvas pour la visualisation LSC
-            self.lsc_canvas = MatplotlibCanvas(self, width=10, height=6, dpi=100)
-            lsc_tab_layout.addWidget(self.lsc_canvas)
+            # Bouton charger FCS
+            self.btn_load_fcs_viz = QPushButton("Charger FCS")
+            self.btn_load_fcs_viz.setObjectName("primaryBtn")
+            self.btn_load_fcs_viz.setCursor(Qt.PointingHandCursor)
+            self.btn_load_fcs_viz.clicked.connect(self._load_fcs_for_visualization)
+            fcs_control_layout.addWidget(self.btn_load_fcs_viz)
             
-            self.tabs.addTab(lsc_tab, "Score LSC")
+            # Selection axe X
+            lbl_x = QLabel("Axe X:")
+            lbl_x.setStyleSheet("color: #cdd6f4; font-weight: 600;")
+            fcs_control_layout.addWidget(lbl_x)
+            
+            self.combo_fcs_x = QComboBox()
+            self.combo_fcs_x.setMinimumWidth(120)
+            self.combo_fcs_x.currentIndexChanged.connect(self._update_fcs_plot)
+            fcs_control_layout.addWidget(self.combo_fcs_x)
+            
+            # Selection axe Y
+            lbl_y = QLabel("Axe Y:")
+            lbl_y.setStyleSheet("color: #cdd6f4; font-weight: 600;")
+            fcs_control_layout.addWidget(lbl_y)
+            
+            self.combo_fcs_y = QComboBox()
+            self.combo_fcs_y.setMinimumWidth(120)
+            self.combo_fcs_y.currentIndexChanged.connect(self._update_fcs_plot)
+            fcs_control_layout.addWidget(self.combo_fcs_y)
+            
+            # Type de plot
+            lbl_plot = QLabel("Type:")
+            lbl_plot.setStyleSheet("color: #cdd6f4; font-weight: 600;")
+            fcs_control_layout.addWidget(lbl_plot)
+            
+            self.combo_fcs_plot_type = QComboBox()
+            self.combo_fcs_plot_type.addItems(["Scatter", "Densite", "Contour"])
+            self.combo_fcs_plot_type.currentIndexChanged.connect(self._update_fcs_plot)
+            fcs_control_layout.addWidget(self.combo_fcs_plot_type)
+            
+            # Coloration par cluster/metacluster
+            lbl_color = QLabel("Couleur:")
+            lbl_color.setStyleSheet("color: #cdd6f4; font-weight: 600;")
+            fcs_control_layout.addWidget(lbl_color)
+            
+            self.combo_fcs_color = QComboBox()
+            self.combo_fcs_color.addItems(["Aucune", "FlowSOM_cluster", "FlowSOM_metacluster", "Condition"])
+            self.combo_fcs_color.setToolTip("Colorier les points par cluster ou metacluster")
+            self.combo_fcs_color.currentIndexChanged.connect(self._update_fcs_plot)
+            fcs_control_layout.addWidget(self.combo_fcs_color)
+            
+            # Sous-echantillonnage
+            lbl_sample = QLabel("Cellules:")
+            lbl_sample.setStyleSheet("color: #cdd6f4; font-weight: 600;")
+            fcs_control_layout.addWidget(lbl_sample)
+            
+            self.spin_fcs_cells = QSpinBox()
+            self.spin_fcs_cells.setRange(1000, 500000)
+            self.spin_fcs_cells.setValue(10000)
+            self.spin_fcs_cells.setSingleStep(5000)
+            fcs_control_layout.addWidget(self.spin_fcs_cells)
+            
+            # Checkbox toutes les cellules
+            self.chk_fcs_all_cells = QCheckBox("Toutes")
+            self.chk_fcs_all_cells.setToolTip("Afficher toutes les cellules (peut etre lent)")
+            self.chk_fcs_all_cells.stateChanged.connect(self._toggle_fcs_all_cells)
+            fcs_control_layout.addWidget(self.chk_fcs_all_cells)
+            
+            # Checkbox jitter (dispersion) pour coordonnees SOM
+            self.chk_fcs_jitter = QCheckBox("Jitter")
+            self.chk_fcs_jitter.setToolTip("Ajouter une dispersion aux coordonnees SOM (xGrid, yGrid, xNodes, yNodes)")
+            self.chk_fcs_jitter.setChecked(True)  # Active par defaut
+            self.chk_fcs_jitter.stateChanged.connect(self._update_fcs_plot)
+            fcs_control_layout.addWidget(self.chk_fcs_jitter)
+            
+            # Bouton rafraichir
+            self.btn_refresh_fcs = QPushButton("Rafraichir")
+            self.btn_refresh_fcs.setObjectName("secondaryBtn")
+            self.btn_refresh_fcs.setCursor(Qt.PointingHandCursor)
+            self.btn_refresh_fcs.clicked.connect(self._update_fcs_plot)
+            fcs_control_layout.addWidget(self.btn_refresh_fcs)
+            
+            fcs_control_layout.addStretch()
+            fcs_tab_layout.addWidget(fcs_control_panel)
+            
+            # Canvas pour le plot FCS
+            self.fcs_viz_canvas = MatplotlibCanvas(self, width=10, height=8, dpi=100)
+            self.fcs_viz_canvas.setMinimumHeight(500)
+            fcs_tab_layout.addWidget(self.fcs_viz_canvas)
+            
+            # Label d'info
+            self.lbl_fcs_info = QLabel("Chargez un fichier FCS pour visualiser")
+            self.lbl_fcs_info.setStyleSheet("color: #a6adc8; padding: 5px;")
+            fcs_tab_layout.addWidget(self.lbl_fcs_info)
+            
+            self.tabs.addTab(fcs_tab, "Visualisation FCS")
         else:
-            self.table_lsc = None
-            self.lsc_canvas = None
+            self.fcs_viz_canvas = None
+            self.combo_fcs_x = None
+            self.combo_fcs_y = None
         
         # Onglet Suivi Patient - Conditionnel selon config
         if self.config.get('onglets', {}).get('suivi_patient', True):
@@ -2952,22 +2504,62 @@ class FlowSOMApp(QMainWindow):
             patient_header.setStyleSheet("font-size: 12pt; font-weight: 600; color: #89b4fa; padding: 10px;")
             patient_tab_layout.addWidget(patient_header)
             
+            # Panel de controle patient
+            patient_control = QWidget()
+            patient_control_layout = QHBoxLayout(patient_control)
+            patient_control_layout.setContentsMargins(0, 0, 0, 0)
+            
+            # ID Patient
+            lbl_patient_id = QLabel("ID Patient:")
+            lbl_patient_id.setStyleSheet("color: #cdd6f4; font-weight: 600;")
+            patient_control_layout.addWidget(lbl_patient_id)
+            
+            self.edit_patient_id = QLineEdit()
+            self.edit_patient_id.setPlaceholderText("Ex: PAT001")
+            self.edit_patient_id.setMaximumWidth(120)
+            patient_control_layout.addWidget(self.edit_patient_id)
+            
+            # Boutons sauvegarder/charger
+            self.btn_save_patient = QPushButton("Sauvegarder Patient")
+            self.btn_save_patient.setObjectName("successBtn")
+            self.btn_save_patient.setCursor(Qt.PointingHandCursor)
+            self.btn_save_patient.clicked.connect(self._save_patient_data)
+            patient_control_layout.addWidget(self.btn_save_patient)
+            
+            self.btn_load_patient = QPushButton("Charger Patient")
+            self.btn_load_patient.setObjectName("primaryBtn")
+            self.btn_load_patient.setCursor(Qt.PointingHandCursor)
+            self.btn_load_patient.clicked.connect(self._load_patient_data)
+            patient_control_layout.addWidget(self.btn_load_patient)
+            
+            # Ajouter timepoint
+            self.btn_add_timepoint = QPushButton("Ajouter Timepoint")
+            self.btn_add_timepoint.setObjectName("secondaryBtn")
+            self.btn_add_timepoint.setCursor(Qt.PointingHandCursor)
+            self.btn_add_timepoint.clicked.connect(self._add_patient_timepoint)
+            self.btn_add_timepoint.setEnabled(False)
+            patient_control_layout.addWidget(self.btn_add_timepoint)
+            
+            patient_control_layout.addStretch()
+            patient_tab_layout.addWidget(patient_control)
+            
             # Liste des timepoints
             self.patient_timeline = QTableWidget()
-            self.patient_timeline.setColumnCount(4)
-            self.patient_timeline.setHorizontalHeaderLabels(["Timepoint", "Date", "LSC %", "Notes"])
+            self.patient_timeline.setColumnCount(5)
+            self.patient_timeline.setHorizontalHeaderLabels(["Timepoint", "Date", "Fichier", "Clusters", "Notes"])
             self.patient_timeline.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
             self.patient_timeline.setAlternatingRowColors(True)
             patient_tab_layout.addWidget(self.patient_timeline)
             
             # Canvas pour l'evolution temporelle
-            self.patient_canvas = MatplotlibCanvas(self, width=10, height=5, dpi=100)
+            self.patient_canvas = MatplotlibCanvas(self, width=10, height=5)
             patient_tab_layout.addWidget(self.patient_canvas)
             
             self.tabs.addTab(patient_tab, "Suivi Patient")
         else:
             self.patient_timeline = None
             self.patient_canvas = None
+            self.edit_patient_id = None
         
         # Onglet Logs - Conditionnel selon config
         if self.config.get('onglets', {}).get('logs', True):
@@ -2998,10 +2590,40 @@ class FlowSOMApp(QMainWindow):
         
     def _toggle_auto_cluster(self, state):
         self.spin_n_clusters.setEnabled(state != Qt.Checked)
+    
+    def _toggle_nbm_mode(self, state):
+        """Active/desactive le mode de comparaison avec NBM."""
+        compare_mode = state == Qt.Checked
+        self.btn_healthy.setEnabled(compare_mode)
+        
+        if not compare_mode:
+            # Effacer la reference NBM si on passe en mode patient seul
+            self.healthy_files = []
+            self.healthy_folder = None
+            self.lbl_healthy.setText("Mode: Patient seul (sans reference)")
+            self.lbl_healthy.setStyleSheet("color: #a6adc8; font-style: italic;")
+        else:
+            self.lbl_healthy.setText("Aucune reference selectionnee")
+            self.lbl_healthy.setStyleSheet("")
+        
+        self._update_file_info()
+        
+    def _toggle_all_cells(self, state):
+        """Active/desactive le spinbox du nombre de cellules selon l'option 'toutes les cellules'."""
+        self.spin_embedding_cells.setEnabled(state != Qt.Checked)
+        if state == Qt.Checked:
+            self._log("UMAP/t-SNE: mode toutes les cellules active")
+    
+    def _toggle_fcs_all_cells(self, state):
+        """Active/desactive le spinbox du nombre de cellules FCS."""
+        if hasattr(self, 'spin_fcs_cells'):
+            self.spin_fcs_cells.setEnabled(state != Qt.Checked)
+        # Rafraichir le plot automatiquement
+        self._update_fcs_plot()
         
     def _load_healthy_folder(self):
         folder = QFileDialog.getExistingDirectory(
-            self, "Selectionner le dossier SAIN", "",
+            self, "Selectionner Reference NBM (Moelle Normale)", "",
             QFileDialog.ShowDirsOnly
         )
         if folder:
@@ -3011,11 +2633,11 @@ class FlowSOMApp(QMainWindow):
             self.lbl_healthy.setText(f"{Path(folder).name} ({n} fichiers)")
             self.lbl_healthy.setStyleSheet("color: #a6e3a1; font-weight: 600; padding: 5px 10px; background: rgba(166, 227, 161, 0.1); border-radius: 6px;")
             self._update_file_info()
-            self._log(f"Dossier sain: {folder} ({n} fichiers)")
+            self._log(f"Reference NBM: {folder} ({n} fichiers)")
             
     def _load_pathological_folder(self):
         folder = QFileDialog.getExistingDirectory(
-            self, "Selectionner le dossier PATHOLOGIQUE", "",
+            self, "Selectionner Patient Diagnostic", "",
             QFileDialog.ShowDirsOnly
         )
         if folder:
@@ -3025,17 +2647,794 @@ class FlowSOMApp(QMainWindow):
             self.lbl_pathological.setText(f"{Path(folder).name} ({n} fichiers)")
             self.lbl_pathological.setStyleSheet("color: #f38ba8; font-weight: 600; padding: 5px 10px; background: rgba(243, 139, 168, 0.1); border-radius: 6px;")
             self._update_file_info()
-            self._log(f"Dossier pathologique: {folder} ({n} fichiers)")
+            self._log(f"Patient diagnostic: {folder} ({n} fichiers)")
             
     def _get_fcs_files(self, folder):
         folder_path = Path(folder)
-        return [str(f) for f in list(folder_path.glob("*.fcs")) + list(folder_path.glob("*.FCS"))]
+        # Utiliser un set pour éviter les doublons (Windows est insensible à la casse)
+        files = set()
+        for f in folder_path.glob("*.fcs"):
+            files.add(str(f))
+        for f in folder_path.glob("*.FCS"):
+            files.add(str(f))
+        return list(files)
         
     def _update_file_info(self):
         n_h = len(self.healthy_files)
         n_p = len(self.pathological_files)
-        self.lbl_file_info.setText(f"Fichiers: {n_h} sain(s), {n_p} pathologique(s)")
-        self.btn_run.setEnabled(n_h > 0 or n_p > 0)
+        
+        # Verifier le mode d'analyse
+        compare_mode = hasattr(self, 'chk_compare_nbm') and self.chk_compare_nbm.isChecked()
+        
+        if compare_mode:
+            self.lbl_file_info.setText(f"Fichiers: {n_h} reference(s), {n_p} patient(s)")
+            # En mode comparaison, il faut les deux
+            self.btn_run.setEnabled(n_h > 0 and n_p > 0)
+        else:
+            self.lbl_file_info.setText(f"Fichiers: {n_p} patient(s) (mode patient seul)")
+            # En mode patient seul, juste le patient suffit
+            self.btn_run.setEnabled(n_p > 0)
+    
+    # =========================================================================
+    # VISUALISATION FCS (style Kaluza)
+    # =========================================================================
+    
+    def _read_fcs_binary(self, file_path: str):
+        """
+        Lecture binaire directe d'un fichier FCS.
+        Fallback robuste quand les autres méthodes échouent.
+        """
+        import struct
+        
+        with open(file_path, 'rb') as f:
+            # Lire le header FCS (58 bytes)
+            header = f.read(58)
+            
+            # Version FCS
+            version = header[0:6].decode('ascii').strip()
+            
+            # Positions du segment TEXT
+            text_start = int(header[10:18].decode('ascii').strip())
+            text_end = int(header[18:26].decode('ascii').strip())
+            
+            # Positions du segment DATA
+            data_start = int(header[26:34].decode('ascii').strip())
+            data_end = int(header[34:42].decode('ascii').strip())
+            
+            # Lire le segment TEXT
+            f.seek(text_start)
+            text_segment = f.read(text_end - text_start + 1)
+            
+            # Decoder le segment TEXT (latin-1 pour FCS)
+            try:
+                text_str = text_segment.decode('latin-1')
+            except:
+                text_str = text_segment.decode('utf-8', errors='replace')
+            
+            # Parser les paires cle-valeur
+            delimiter = text_str[0]
+            parts = text_str[1:].split(delimiter)
+            text_dict = {}
+            for i in range(0, len(parts) - 1, 2):
+                key = parts[i].strip().upper()
+                value = parts[i + 1].strip() if i + 1 < len(parts) else ""
+                text_dict[key] = value
+            
+            # Obtenir les parametres essentiels
+            n_params = int(text_dict.get('$PAR', text_dict.get('PAR', 0)))
+            n_events = int(text_dict.get('$TOT', text_dict.get('TOT', 0)))
+            datatype = text_dict.get('$DATATYPE', text_dict.get('DATATYPE', 'F')).upper()
+            byteord = text_dict.get('$BYTEORD', text_dict.get('BYTEORD', '1,2,3,4'))
+            
+            if n_params == 0 or n_events == 0:
+                raise ValueError(f"Parametres invalides: {n_params} params, {n_events} events")
+            
+            # Determiner l'endianness
+            if byteord in ['1,2,3,4', '1,2']:
+                endian = '<'  # Little endian
+            else:
+                endian = '>'  # Big endian
+            
+            # Noms des canaux
+            channel_names = []
+            for i in range(1, n_params + 1):
+                # Chercher le nom ($PnS ou $PnN)
+                name = None
+                for key in [f'$P{i}S', f'P{i}S', f'$P{i}N', f'P{i}N']:
+                    if key in text_dict:
+                        name = text_dict[key]
+                        break
+                if not name:
+                    name = f'Channel_{i}'
+                channel_names.append(name)
+            
+            # Lire les donnees
+            f.seek(data_start)
+            data_bytes = f.read(data_end - data_start + 1)
+            
+            # Decoder selon le type de donnees
+            if datatype == 'F':
+                # Float 32 bits
+                fmt = f'{endian}{n_params}f'
+                bytes_per_event = n_params * 4
+            elif datatype == 'D':
+                # Double 64 bits
+                fmt = f'{endian}{n_params}d'
+                bytes_per_event = n_params * 8
+            elif datatype == 'I':
+                # Integer - determiner la taille par $PnB
+                bits = int(text_dict.get('$P1B', text_dict.get('P1B', 16)))
+                if bits == 16:
+                    fmt = f'{endian}{n_params}H'
+                    bytes_per_event = n_params * 2
+                else:  # 32 bits
+                    fmt = f'{endian}{n_params}I'
+                    bytes_per_event = n_params * 4
+            else:
+                raise ValueError(f"Type de donnees non supporte: {datatype}")
+            
+            # Lire tous les events
+            events = []
+            for i in range(n_events):
+                offset = i * bytes_per_event
+                if offset + bytes_per_event <= len(data_bytes):
+                    try:
+                        event = struct.unpack(fmt, data_bytes[offset:offset + bytes_per_event])
+                        events.append(event)
+                    except:
+                        break
+            
+            if len(events) == 0:
+                raise ValueError("Aucun event lu")
+            
+            # Creer l'AnnData
+            data_array = np.array(events, dtype=np.float32)
+            adata = ad.AnnData(data_array)
+            adata.var_names = channel_names
+            
+            self._log(f"Lecture binaire: {len(events)} events, {n_params} canaux")
+            return adata
+    
+    def _load_fcs_for_visualization(self):
+        """Charge un fichier FCS pour la visualisation interactive."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Charger un fichier FCS", "",
+            "FCS Files (*.fcs *.FCS)"
+        )
+        if not file_path:
+            return
+            
+        try:
+            self._log(f"Chargement FCS pour visualisation: {Path(file_path).name}")
+            
+            # Essayer plusieurs methodes de chargement
+            adata = None
+            last_error = None
+            
+            # Methode 1: flowsom (fichiers FCS standards)
+            try:
+                adata = fs.io.read_FCS(file_path)
+                self._log("Charge avec flowsom")
+            except Exception as e1:
+                self._log(f"Methode flowsom echouee: {str(e1)[:50]}")
+                last_error = e1
+            
+            # Methode 2: flowio (tres permissif, avec options relaxees)
+            if adata is None:
+                try:
+                    import flowio
+                    # Les fichiers FCS utilisent l'encodage latin-1, pas UTF-8
+                    fcs_data = flowio.FlowData(file_path)
+                    
+                    # Recuperer les events
+                    events = np.reshape(fcs_data.events, (-1, fcs_data.channel_count))
+                    n_events, n_channels = events.shape
+                    
+                    if n_events > 0 and n_channels > 0:
+                        # Recuperer les noms des canaux avec toutes les variantes possibles
+                        channel_names = []
+                        for i in range(1, n_channels + 1):
+                            # Essayer toutes les variantes de cles (avec et sans $)
+                            possible_keys = [
+                                f'$P{i}N', f'P{i}N', 
+                                f'$P{i}S', f'P{i}S',
+                                f'p{i}n', f'p{i}s'
+                            ]
+                            name = None
+                            for key in possible_keys:
+                                if key in fcs_data.text:
+                                    name = fcs_data.text[key]
+                                    break
+                            if name is None:
+                                name = f'Channel_{i}'
+                            channel_names.append(str(name))
+                        
+                        adata = ad.AnnData(events.astype(np.float32))
+                        adata.var_names = channel_names
+                        self._log("Charge avec flowio")
+                    else:
+                        raise ValueError(f"Fichier vide: {n_events} events, {n_channels} channels")
+                except ImportError:
+                    self._log("flowio non installe")
+                except Exception as e2:
+                    self._log(f"Methode flowio echouee: {str(e2)[:50]}")
+                    last_error = e2
+            
+            # Methode 3: fcsparser (plus permissif)
+            if adata is None:
+                try:
+                    import fcsparser
+                    meta, data = fcsparser.parse(file_path, meta_data_only=False, 
+                                                  reformat_meta=False, 
+                                                  channel_naming='$PnS')
+                    adata = ad.AnnData(data.values.astype(np.float32))
+                    adata.var_names = list(data.columns)
+                    self._log("Charge avec fcsparser")
+                except ImportError:
+                    self._log("fcsparser non installe")
+                except Exception as e3:
+                    # Essayer avec un autre channel_naming
+                    try:
+                        import fcsparser
+                        meta, data = fcsparser.parse(file_path, meta_data_only=False, 
+                                                      reformat_meta=False, 
+                                                      channel_naming='$PnN')
+                        adata = ad.AnnData(data.values.astype(np.float32))
+                        adata.var_names = list(data.columns)
+                        self._log("Charge avec fcsparser (PnN)")
+                    except:
+                        self._log(f"Methode fcsparser echouee: {str(e3)[:50]}")
+                        last_error = e3
+            
+            # Methode 4: Lecture binaire directe (fallback ultime)
+            if adata is None:
+                try:
+                    adata = self._read_fcs_binary(file_path)
+                    if adata is not None:
+                        self._log("Charge avec lecture binaire directe")
+                except Exception as e4:
+                    self._log(f"Methode binaire echouee: {str(e4)[:50]}")
+                    last_error = e4
+            
+            if adata is None:
+                raise Exception(f"Impossible de charger le FCS. Derniere erreur: {last_error}")
+            
+            self.current_fcs_adata = adata
+            
+            # Remplir les combos avec les marqueurs
+            markers = list(adata.var_names)
+            
+            self.combo_fcs_x.blockSignals(True)
+            self.combo_fcs_y.blockSignals(True)
+            
+            self.combo_fcs_x.clear()
+            self.combo_fcs_y.clear()
+            self.combo_fcs_x.addItems(markers)
+            self.combo_fcs_y.addItems(markers)
+            
+            # Mettre a jour le combo de coloration avec les colonnes de clustering disponibles
+            if hasattr(self, 'combo_fcs_color'):
+                self.combo_fcs_color.blockSignals(True)
+                self.combo_fcs_color.clear()
+                self.combo_fcs_color.addItem("Aucune")
+                
+                # Ajouter les colonnes de clustering/metaclustering si presentes
+                # Recherche insensible a la casse
+                color_patterns = ['flowsom_cluster', 'flowsom_metacluster', 'condition', 
+                                  'cluster', 'metacluster', 'flowsom']
+                markers_lower = [m.lower() for m in markers]
+                
+                for marker in markers:
+                    marker_lower = marker.lower()
+                    # Verifier si c'est une colonne de clustering/coloration
+                    if any(pattern in marker_lower for pattern in color_patterns):
+                        self.combo_fcs_color.addItem(marker)
+                
+                # Log pour debug
+                n_color_options = self.combo_fcs_color.count()
+                self._log(f"Options de coloration disponibles: {n_color_options - 1}")
+                for i in range(1, n_color_options):
+                    self._log(f"   - {self.combo_fcs_color.itemText(i)}")
+                
+                self.combo_fcs_color.blockSignals(False)
+            
+            # Selectionner FSC-A et SSC-A par defaut si disponibles
+            fsc_idx = next((i for i, m in enumerate(markers) if 'FSC' in m.upper()), 0)
+            ssc_idx = next((i for i, m in enumerate(markers) if 'SSC' in m.upper()), min(1, len(markers)-1))
+            
+            self.combo_fcs_x.setCurrentIndex(fsc_idx)
+            self.combo_fcs_y.setCurrentIndex(ssc_idx)
+            
+            self.combo_fcs_x.blockSignals(False)
+            self.combo_fcs_y.blockSignals(False)
+            
+            n_cells = adata.shape[0]
+            n_markers = adata.shape[1]
+            self.lbl_fcs_info.setText(f"Fichier: {Path(file_path).name} | {n_cells:,} cellules | {n_markers} parametres")
+            
+            self._update_fcs_plot()
+            self._log(f"FCS charge: {n_cells:,} cellules, {n_markers} parametres")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur", f"Erreur de chargement FCS:\n{str(e)}")
+            self._log(f"Erreur chargement FCS: {str(e)}")
+    
+    def _update_fcs_plot(self):
+        """Met a jour le plot FCS avec les parametres selectionnes."""
+        if self.current_fcs_adata is None:
+            return
+            
+        if self.fcs_viz_canvas is None:
+            return
+        
+        try:
+            x_marker = self.combo_fcs_x.currentText()
+            y_marker = self.combo_fcs_y.currentText()
+            plot_type = self.combo_fcs_plot_type.currentText()
+            
+            # Coloration par cluster/metacluster
+            color_by = "Aucune"
+            if hasattr(self, 'combo_fcs_color'):
+                color_by = self.combo_fcs_color.currentText()
+            
+            # Determiner si on affiche toutes les cellules
+            show_all = hasattr(self, 'chk_fcs_all_cells') and self.chk_fcs_all_cells.isChecked()
+            max_cells = self.spin_fcs_cells.value() if not show_all else float('inf')
+            
+            if not x_marker or not y_marker:
+                return
+            
+            # Extraire les donnees
+            X = self.current_fcs_adata.X
+            if hasattr(X, 'toarray'):
+                X = X.toarray()
+            
+            var_names = list(self.current_fcs_adata.var_names)
+            x_idx = var_names.index(x_marker)
+            y_idx = var_names.index(y_marker)
+            
+            x_data = X[:, x_idx]
+            y_data = X[:, y_idx]
+            
+            # Preparer les donnees de coloration si demande
+            color_data = None
+            if color_by != "Aucune" and color_by in var_names:
+                color_idx = var_names.index(color_by)
+                color_data = X[:, color_idx]
+            
+            # Detecter si ce sont des coordonnees SOM (qui necessitent du jitter)
+            som_coord_cols = ['xgrid', 'ygrid', 'xnodes', 'ynodes']
+            is_som_x = x_marker.lower() in som_coord_cols
+            is_som_y = y_marker.lower() in som_coord_cols
+            
+            # Appliquer le jitter si demande et si ce sont des coordonnees SOM
+            apply_jitter = hasattr(self, 'chk_fcs_jitter') and self.chk_fcs_jitter.isChecked()
+            if apply_jitter and (is_som_x or is_som_y):
+                # Jitter circulaire (polaire) pour former des disques comme Kaluza
+                n_points = len(x_data)
+                # Rayon aleatoire avec distribution sqrt pour repartition uniforme dans le cercle
+                r = np.sqrt(np.random.uniform(0, 1, n_points))
+                # Angle aleatoire
+                theta = np.random.uniform(0, 2 * np.pi, n_points)
+                
+                # Amplitude du jitter
+                x_range = x_data.max() - x_data.min() if is_som_x else 1
+                y_range = y_data.max() - y_data.min() if is_som_y else 1
+                jitter_radius = 0.35 if max(x_range, y_range) < 20 else 0.15
+                
+                # Appliquer le jitter circulaire
+                if is_som_x:
+                    x_data = x_data + r * np.cos(theta) * jitter_radius
+                if is_som_y:
+                    y_data = y_data + r * np.sin(theta) * jitter_radius
+            
+            # Filtrer les valeurs manquantes (-999) pour les colonnes de reduction dimensionnelle
+            # Cela evite d'afficher les cellules sans coordonnees valides
+            dim_reduction_cols = ['tSNE1', 'tSNE2', 'UMAP1', 'UMAP2', 'tsne1', 'tsne2', 'umap1', 'umap2']
+            is_dim_reduction_x = x_marker.lower() in [c.lower() for c in dim_reduction_cols]
+            is_dim_reduction_y = y_marker.lower() in [c.lower() for c in dim_reduction_cols]
+            
+            # Masque de validite: exclure -999, NaN, Inf
+            MISSING_VALUE = -999.0
+            valid_x = np.isfinite(x_data) & (x_data != MISSING_VALUE)
+            valid_y = np.isfinite(y_data) & (y_data != MISSING_VALUE)
+            
+            if is_dim_reduction_x or is_dim_reduction_y:
+                # Pour les colonnes de reduction, filtrer strictement les valeurs manquantes
+                initial_mask = valid_x & valid_y
+            else:
+                # Pour les autres colonnes, juste filtrer NaN/Inf
+                initial_mask = np.isfinite(x_data) & np.isfinite(y_data)
+            
+            # Appliquer le masque a toutes les donnees
+            x_data = x_data[initial_mask]
+            y_data = y_data[initial_mask]
+            if color_data is not None:
+                color_data = color_data[initial_mask]
+            n_cells_valid = len(x_data)
+            
+            if is_dim_reduction_x or is_dim_reduction_y:
+                self._log(f"FCS plot: {n_cells_valid:,} cellules avec coordonnees valides sur {len(X):,}")
+            
+            # Sous-echantillonnage (sauf si toutes les cellules)
+            n_cells = len(x_data)
+            if not show_all and n_cells > max_cells:
+                idx = np.random.choice(n_cells, int(max_cells), replace=False)
+                x_data = x_data[idx]
+                y_data = y_data[idx]
+                if color_data is not None:
+                    color_data = color_data[idx]
+            
+            # Mettre a jour l'info
+            n_total_in_file = len(X)
+            if hasattr(self, 'lbl_fcs_info') and self.lbl_fcs_info is not None:
+                if is_dim_reduction_x or is_dim_reduction_y:
+                    self.lbl_fcs_info.setText(f"Affichage: {len(x_data):,} / {n_cells_valid:,} valides (total: {n_total_in_file:,})")
+                else:
+                    self.lbl_fcs_info.setText(f"Affichage: {len(x_data):,} / {n_total_in_file:,} cellules")
+            
+            # Effacer le canvas
+            self.fcs_viz_canvas.clear_figure()
+            ax = self.fcs_viz_canvas.fig.add_subplot(111)
+            
+            # Preparer la palette de couleurs pour clusters/metaclusters
+            scatter_colors = '#89b4fa'  # Couleur par defaut
+            legend_handles = None
+            
+            if color_data is not None and plot_type == "Scatter":
+                # Coloration par cluster/metacluster
+                unique_values = np.unique(color_data[np.isfinite(color_data)])
+                n_colors = len(unique_values)
+                
+                # Choisir la colormap selon le nombre de valeurs
+                if n_colors <= 20:
+                    cmap = plt.cm.tab20
+                elif n_colors <= 40:
+                    cmap = plt.cm.tab20b
+                else:
+                    cmap = plt.cm.turbo
+                
+                # Mapper les valeurs a des couleurs
+                color_indices = np.searchsorted(unique_values, color_data)
+                scatter_colors = cmap(color_indices / max(n_colors - 1, 1))
+                
+                # Creer la legende (limiter a 20 elements)
+                from matplotlib.patches import Patch
+                if n_colors <= 20:
+                    legend_handles = []
+                    for i, val in enumerate(unique_values):
+                        label = f"{color_by.replace('FlowSOM_', '')} {int(val)}"
+                        legend_handles.append(Patch(facecolor=cmap(i / max(n_colors - 1, 1)), 
+                                                    edgecolor='white', label=label))
+            
+            # Tracer selon le type
+            if plot_type == "Scatter":
+                scatter = ax.scatter(x_data, y_data, s=3, alpha=0.6, c=scatter_colors, 
+                          edgecolors='none', rasterized=True)
+                
+                # Ajouter la legende si coloration par cluster
+                if legend_handles is not None:
+                    ax.legend(handles=legend_handles, loc='upper right', 
+                             fontsize=7, facecolor='#313244', labelcolor='#cdd6f4',
+                             edgecolor='#45475a', framealpha=0.9,
+                             ncol=2 if len(legend_handles) > 10 else 1)
+                             
+            elif plot_type == "Densite":
+                # Histogramme 2D (density plot)
+                h = ax.hist2d(x_data, y_data, bins=100, cmap='viridis', 
+                             norm=plt.matplotlib.colors.LogNorm())
+                cbar = self.fcs_viz_canvas.fig.colorbar(h[3], ax=ax, label='Densité')
+                cbar.ax.tick_params(colors='#cdd6f4')
+                cbar.ax.yaxis.label.set_color('#cdd6f4')
+            elif plot_type == "Contour":
+                # Contour plot
+                from scipy import stats
+                try:
+                    # Estimation densite par noyau
+                    xmin, xmax = x_data.min(), x_data.max()
+                    ymin, ymax = y_data.min(), y_data.max()
+                    
+                    # Sous-echantillonner pour le calcul KDE (plus rapide)
+                    n_kde = min(5000, len(x_data))
+                    kde_idx = np.random.choice(len(x_data), n_kde, replace=False)
+                    
+                    xx, yy = np.mgrid[xmin:xmax:100j, ymin:ymax:100j]
+                    positions = np.vstack([xx.ravel(), yy.ravel()])
+                    values = np.vstack([x_data[kde_idx], y_data[kde_idx]])
+                    kernel = stats.gaussian_kde(values)
+                    f = np.reshape(kernel(positions).T, xx.shape)
+                    
+                    ax.contourf(xx, yy, f, levels=20, cmap='viridis')
+                    ax.contour(xx, yy, f, levels=10, colors='white', linewidths=0.3, alpha=0.5)
+                except Exception:
+                    # Fallback sur scatter si erreur KDE
+                    ax.scatter(x_data, y_data, s=2, alpha=0.5, c='#89b4fa', 
+                              edgecolors='none', rasterized=True)
+            
+            # Ajuster les limites avec marges
+            x_margin = (x_data.max() - x_data.min()) * 0.02
+            y_margin = (y_data.max() - y_data.min()) * 0.02
+            ax.set_xlim(x_data.min() - x_margin, x_data.max() + x_margin)
+            ax.set_ylim(y_data.min() - y_margin, y_data.max() + y_margin)
+            
+            # Labels et titre
+            ax.set_xlabel(x_marker, color='#cdd6f4', fontsize=12, fontweight='bold')
+            ax.set_ylabel(y_marker, color='#cdd6f4', fontsize=12, fontweight='bold')
+            
+            # Construire le titre avec info sur jitter et coloration
+            title_parts = [f"{x_marker} vs {y_marker}"]
+            subtitle_parts = [f"{len(x_data):,} cellules"]
+            if apply_jitter and (is_som_x or is_som_y):
+                subtitle_parts.append("jitter")
+            if color_by != "Aucune":
+                subtitle_parts.append(f"couleur: {color_by.replace('FlowSOM_', '')}")
+            
+            ax.set_title(f"{title_parts[0]}\n{' | '.join(subtitle_parts)}", 
+                        fontsize=13, color='#cdd6f4', fontweight='bold', pad=15)
+            
+            # Formatage des axes avec notation scientifique si nécessaire
+            from matplotlib.ticker import ScalarFormatter, FuncFormatter
+            
+            def format_axis(value, pos):
+                if abs(value) >= 1e6:
+                    return f'{value/1e6:.1f}M'
+                elif abs(value) >= 1e3:
+                    return f'{value/1e3:.0f}K'
+                else:
+                    return f'{value:.0f}'
+            
+            ax.xaxis.set_major_formatter(FuncFormatter(format_axis))
+            ax.yaxis.set_major_formatter(FuncFormatter(format_axis))
+            
+            # Style des axes
+            ax.tick_params(colors='#cdd6f4', labelsize=10)
+            ax.set_facecolor('#1e1e2e')
+            ax.spines['bottom'].set_color('#45475a')
+            ax.spines['left'].set_color('#45475a')
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            
+            # Grille légère
+            ax.grid(True, alpha=0.15, color='#6c7086', linestyle='--', linewidth=0.5)
+            
+            self.fcs_viz_canvas.fig.patch.set_facecolor('#1e1e2e')
+            self.fcs_viz_canvas.fig.tight_layout(pad=1.5)
+            self.fcs_viz_canvas.draw()
+            
+        except Exception as e:
+            self._log(f"Erreur plot FCS: {str(e)}")
+    
+    # =========================================================================
+    # SUIVI PATIENT - SAUVEGARDE / CHARGEMENT
+    # =========================================================================
+    
+    def _get_patient_data_folder(self) -> Path:
+        """Retourne le dossier de stockage des donnees patient."""
+        # Creer le dossier Patients dans le dossier de l'application
+        data_folder = Path(__file__).parent / "Patients"
+        data_folder.mkdir(exist_ok=True)
+        return data_folder
+    
+    def _save_patient_data(self):
+        """Sauvegarde les donnees du patient actuel."""
+        if self.edit_patient_id is None:
+            return
+            
+        patient_id = self.edit_patient_id.text().strip()
+        if not patient_id:
+            QMessageBox.warning(self, "Attention", "Entrez un ID patient avant de sauvegarder.")
+            return
+        
+        if not self.result:
+            QMessageBox.warning(self, "Attention", "Lancez d'abord une analyse FlowSOM.")
+            return
+        
+        try:
+            # Preparer les donnees patient
+            patient_data = {
+                'patient_id': patient_id,
+                'created_at': datetime.now().isoformat(),
+                'timepoints': [],
+                'config': {
+                    'xdim': self.spin_xdim.value(),
+                    'ydim': self.spin_ydim.value(),
+                    'n_clusters': self.result.get('n_clusters', 10),
+                }
+            }
+            
+            # Ajouter le timepoint actuel
+            current_timepoint = {
+                'id': f"T{len(patient_data['timepoints'])}",
+                'date': datetime.now().strftime("%Y-%m-%d %H:%M"),
+                'n_clusters': self.result.get('n_clusters', 0),
+                'total_cells': self.result.get('cell_data').shape[0] if self.result.get('cell_data') is not None else 0,
+                'files_analyzed': self.pathological_files + self.healthy_files,
+                'metacluster_distribution': {}
+            }
+            
+            # Calculer la distribution des metaclusters
+            if self.result.get('cell_data') is not None:
+                cell_data = self.result['cell_data']
+                if 'metaclustering' in cell_data.obs:
+                    mc = cell_data.obs['metaclustering'].values
+                    total = len(mc)
+                    for i in range(self.result.get('n_clusters', 10)):
+                        pct = (mc == i).sum() / total * 100
+                        current_timepoint['metacluster_distribution'][str(i)] = round(pct, 2)
+            
+            patient_data['timepoints'].append(current_timepoint)
+            
+            # Charger les donnees existantes si le patient existe deja
+            data_folder = self._get_patient_data_folder()
+            patient_file = data_folder / f"{patient_id}.json"
+            
+            if patient_file.exists():
+                try:
+                    with open(patient_file, 'r', encoding='utf-8') as f:
+                        existing_data = json.load(f)
+                    # Fusionner les timepoints
+                    patient_data['timepoints'] = existing_data.get('timepoints', []) + patient_data['timepoints']
+                    patient_data['created_at'] = existing_data.get('created_at', patient_data['created_at'])
+                except Exception:
+                    pass
+            
+            # Sauvegarder
+            with open(patient_file, 'w', encoding='utf-8') as f:
+                json.dump(patient_data, f, indent=2, ensure_ascii=False)
+            
+            self._log(f"Patient {patient_id} sauvegarde: {patient_file}")
+            self._update_patient_timeline(patient_data)
+            
+            QMessageBox.information(self, "Succes", f"Patient {patient_id} sauvegarde avec succes!\n{len(patient_data['timepoints'])} timepoint(s)")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur", f"Erreur lors de la sauvegarde:\n{str(e)}")
+            self._log(f"Erreur sauvegarde patient: {str(e)}")
+    
+    def _load_patient_data(self):
+        """Charge les donnees d'un patient existant."""
+        data_folder = self._get_patient_data_folder()
+        
+        # Lister les patients disponibles
+        patient_files = list(data_folder.glob("*.json"))
+        
+        if not patient_files:
+            QMessageBox.information(self, "Info", "Aucun patient enregistre.\nLes patients seront stockes dans:\n" + str(data_folder))
+            return
+        
+        # Permettre de selectionner un fichier
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Charger un Patient", str(data_folder),
+            "Fichiers Patient (*.json)"
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                patient_data = json.load(f)
+            
+            patient_id = patient_data.get('patient_id', Path(file_path).stem)
+            
+            if self.edit_patient_id is not None:
+                self.edit_patient_id.setText(patient_id)
+            
+            self._update_patient_timeline(patient_data)
+            self._plot_patient_evolution(patient_data)
+            
+            n_timepoints = len(patient_data.get('timepoints', []))
+            self._log(f"Patient {patient_id} charge: {n_timepoints} timepoint(s)")
+            
+            QMessageBox.information(self, "Patient Charge", f"Patient: {patient_id}\nTimepoints: {n_timepoints}")
+            
+            # Activer le bouton ajouter timepoint
+            if self.btn_add_timepoint is not None:
+                self.btn_add_timepoint.setEnabled(True)
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur", f"Erreur lors du chargement:\n{str(e)}")
+            self._log(f"Erreur chargement patient: {str(e)}")
+    
+    def _add_patient_timepoint(self):
+        """Ajoute le resultat actuel comme nouveau timepoint pour le patient charge."""
+        if not self.result:
+            QMessageBox.warning(self, "Attention", "Lancez d'abord une analyse FlowSOM.")
+            return
+            
+        if self.edit_patient_id is None:
+            return
+            
+        patient_id = self.edit_patient_id.text().strip()
+        if not patient_id:
+            QMessageBox.warning(self, "Attention", "Aucun patient charge. Chargez d'abord un patient.")
+            return
+        
+        # Sauvegarder le nouveau timepoint
+        self._save_patient_data()
+    
+    def _update_patient_timeline(self, patient_data: Dict[str, Any]):
+        """Met a jour la timeline avec les donnees patient."""
+        if self.patient_timeline is None:
+            return
+        
+        timepoints = patient_data.get('timepoints', [])
+        self.patient_timeline.setRowCount(len(timepoints))
+        
+        for i, tp in enumerate(timepoints):
+            self.patient_timeline.setItem(i, 0, QTableWidgetItem(tp.get('id', f'T{i}')))
+            self.patient_timeline.setItem(i, 1, QTableWidgetItem(tp.get('date', 'N/A')))
+            
+            files = tp.get('files_analyzed', [])
+            file_str = Path(files[0]).name if files else 'N/A'
+            self.patient_timeline.setItem(i, 2, QTableWidgetItem(file_str))
+            
+            self.patient_timeline.setItem(i, 3, QTableWidgetItem(str(tp.get('n_clusters', 'N/A'))))
+            self.patient_timeline.setItem(i, 4, QTableWidgetItem(tp.get('notes', '')))
+    
+    def _plot_patient_evolution(self, patient_data: Dict[str, Any]):
+        """Trace l'evolution temporelle du patient."""
+        if self.patient_canvas is None:
+            return
+        
+        timepoints = patient_data.get('timepoints', [])
+        if len(timepoints) < 1:
+            return
+        
+        self.patient_canvas.clear_figure()
+        ax = self.patient_canvas.fig.add_subplot(111)
+        
+        # Preparer les donnees pour le plot
+        n_clusters = max([len(tp.get('metacluster_distribution', {})) for tp in timepoints])
+        
+        if n_clusters == 0:
+            ax.text(0.5, 0.5, "Pas de donnees de distribution disponibles",
+                   transform=ax.transAxes, ha='center', va='center', color='#a6adc8')
+            ax.set_facecolor('#1e1e2e')
+            self.patient_canvas.fig.patch.set_facecolor('#1e1e2e')
+            self.patient_canvas.draw()
+            return
+        
+        # Couleurs pour chaque cluster
+        colors = plt.cm.tab20(np.linspace(0, 1, n_clusters))
+        
+        x = range(len(timepoints))
+        labels = [tp.get('id', f'T{i}') for i, tp in enumerate(timepoints)]
+        
+        # Stacked bar chart
+        bottom = np.zeros(len(timepoints))
+        
+        for cluster_idx in range(n_clusters):
+            values = []
+            for tp in timepoints:
+                dist = tp.get('metacluster_distribution', {})
+                values.append(dist.get(str(cluster_idx), 0))
+            
+            ax.bar(x, values, bottom=bottom, label=f'MC{cluster_idx}', 
+                  color=colors[cluster_idx], edgecolor='white', linewidth=0.3)
+            bottom += np.array(values)
+        
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, color='#cdd6f4')
+        ax.set_ylabel('Distribution (%)', color='#cdd6f4')
+        ax.set_xlabel('Timepoint', color='#cdd6f4')
+        ax.set_title(f"Evolution Patient: {patient_data.get('patient_id', 'N/A')}", 
+                    color='#cdd6f4', fontsize=12, fontweight='bold')
+        ax.tick_params(colors='#cdd6f4')
+        ax.set_facecolor('#1e1e2e')
+        ax.spines['bottom'].set_color('#45475a')
+        ax.spines['left'].set_color('#45475a')
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        
+        # Legende
+        if n_clusters <= 10:
+            ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), fontsize=8,
+                     facecolor='#313244', edgecolor='#45475a')
+        
+        self.patient_canvas.fig.patch.set_facecolor('#1e1e2e')
+        self.patient_canvas.fig.tight_layout()
+        self.patient_canvas.draw()
         
     def _run_analysis(self):
         if not FLOWSOM_AVAILABLE:
@@ -3097,6 +3496,10 @@ class FlowSOMApp(QMainWindow):
         self.result = result
         self._log("Analyse terminee!")
         
+        # Mettre a jour l'interface immediatement
+        self.lbl_status.setText("Preparation des resultats...")
+        QApplication.processEvents()
+        
         self.combo_marker.clear()
         self.combo_marker.setEnabled(True)
         
@@ -3111,20 +3514,31 @@ class FlowSOMApp(QMainWindow):
         self.btn_export_pdf.setEnabled(True)
         self.btn_save_patient.setEnabled(True)
         
-        # Remplir la liste des clusters
+        # Remplir la liste des clusters (signaux bloques, pas de selection auto)
         self._populate_cluster_list()
         
-        # Calculer le score LSC si demande
-        if self.chk_calc_lsc.isChecked():
-            self._calculate_lsc_score()
+        # Activer le bouton ajouter timepoint
+        if self.btn_add_timepoint is not None:
+            self.btn_add_timepoint.setEnabled(True)
         
-        self._update_statistics()
-        self._update_visualization()
+        # Reset UI state d'abord pour reactiver les boutons
         self._reset_ui_state()
         
-        # Afficher un message de succes
-        self.lbl_status.setText("Analyse terminee avec succes!")
+        # Afficher un message de succes immediatement
+        self.lbl_status.setText("Analyse terminee! Generation des statistiques...")
         self.lbl_status.setStyleSheet("color: #a6e3a1; padding: 8px; font-size: 10pt; font-weight: 600;")
+        QApplication.processEvents()
+        
+        # Mettre a jour les statistiques (leger)
+        self._update_statistics()
+        QApplication.processEvents()
+        
+        # Mettre a jour la visualisation (peut etre lent selon le type)
+        self.lbl_status.setText("Generation de la visualisation...")
+        QApplication.processEvents()
+        self._update_visualization()
+        
+        self.lbl_status.setText("Analyse terminee avec succes!")
         
     def _on_error(self, error_message):
         self._log(f"ERREUR: {error_message}")
@@ -3187,6 +3601,10 @@ class FlowSOMApp(QMainWindow):
         try:
             if "Star Chart" in viz_type:
                 self._plot_star_chart()
+            elif "Arbre MST" in viz_type:
+                self._plot_mst_tree_matplotlib()
+            elif "Grille SOM" in viz_type:
+                self._plot_som_grid_matplotlib()
             elif "Grid View" in viz_type:
                 self._plot_grid_view()
             elif "Cluster Numbers" in viz_type:
@@ -3239,6 +3657,207 @@ class FlowSOMApp(QMainWindow):
             self._embed_flowsom_figure(fig, "FlowSOM - Grid View")
         except Exception as e:
             self._fallback_visualization(f"Grid View: {str(e)}")
+    
+    def _plot_mst_tree_matplotlib(self):
+        """
+        Affiche l'arbre MST (Minimum Spanning Tree) en matplotlib.
+        Utilise les coordonnees layout (xNodes, yNodes) du FlowSOM.
+        """
+        fsom = self.result['fsom']
+        cluster_data = fsom.get_cluster_data()
+        cell_data = fsom.get_cell_data()
+        
+        try:
+            # Recuperer les coordonnees du layout MST
+            layout = cluster_data.obsm.get('layout', None)
+            if layout is None:
+                self._fallback_visualization("Coordonnees MST non disponibles")
+                return
+            
+            # Recuperer le clustering et metaclustering
+            clustering = cell_data.obs['clustering'].values
+            metaclustering = cluster_data.obs['metaclustering'].values
+            
+            # Calculer la taille de chaque node (nombre de cellules)
+            n_nodes = len(cluster_data)
+            node_sizes = np.zeros(n_nodes)
+            for i in range(n_nodes):
+                node_sizes[i] = np.sum(clustering == i)
+            
+            # Normaliser les tailles pour l'affichage
+            max_size = node_sizes.max() if node_sizes.max() > 0 else 1
+            sizes = 50 + (node_sizes / max_size) * 500  # Entre 50 et 550
+            
+            # Palette de couleurs pour les metaclusters
+            n_meta = len(np.unique(metaclustering))
+            cmap = plt.cm.tab20 if n_meta <= 20 else plt.cm.turbo
+            colors = [cmap(int(m) / max(n_meta - 1, 1)) for m in metaclustering]
+            
+            ax = self.canvas.fig.add_subplot(111)
+            
+            # Dessiner les aretes du MST si disponibles
+            try:
+                # Essayer de recuperer les aretes du MST depuis l'objet FlowSOM
+                if hasattr(fsom, 'mudata') and 'cluster_data' in fsom.mudata.mod:
+                    cd = fsom.mudata.mod['cluster_data']
+                    if 'mst' in cd.uns:
+                        mst = cd.uns['mst']
+                        # Dessiner les aretes
+                        for edge in mst:
+                            i, j = int(edge[0]), int(edge[1])
+                            ax.plot([layout[i, 0], layout[j, 0]], 
+                                   [layout[i, 1], layout[j, 1]],
+                                   color='#6c7086', linewidth=1, alpha=0.6, zorder=1)
+            except:
+                # Si pas d'aretes MST, connecter les nodes proches
+                from scipy.spatial.distance import pdist, squareform
+                distances = squareform(pdist(layout))
+                threshold = np.percentile(distances[distances > 0], 15)
+                for i in range(n_nodes):
+                    for j in range(i + 1, n_nodes):
+                        if distances[i, j] < threshold:
+                            ax.plot([layout[i, 0], layout[j, 0]], 
+                                   [layout[i, 1], layout[j, 1]],
+                                   color='#6c7086', linewidth=0.8, alpha=0.4, zorder=1)
+            
+            # Scatter plot des nodes
+            scatter = ax.scatter(layout[:, 0], layout[:, 1], 
+                               s=sizes, c=colors, edgecolors='white', 
+                               linewidths=1.5, alpha=0.9, zorder=2)
+            
+            # Annoter avec les numeros de metaclusters
+            for i in range(n_nodes):
+                if node_sizes[i] > 0:  # N'afficher que les nodes non vides
+                    ax.annotate(str(int(metaclustering[i])), 
+                               (layout[i, 0], layout[i, 1]),
+                               ha='center', va='center', fontsize=7,
+                               color='#11111b', fontweight='bold', zorder=3)
+            
+            # Style
+            ax.set_xlabel('xNodes', color='#cdd6f4', fontsize=12, fontweight='bold')
+            ax.set_ylabel('yNodes', color='#cdd6f4', fontsize=12, fontweight='bold')
+            ax.set_title(f'Arbre MST - {n_nodes} nodes, {n_meta} metaclusters', 
+                        fontsize=14, color='#cdd6f4', pad=15, fontweight='bold')
+            ax.tick_params(colors='#cdd6f4', labelsize=10)
+            ax.set_facecolor('#1e1e2e')
+            ax.spines['bottom'].set_color('#45475a')
+            ax.spines['left'].set_color('#45475a')
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.grid(True, alpha=0.15, color='#6c7086', linestyle='--')
+            
+            # Legende des metaclusters
+            from matplotlib.patches import Patch
+            if n_meta <= 15:
+                legend_handles = [Patch(facecolor=cmap(i / max(n_meta - 1, 1)), 
+                                       edgecolor='white', label=f'MC {i}') 
+                                 for i in range(n_meta)]
+                ax.legend(handles=legend_handles, loc='upper right', 
+                         fontsize=7, facecolor='#313244', labelcolor='#cdd6f4',
+                         edgecolor='#45475a', framealpha=0.9, ncol=2)
+            
+            self.canvas.fig.patch.set_facecolor('#1e1e2e')
+            self.canvas.fig.tight_layout(pad=1.5)
+            
+        except Exception as e:
+            self._fallback_visualization(f"Arbre MST: {str(e)}")
+    
+    def _plot_som_grid_matplotlib(self):
+        """
+        Affiche la grille SOM en matplotlib.
+        Utilise les coordonnees grid (xGrid, yGrid) du FlowSOM.
+        """
+        fsom = self.result['fsom']
+        cluster_data = fsom.get_cluster_data()
+        cell_data = fsom.get_cell_data()
+        
+        try:
+            # Recuperer les coordonnees de la grille
+            grid = cluster_data.obsm.get('grid', None)
+            if grid is None:
+                self._fallback_visualization("Coordonnees grille non disponibles")
+                return
+            
+            # Recuperer le clustering et metaclustering
+            clustering = cell_data.obs['clustering'].values
+            metaclustering = cluster_data.obs['metaclustering'].values
+            
+            # Calculer la taille de chaque node
+            n_nodes = len(cluster_data)
+            node_sizes = np.zeros(n_nodes)
+            for i in range(n_nodes):
+                node_sizes[i] = np.sum(clustering == i)
+            
+            # Palette de couleurs pour les metaclusters
+            n_meta = len(np.unique(metaclustering))
+            cmap = plt.cm.tab20 if n_meta <= 20 else plt.cm.turbo
+            colors = [cmap(int(m) / max(n_meta - 1, 1)) for m in metaclustering]
+            
+            # Normaliser les tailles - plus grand pour la grille
+            max_size = node_sizes.max() if node_sizes.max() > 0 else 1
+            sizes = 100 + (node_sizes / max_size) * 800  # Plus grands pour la grille
+            
+            ax = self.canvas.fig.add_subplot(111)
+            
+            # Scatter plot avec taille proportionnelle
+            scatter = ax.scatter(grid[:, 0], grid[:, 1], 
+                               s=sizes, c=colors, edgecolors='white', 
+                               linewidths=2, alpha=0.85, marker='o')
+            
+            # Ajouter les numeros de cluster et metacluster
+            for i in range(n_nodes):
+                if node_sizes[i] > 0:
+                    # Afficher le metacluster en gras
+                    ax.annotate(str(int(metaclustering[i])), 
+                               (grid[i, 0], grid[i, 1]),
+                               ha='center', va='center', fontsize=9,
+                               color='#11111b', fontweight='bold')
+            
+            # Determiner les dimensions de la grille
+            xdim = int(grid[:, 0].max()) + 1
+            ydim = int(grid[:, 1].max()) + 1
+            
+            # Style
+            ax.set_xlabel('xGrid', color='#cdd6f4', fontsize=12, fontweight='bold')
+            ax.set_ylabel('yGrid', color='#cdd6f4', fontsize=12, fontweight='bold')
+            ax.set_title(f'Grille SOM {xdim}x{ydim} - {n_nodes} nodes, {n_meta} metaclusters', 
+                        fontsize=14, color='#cdd6f4', pad=15, fontweight='bold')
+            ax.tick_params(colors='#cdd6f4', labelsize=10)
+            ax.set_facecolor('#1e1e2e')
+            ax.spines['bottom'].set_color('#45475a')
+            ax.spines['left'].set_color('#45475a')
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            
+            # Grille de fond
+            ax.set_xticks(np.arange(xdim))
+            ax.set_yticks(np.arange(ydim))
+            ax.grid(True, alpha=0.2, color='#6c7086', linestyle='-')
+            
+            # Ajuster les limites pour centrer
+            ax.set_xlim(-0.5, xdim - 0.5)
+            ax.set_ylim(-0.5, ydim - 0.5)
+            ax.set_aspect('equal')
+            
+            # Legende des metaclusters
+            from matplotlib.patches import Patch
+            if n_meta <= 15:
+                legend_handles = [Patch(facecolor=cmap(i / max(n_meta - 1, 1)), 
+                                       edgecolor='white', label=f'MC {i}') 
+                                 for i in range(n_meta)]
+                ax.legend(handles=legend_handles, loc='upper right', 
+                         fontsize=7, facecolor='#313244', labelcolor='#cdd6f4',
+                         edgecolor='#45475a', framealpha=0.9, ncol=2)
+            
+            # Ajouter une barre de couleur pour les tailles
+            # (optionnel - commenté pour garder simple)
+            # from mpl_toolkits.axes_grid1 import make_axes_locatable
+            
+            self.canvas.fig.patch.set_facecolor('#1e1e2e')
+            self.canvas.fig.tight_layout(pad=1.5)
+            
+        except Exception as e:
+            self._fallback_visualization(f"Grille SOM: {str(e)}")
             
     def _plot_cluster_numbers(self):
         """Affiche les numéros de clusters."""
@@ -3370,8 +3989,8 @@ class FlowSOMApp(QMainWindow):
         x = np.arange(n_clusters)
         width = 0.35
         
-        bars1 = ax.bar(x - width/2, healthy_pcts, width, label='Sain', color='#a6e3a1', edgecolor='white', linewidth=0.5)
-        bars2 = ax.bar(x + width/2, patho_pcts, width, label='Pathologique', color='#f38ba8', edgecolor='white', linewidth=0.5)
+        bars1 = ax.bar(x - width/2, healthy_pcts, width, label='NBM', color='#a6e3a1', edgecolor='white', linewidth=0.5)
+        bars2 = ax.bar(x + width/2, patho_pcts, width, label='Patient', color='#f38ba8', edgecolor='white', linewidth=0.5)
         
         ax.set_xlabel('Métacluster', color='#cdd6f4', fontsize=11)
         ax.set_ylabel('Pourcentage (%)', color='#cdd6f4', fontsize=11)
@@ -3391,10 +4010,6 @@ class FlowSOMApp(QMainWindow):
         if not self.result:
             return
             
-        if not FCSWRITE_AVAILABLE:
-            QMessageBox.critical(self, "Erreur", "fcswrite n'est pas installé.\npip install fcswrite")
-            return
-            
         filepath, _ = QFileDialog.getSaveFileName(self, "Exporter FCS", "flowsom_results.fcs", "FCS (*.fcs)")
         
         if filepath:
@@ -3403,18 +4018,147 @@ class FlowSOMApp(QMainWindow):
                 X = cell_data.X
                 if hasattr(X, 'toarray'):
                     X = X.toarray()
-                    
-                clustering = cell_data.obs['clustering'].values.reshape(-1, 1).astype(np.float32)
-                metaclustering = cell_data.obs['metaclustering'].values.reshape(-1, 1).astype(np.float32)
-                export_data = np.hstack([X.astype(np.float32), clustering, metaclustering])
+                
+                self._log(f"Export FCS: {X.shape[0]} cellules, {X.shape[1]} parametres originaux")
+                
+                # Recuperer les clusters et metaclusters
+                clustering = cell_data.obs['clustering'].values
+                metaclustering = cell_data.obs['metaclustering'].values
+                
+                self._log(f"   Clusters uniques: {len(np.unique(clustering))}")
+                self._log(f"   Metaclusters uniques: {len(np.unique(metaclustering))}")
+                
+                # Convertir en float32 et reshape
+                clustering_col = clustering.astype(np.float32).reshape(-1, 1)
+                metaclustering_col = metaclustering.astype(np.float32).reshape(-1, 1)
+                
+                # Preparer les donnees de base
+                X_float = X.astype(np.float32)
+                export_data = np.hstack([X_float, clustering_col, metaclustering_col])
                 channel_names = list(cell_data.var_names) + ['FlowSOM_cluster', 'FlowSOM_metacluster']
                 
-                fcswrite.write_fcs(filename=filepath, chn_names=channel_names, data=export_data)
+                self._log(f"   Donnees preparees: {export_data.shape}")
                 
-                self._log(f"FCS exporte: {filepath}")
-                QMessageBox.information(self, "Succes", f"Fichier exporte:\n{filepath}")
+                # Ajouter condition et file_origin comme colonnes numeriques
+                # Encoder les conditions: Sain=0, Pathologique=1
+                conditions = cell_data.obs['condition'].values
+                condition_encoded = np.array([0.0 if c == 'Sain' else 1.0 for c in conditions], dtype=np.float32).reshape(-1, 1)
+                export_data = np.hstack([export_data, condition_encoded])
+                channel_names.append('Condition')
+                
+                # =====================================================================
+                # AJOUTER LES COORDONNEES SOM (comme dans Kaluza)
+                # =====================================================================
+                fsom = self.result.get('fsom')
+                if fsom is not None:
+                    try:
+                        cluster_data = fsom.get_cluster_data()
+                        n_cells = X.shape[0]
+                        
+                        # Recuperer les coordonnees de grille (xGrid, yGrid) pour chaque node
+                        grid_coords = cluster_data.obsm.get('grid', None)  # shape (n_nodes, 2)
+                        # Recuperer les coordonnees du layout MST (xNodes, yNodes)
+                        layout_coords = cluster_data.obsm.get('layout', None)  # shape (n_nodes, 2)
+                        
+                        # Calculer la taille de chaque node (nombre de cellules)
+                        node_sizes = np.zeros(len(cluster_data), dtype=np.float32)
+                        for i in range(len(cluster_data)):
+                            node_sizes[i] = np.sum(clustering == i)
+                        
+                        # Mapper les coordonnees sur chaque cellule via son cluster assignment
+                        if grid_coords is not None:
+                            xGrid = np.array([grid_coords[int(c), 0] for c in clustering], dtype=np.float32).reshape(-1, 1)
+                            yGrid = np.array([grid_coords[int(c), 1] for c in clustering], dtype=np.float32).reshape(-1, 1)
+                            export_data = np.hstack([export_data, xGrid, yGrid])
+                            channel_names.extend(['xGrid', 'yGrid'])
+                            self._log(f"   Coordonnees grille ajoutees (xGrid, yGrid)")
+                        
+                        if layout_coords is not None:
+                            xNodes = np.array([layout_coords[int(c), 0] for c in clustering], dtype=np.float32).reshape(-1, 1)
+                            yNodes = np.array([layout_coords[int(c), 1] for c in clustering], dtype=np.float32).reshape(-1, 1)
+                            export_data = np.hstack([export_data, xNodes, yNodes])
+                            channel_names.extend(['xNodes', 'yNodes'])
+                            self._log(f"   Coordonnees MST ajoutees (xNodes, yNodes)")
+                        
+                        # Ajouter la taille du node pour chaque cellule
+                        size_col = np.array([node_sizes[int(c)] for c in clustering], dtype=np.float32).reshape(-1, 1)
+                        export_data = np.hstack([export_data, size_col])
+                        channel_names.append('size')
+                        self._log(f"   Taille des nodes ajoutee (size)")
+                        
+                    except Exception as e:
+                        self._log(f"   ATTENTION: Impossible d'ajouter les coordonnees SOM: {e}")
+                
+                # =====================================================================
+                # AJOUTER UMAP si disponible
+                # =====================================================================
+                # Utilise -999 comme valeur manquante (facilement filtrable)
+                MISSING_VALUE = -999.0
+                umap_cells = 0
+                if 'X_umap' in cell_data.obsm:
+                    umap_coords = cell_data.obsm['X_umap'].astype(np.float32).copy()
+                    umap_cells = np.sum(~np.isnan(umap_coords[:, 0]))
+                    # Remplacer NaN par valeur manquante avant export
+                    umap_coords = np.nan_to_num(umap_coords, nan=MISSING_VALUE)
+                    export_data = np.hstack([export_data, umap_coords])
+                    channel_names.extend(['UMAP1', 'UMAP2'])
+                    self._log(f"   UMAP coordonnees ajoutees ({umap_cells:,} / {X.shape[0]:,} cellules valides)")
+                
+                # Ajouter t-SNE si disponible
+                tsne_cells = 0
+                if 'X_tsne' in cell_data.obsm:
+                    tsne_coords = cell_data.obsm['X_tsne'].astype(np.float32).copy()
+                    tsne_cells = np.sum(~np.isnan(tsne_coords[:, 0]))
+                    # Remplacer NaN par valeur manquante avant export
+                    tsne_coords = np.nan_to_num(tsne_coords, nan=MISSING_VALUE)
+                    export_data = np.hstack([export_data, tsne_coords])
+                    channel_names.extend(['tSNE1', 'tSNE2'])
+                    self._log(f"   t-SNE coordonnees ajoutees ({tsne_cells:,} / {X.shape[0]:,} cellules valides)")
+                
+                self._log(f"   Export final: {export_data.shape[0]} events, {export_data.shape[1]} canaux")
+                self._log(f"   Canaux: {channel_names}")
+                
+                # Note: Les coordonnees UMAP/t-SNE manquantes sont deja remplacees par -999
+                # Verifier les autres NaN ou Inf
+                nan_count = np.sum(np.isnan(export_data))
+                if nan_count > 0:
+                    self._log(f"   ATTENTION: {nan_count} NaN restants, remplacement par 0")
+                    export_data = np.nan_to_num(export_data, nan=0.0)
+                inf_count = np.sum(np.isinf(export_data))
+                if inf_count > 0:
+                    self._log(f"   ATTENTION: {inf_count} Inf detectes, remplacement par max")
+                    export_data = np.nan_to_num(export_data, posinf=1e6, neginf=-1e6)
+                
+                # Utiliser la methode d'ecriture FCS
+                self._write_fcs_with_flowio(filepath, channel_names, export_data)
+                
+                self._log(f"FCS exporte avec succes: {filepath}")
+                
+                # Construire le message de succes detaille
+                msg_details = [
+                    f"Fichier exporte:\n{filepath}\n",
+                    f"Cellules: {export_data.shape[0]:,}",
+                    f"Canaux: {len(channel_names)}",
+                    "",
+                    "Inclus:",
+                    "  - Tous les marqueurs originaux",
+                    "  - FlowSOM_cluster (nodes SOM)",
+                    "  - FlowSOM_metacluster (metaclusters)",
+                    "  - Condition (0=NBM, 1=Patient)",
+                    "  - xGrid, yGrid (coordonnees grille SOM)",
+                    "  - xNodes, yNodes (coordonnees MST)",
+                    "  - size (taille du node)"
+                ]
+                if 'X_umap' in cell_data.obsm:
+                    msg_details.append(f"  - UMAP1, UMAP2 ({umap_cells:,} valides)")
+                if 'X_tsne' in cell_data.obsm:
+                    msg_details.append(f"  - tSNE1, tSNE2 ({tsne_cells:,} valides)")
+                
+                QMessageBox.information(self, "Export FCS Reussi", "\n".join(msg_details))
             except Exception as e:
+                import traceback
                 self._log(f"Erreur export: {str(e)}")
+                self._log(traceback.format_exc())
                 QMessageBox.critical(self, "Erreur", str(e))
                 
     def _export_csv(self):
@@ -3429,16 +4173,42 @@ class FlowSOMApp(QMainWindow):
                 X = cell_data.X
                 if hasattr(X, 'toarray'):
                     X = X.toarray()
+                
+                self._log(f"Export CSV: {X.shape[0]} cellules")
                     
                 df = pd.DataFrame(X, columns=list(cell_data.var_names))
                 df['condition'] = cell_data.obs['condition'].values
                 df['file_origin'] = cell_data.obs['file_origin'].values
                 df['FlowSOM_cluster'] = cell_data.obs['clustering'].values
                 df['FlowSOM_metacluster'] = cell_data.obs['metaclustering'].values
+                
+                # Ajouter UMAP si disponible
+                if 'X_umap' in cell_data.obsm:
+                    umap_coords = cell_data.obsm['X_umap']
+                    df['UMAP1'] = umap_coords[:, 0]
+                    df['UMAP2'] = umap_coords[:, 1]
+                    self._log("   UMAP coordonnees ajoutees")
+                
+                # Ajouter t-SNE si disponible
+                if 'X_tsne' in cell_data.obsm:
+                    tsne_coords = cell_data.obsm['X_tsne']
+                    df['tSNE1'] = tsne_coords[:, 0]
+                    df['tSNE2'] = tsne_coords[:, 1]
+                    self._log("   t-SNE coordonnees ajoutees")
+                
                 df.to_csv(filepath, index=False)
                 
                 self._log(f"CSV exporte: {filepath}")
-                QMessageBox.information(self, "Succes", f"Fichier exporte:\n{filepath}")
+                self._log(f"   Lignes: {len(df)}, Colonnes: {len(df.columns)}")
+                QMessageBox.information(self, "Succes", 
+                    f"Fichier exporte:\n{filepath}\n\n"
+                    f"Cellules: {len(df):,}\n"
+                    f"Colonnes: {len(df.columns)}")
+            except Exception as e:
+                import traceback
+                self._log(f"Erreur export CSV: {str(e)}")
+                self._log(traceback.format_exc())
+                QMessageBox.critical(self, "Erreur", str(e))
             except Exception as e:
                 self._log(f"Erreur export: {str(e)}")
                 QMessageBox.critical(self, "Erreur", str(e))
@@ -3454,12 +4224,145 @@ class FlowSOMApp(QMainWindow):
         
         if filepath:
             try:
-                self.canvas.fig.savefig(filepath, dpi=300, bbox_inches='tight', facecolor='#1e1e2e')
+                self.canvas.fig.savefig(filepath, dpi=800, bbox_inches='tight', facecolor='#1e1e2e')
                 self._log(f"Figure exportee: {filepath}")
                 QMessageBox.information(self, "Succes", f"Figure exportee:\n{filepath}")
             except Exception as e:
                 self._log(f"Erreur export: {str(e)}")
                 QMessageBox.critical(self, "Erreur", str(e))
+    
+    def _write_fcs_with_flowio(self, filepath: str, channel_names: List[str], data: np.ndarray):
+        """
+        Ecrit un fichier FCS valide avec toutes les metadonnees requises.
+        Utilise le format FCS 3.1 avec les keywords correctement definis.
+        """
+        n_events, n_channels = data.shape
+        self._log(f"Ecriture FCS: {n_events} events, {n_channels} channels")
+        
+        # S'assurer que les donnees sont en float32 et contiguës en memoire
+        data = np.ascontiguousarray(data.astype(np.float32))
+        
+        try:
+            import fcswrite
+            # Utiliser fcswrite avec les parametres nommes explicites
+            fcswrite.write_fcs(
+                filename=filepath, 
+                chn_names=channel_names,
+                data=data,
+                compat_chn_names=True,  # Nettoyer les noms de canaux
+                compat_copy=True  # Creer une copie pour eviter les problemes de memoire
+            )
+            self._log(f"FCS ecrit avec fcswrite: {data.shape[0]} events, {data.shape[1]} channels")
+            return
+        except ImportError:
+            self._log("fcswrite non disponible, utilisation methode manuelle")
+        except Exception as e:
+            self._log(f"fcswrite echoue: {e}, utilisation methode manuelle")
+        
+        # Methode manuelle si fcswrite n'est pas disponible
+        import struct
+        
+        n_events, n_channels = data.shape
+        data = data.astype(np.float32)
+        
+        # Construire le TEXT segment avec toutes les metadonnees requises
+        # Utiliser un dictionnaire ordonne pour garantir l'ordre
+        from collections import OrderedDict
+        text_dict = OrderedDict()
+        
+        # Parametres globaux (obligatoires)
+        text_dict['$BEGINANALYSIS'] = '0'
+        text_dict['$ENDANALYSIS'] = '0'
+        text_dict['$BEGINSTEXT'] = '0'
+        text_dict['$ENDSTEXT'] = '0'
+        text_dict['$BYTEORD'] = '1,2,3,4'  # Little endian
+        text_dict['$DATATYPE'] = 'F'  # Float
+        text_dict['$MODE'] = 'L'  # List mode
+        text_dict['$NEXTDATA'] = '0'
+        text_dict['$PAR'] = str(n_channels)
+        text_dict['$TOT'] = str(n_events)
+        
+        # Ajouter les parametres pour chaque canal
+        # Ordre important: N, S, R, B, E pour chaque canal avant de passer au suivant
+        for i, name in enumerate(channel_names, 1):
+            # Nettoyer le nom du canal
+            clean_name = str(name).replace('/', '-').replace('\\', '-').replace('$', '')
+            clean_name = clean_name[:64]  # Limiter la longueur
+            
+            # Calculer le range (max value)
+            col_data = data[:, i-1]
+            col_data_clean = col_data[~np.isnan(col_data) & ~np.isinf(col_data)]
+            if len(col_data_clean) > 0:
+                max_val = max(float(np.max(col_data_clean)), 1.0)
+                min_val = min(float(np.min(col_data_clean)), 0.0)
+            else:
+                max_val = 262144.0
+                min_val = 0.0
+            
+            # Range doit etre >= max_val
+            range_val = int(np.ceil(max_val)) + 1
+            
+            # Parametres OBLIGATOIRES dans l'ordre FCS standard
+            text_dict[f'$P{i}N'] = clean_name  # Short name (OBLIGATOIRE)
+            text_dict[f'$P{i}S'] = clean_name  # Long name (OBLIGATOIRE)
+            text_dict[f'$P{i}R'] = str(range_val)  # Range (OBLIGATOIRE)
+            text_dict[f'$P{i}B'] = '32'  # Bits (OBLIGATOIRE)
+            text_dict[f'$P{i}E'] = '0,0'  # Amplification type (OBLIGATOIRE)
+            
+            # Parametres OPTIONNELS mais RECOMMANDES
+            text_dict[f'$P{i}G'] = '1'  # Gain
+            text_dict[f'$P{i}D'] = 'Linear'  # Display type
+            text_dict[f'$P{i}V'] = '1024'  # Voltage
+            text_dict[f'$P{i}F'] = clean_name  # Filter name
+            text_dict[f'$P{i}L'] = '0'  # Laser line
+            text_dict[f'$P{i}O'] = 'PnDisplayName'  # Optical filter
+            text_dict[f'$P{i}T'] = clean_name  # Detector type
+        
+        # Construire le TEXT segment avec encodage latin-1 (standard FCS)
+        delimiter = '/'
+        text_parts = []
+        for key, value in text_dict.items():
+            # Format: /key/value/
+            text_parts.append(f'{key}{delimiter}{value}{delimiter}')
+        
+        text_str = delimiter + ''.join(text_parts)
+        
+        # Encoder en latin-1 (standard FCS)
+        try:
+            text_segment = text_str.encode('latin-1')
+        except UnicodeEncodeError:
+            # Si latin-1 echoue, remplacer les caracteres problematiques
+            text_segment = text_str.encode('latin-1', errors='replace')
+        
+        # Padding pour aligner sur 8 bytes
+        while len(text_segment) % 8 != 0:
+            text_segment += b' '
+        
+        # Calculer les offsets
+        header_size = 58
+        text_start = header_size
+        text_end = text_start + len(text_segment) - 1
+        data_start = text_end + 1
+        
+        # Convertir les donnees en bytes (little endian float32)
+        data_bytes = data.astype('<f4').tobytes()
+        data_end = data_start + len(data_bytes) - 1
+        
+        # Ecrire le fichier FCS
+        with open(filepath, 'wb') as f:
+            # HEADER segment (58 bytes) - FCS 3.1
+            header = f'FCS3.1    {text_start:8d}{text_end:8d}{data_start:8d}{data_end:8d}{0:8d}{0:8d}'
+            # S'assurer que le header fait exactement 58 bytes
+            header = header[:58].ljust(58)
+            f.write(header.encode('ascii'))
+            
+            # TEXT segment
+            f.write(text_segment)
+            
+            # DATA segment
+            f.write(data_bytes)
+        
+        self._log(f"FCS ecrit (methode manuelle): {n_events} events, {n_channels} channels")
                 
     def _log(self, message):
         if self.text_logs is not None:
@@ -3494,12 +4397,23 @@ class FlowSOMApp(QMainWindow):
             self.embedding_worker.wait()
         
         # Recuperer le nombre de cellules configure
-        max_cells = self.spin_embedding_cells.value()
+        if self.chk_all_cells.isChecked():
+            # Utiliser toutes les cellules disponibles
+            cell_data = self.result['cell_data']
+            max_cells = cell_data.shape[0]
+            self._log(f"ATTENTION: Utilisation de TOUTES les {max_cells:,} cellules (peut etre tres lent)")
+        else:
+            max_cells = self.spin_embedding_cells.value()
         
         # Afficher un message d'attente
         self.canvas.clear_figure()
         ax = self.canvas.fig.add_subplot(111)
-        ax.text(0.5, 0.5, f"Calcul {method.upper()} en cours ({max_cells} cellules)...\nCeci peut prendre 30-60 secondes.", 
+        msg = f"Calcul {method.upper()} en cours ({max_cells:,} cellules)...\n"
+        if max_cells > 20000:
+            msg += "Attention: beaucoup de cellules, calcul tres long!"
+        else:
+            msg += "Ceci peut prendre 30-60 secondes."
+        ax.text(0.5, 0.5, msg, 
                transform=ax.transAxes, ha='center', va='center', 
                color='#89b4fa', fontsize=14, fontweight='bold')
         ax.set_facecolor('#1e1e2e')
@@ -3510,7 +4424,7 @@ class FlowSOMApp(QMainWindow):
         cell_data = self.result['cell_data']
         cols_to_use = self.result['cols_to_use']
         
-        self._log(f"Lancement {method.upper()} avec {max_cells} cellules...")
+        self._log(f"Lancement {method.upper()} avec {max_cells:,} cellules...")
         
         self.embedding_worker = EmbeddingWorker(
             cell_data=cell_data,
@@ -3541,6 +4455,24 @@ class FlowSOMApp(QMainWindow):
         self.embedding_result = result
         self.progress_bar.setValue(0)
         self._draw_embedding(result)
+        
+        # Stocker les coordonnees dans cell_data pour export
+        if self.result and self.result.get('cell_data') is not None:
+            cell_data = self.result['cell_data']
+            method = result['method']
+            embedding = result['embedding']
+            indices = result['indices']
+            
+            # Creer un array de taille n_cells x 2 avec NaN par defaut
+            n_cells = cell_data.shape[0]
+            full_embedding = np.full((n_cells, 2), np.nan, dtype=np.float32)
+            full_embedding[indices, :] = embedding
+            
+            # Stocker dans obsm
+            key = f'X_{method}'
+            cell_data.obsm[key] = full_embedding
+            self._log(f"{method.upper()} coordonnees stockees pour export ({len(indices)} cellules)")
+        
         self._log(f"{result['method'].upper()} termine avec succes!")
         
     def _on_embedding_error(self, error_message):
@@ -3568,26 +4500,42 @@ class FlowSOMApp(QMainWindow):
             mask = metaclusters == i
             ax.scatter(embedding[mask, 0], embedding[mask, 1], 
                       c=[colors[int(i) % 20]], label=f'MC {int(i)}',
-                      s=3, alpha=0.7)
+                      s=5, alpha=0.6, edgecolors='none')
         
-        ax.set_xlabel(f'{method.upper()}1', color='#cdd6f4', fontsize=11)
-        ax.set_ylabel(f'{method.upper()}2', color='#cdd6f4', fontsize=11)
-        ax.set_title(f'{method.upper()} - Metaclusters ({len(embedding)} cellules)', 
-                    fontsize=14, color='#cdd6f4', pad=15, fontweight='bold')
-        ax.tick_params(colors='#cdd6f4')
+        ax.set_xlabel(f'{method.upper()}1', color='#cdd6f4', fontsize=12, fontweight='bold')
+        ax.set_ylabel(f'{method.upper()}2', color='#cdd6f4', fontsize=12, fontweight='bold')
+        ax.set_title(f'{method.upper()} - Metaclusters ({len(embedding):,} cellules)', 
+                    fontsize=14, color='#cdd6f4', pad=20, fontweight='bold')
+        ax.tick_params(colors='#cdd6f4', labelsize=10)
         ax.set_facecolor('#1e1e2e')
         ax.spines['bottom'].set_color('#45475a')
         ax.spines['left'].set_color('#45475a')
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         
-        # Legende
-        legend = ax.legend(loc='upper right', fontsize=8, ncol=2,
-                          facecolor='#313244', labelcolor='#cdd6f4', 
-                          edgecolor='#45475a', markerscale=3)
+        # Ajuster les limites des axes avec une marge de 5%
+        x_margin = (embedding[:, 0].max() - embedding[:, 0].min()) * 0.05
+        y_margin = (embedding[:, 1].max() - embedding[:, 1].min()) * 0.05
+        ax.set_xlim(embedding[:, 0].min() - x_margin, embedding[:, 0].max() + x_margin)
+        ax.set_ylim(embedding[:, 1].min() - y_margin, embedding[:, 1].max() + y_margin)
+        
+        # Legende optimisée - en dehors du graphique ou compacte
+        if n_clusters <= 15:
+            legend = ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5), 
+                              fontsize=9, ncol=1,
+                              facecolor='#313244', labelcolor='#cdd6f4', 
+                              edgecolor='#45475a', markerscale=2.5,
+                              framealpha=0.95)
+        else:
+            # Si trop de clusters, legende compacte en bas
+            legend = ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.08),
+                              fontsize=7, ncol=min(n_clusters, 10),
+                              facecolor='#313244', labelcolor='#cdd6f4', 
+                              edgecolor='#45475a', markerscale=2,
+                              framealpha=0.95)
         
         self.canvas.fig.patch.set_facecolor('#1e1e2e')
-        self.canvas.fig.tight_layout()
+        self.canvas.fig.tight_layout(pad=2.0)
         self.canvas.draw()
         
     def _plot_umap(self):
@@ -3630,6 +4578,9 @@ class FlowSOMApp(QMainWindow):
         """Remplit la liste des clusters apres l'analyse."""
         if not self.result or self.cluster_list is None:
             return
+        
+        # Bloquer les signaux pendant le remplissage pour eviter les appels en cascade
+        self.cluster_list.blockSignals(True)
             
         n_clusters = self.result['n_clusters']
         self.cluster_list.clear()
@@ -3645,10 +4596,12 @@ class FlowSOMApp(QMainWindow):
             item = QListWidgetItem(f"Cluster {i} ({n_cells:,} - {pct:.1f}%)")
             item.setData(Qt.UserRole, i)
             self.cluster_list.addItem(item)
-            
-        # Selectionner le premier par defaut
-        if n_clusters > 0:
-            self.cluster_list.setCurrentRow(0)
+        
+        # Reactiver les signaux
+        self.cluster_list.blockSignals(False)
+        
+        # Ne pas selectionner automatiquement - laisser l'utilisateur choisir
+        # Cela evite de bloquer l'interface avec les visualisations lourdes
         
     def _select_all_clusters(self):
         """Selectionne le premier cluster."""
@@ -3691,12 +4644,20 @@ class FlowSOMApp(QMainWindow):
         
     def _on_cluster_selection_changed(self):
         """Callback quand la selection de clusters change."""
+        # Activer le bouton MST si un cluster est selectionne
+        if hasattr(self, 'btn_generate_mst') and self.btn_generate_mst is not None:
+            has_selection = len(self.cluster_list.selectedItems()) > 0 if self.cluster_list else False
+            self.btn_generate_mst.setEnabled(has_selection)
+        
+        # Appeler uniquement les visualisations legeres
         self._update_star_plot()
         self._update_cluster_comparison()
-        self._update_fsom_stars_mst()
+        # Ne PAS appeler _update_fsom_stars_mst automatiquement car c'est tres lourd
+        # L'utilisateur peut le generer manuellement via le bouton
+        self._show_mst_placeholder()
         
     def _update_star_plot(self):
-        """Met a jour le Star Plot pour le cluster selectionne."""
+        """Met a jour le Star Plot pour le cluster selectionne (version legere)."""
         if not self.result or self.cluster_list is None:
             return
             
@@ -3709,9 +4670,7 @@ class FlowSOMApp(QMainWindow):
         cluster_id = selected_items[0].data(Qt.UserRole)
         
         try:
-            fsom = self.result['fsom']
             cell_data = self.result['cell_data']
-            n_clusters = self.result['n_clusters']
             
             # Calculer les infos du cluster
             metaclustering = cell_data.obs['metaclustering'].values
@@ -3723,48 +4682,9 @@ class FlowSOMApp(QMainWindow):
                 f"Cluster {cluster_id}: {n_cells_cluster:,} cellules ({pct:.2f}%)"
             )
             
-            # Generer le Star Plot avec FlowSOM
+            # Utiliser directement le graphique radar manuel (beaucoup plus leger)
             self.star_canvas.clear_figure()
-            
-            # Creer un subset pour ce cluster
-            cluster_mask = cell_data.obs['metaclustering'] == cluster_id
-            
-            # Utiliser fs.pl.plot_stars pour generer le plot
-            try:
-                # Creer le subset FlowSOM
-                fsom_subset = fsom.subset(cluster_mask)
-                
-                # Generer la figure avec FlowSOM
-                fig = fs.pl.plot_stars(
-                    fsom_subset, 
-                    background_values=fsom_subset.get_cluster_data().obs.metaclustering,
-                    return_fig=True
-                )
-                
-                # Sauvegarder temporairement et recharger
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                    tmp_path = tmp.name
-                    fig.savefig(tmp_path, dpi=120, bbox_inches='tight', 
-                               facecolor='white', edgecolor='none')
-                    plt.close(fig)
-                
-                # Charger dans le canvas
-                img = plt.imread(tmp_path)
-                ax = self.star_canvas.fig.add_subplot(111)
-                ax.imshow(img)
-                ax.axis('off')
-                ax.set_title(f'Star Plot - Cluster {cluster_id}', 
-                            color='#cdd6f4', fontsize=12, fontweight='bold', pad=10)
-                
-                # Nettoyer
-                try:
-                    os.unlink(tmp_path)
-                except:
-                    pass
-                    
-            except Exception as e:
-                # Fallback: dessiner un graphique radar manuel
-                self._draw_manual_star_plot(cluster_id)
+            self._draw_manual_star_plot(cluster_id)
             
             self.star_canvas.fig.patch.set_facecolor('#1e1e2e')
             self.star_canvas.fig.tight_layout()
@@ -3878,9 +4798,9 @@ class FlowSOMApp(QMainWindow):
             x = np.arange(len(markers))
             width = 0.35
             
-            bars1 = ax.bar(x - width/2, healthy_means, width, label='Sain', 
+            bars1 = ax.bar(x - width/2, healthy_means, width, label='NBM', 
                           color='#a6e3a1', edgecolor='white', linewidth=0.5)
-            bars2 = ax.bar(x + width/2, patho_means, width, label='Pathologique', 
+            bars2 = ax.bar(x + width/2, patho_means, width, label='Patient', 
                           color='#f38ba8', edgecolor='white', linewidth=0.5)
             
             ax.set_xlabel('Marqueur', color='#cdd6f4', fontsize=10)
@@ -3910,6 +4830,30 @@ class FlowSOMApp(QMainWindow):
             
         self.cluster_canvas.draw()
     
+    def _show_mst_placeholder(self):
+        """Affiche un placeholder pour le MST (generation a la demande)."""
+        if self.fsom_stars_canvas is None:
+            return
+        
+        self.fsom_stars_canvas.clear_figure()
+        ax = self.fsom_stars_canvas.fig.add_subplot(111)
+        
+        selected_items = self.cluster_list.selectedItems() if self.cluster_list else []
+        if selected_items:
+            cluster_id = selected_items[0].data(Qt.UserRole)
+            ax.text(0.5, 0.5, f"MST pour Cluster {cluster_id}\n\nCliquez sur 'Generer MST' pour afficher",
+                   transform=ax.transAxes, ha='center', va='center',
+                   color='#a6adc8', fontsize=11)
+        else:
+            ax.text(0.5, 0.5, "Selectionnez un cluster",
+                   transform=ax.transAxes, ha='center', va='center',
+                   color='#a6adc8', fontsize=11)
+        
+        ax.set_facecolor('#1e1e2e')
+        self.fsom_stars_canvas.fig.patch.set_facecolor('#1e1e2e')
+        ax.axis('off')
+        self.fsom_stars_canvas.draw()
+
     def _update_fsom_stars_mst(self):
         """
         Met a jour l'image FlowSOM Stars MST pour le cluster selectionne.
@@ -4028,148 +4972,6 @@ class FlowSOMApp(QMainWindow):
             return X
     
     # =========================================================================
-    # METHODES SCORE LSC
-    # =========================================================================
-    
-    def _calculate_lsc_score(self):
-        """Calcule et affiche le score LSC."""
-        if not self.result:
-            return
-            
-        try:
-            cell_data = self.result['cell_data']
-            var_names = self.result.get('var_names', list(cell_data.var_names))
-            
-            X = cell_data.X
-            if hasattr(X, 'toarray'):
-                X = X.toarray()
-            
-            # Calculer le score
-            calculator = LSCScoreCalculator(var_names)
-            self.lsc_result = calculator.calculate_lsc_score(X)
-            
-            # Mettre a jour l'affichage
-            lsc_pct = self.lsc_result['lsc_percentage']
-            self.lbl_lsc_score.setText(f"Score LSC: {lsc_pct:.2f}%")
-            
-            # Colorer selon le niveau de risque
-            if lsc_pct < 0.1:
-                color = "#a6e3a1"  # Vert - faible
-                risk = "Faible"
-            elif lsc_pct < 1.0:
-                color = "#f9e2af"  # Jaune - modere
-                risk = "Modere"
-            else:
-                color = "#f38ba8"  # Rouge - eleve
-                risk = "Eleve"
-                
-            self.lbl_lsc_score.setStyleSheet(f"""
-                font-size: 12pt;
-                font-weight: bold;
-                color: {color};
-                background: rgba({int(color[1:3], 16)}, {int(color[3:5], 16)}, {int(color[5:7], 16)}, 0.15);
-                padding: 10px;
-                border-radius: 8px;
-            """)
-            
-            self._log(f"Score LSC calcule: {lsc_pct:.2f}% (Risque {risk})")
-            self._log(f"   Marqueurs detectes: {', '.join(self.lsc_result['available_markers'])}")
-            if self.lsc_result['missing_markers']:
-                self._log(f"   Marqueurs manquants: {', '.join(self.lsc_result['missing_markers'])}")
-            
-            # Mettre a jour l'onglet LSC
-            self._update_lsc_tab()
-            
-        except Exception as e:
-            self._log(f"Erreur calcul LSC: {str(e)}")
-            
-    def _update_lsc_tab(self):
-        """Met a jour l'onglet Score LSC."""
-        if not self.lsc_result or self.table_lsc is None:
-            return
-            
-        # Remplir le tableau
-        self.table_lsc.setRowCount(6)
-        
-        rows = [
-            ("Pourcentage LSC", f"{self.lsc_result['lsc_percentage']:.3f}%"),
-            ("CD34+ (%)", f"{self.lsc_result['cd34_pos_percentage']:.2f}%"),
-            ("CD38- parmi CD34+ (%)", f"{self.lsc_result['cd38_neg_percentage']:.2f}%"),
-            ("CD123+ parmi CD34+/CD38- (%)", f"{self.lsc_result['cd123_pos_percentage']:.2f}%"),
-            ("Marqueurs detectes", ", ".join(self.lsc_result['available_markers'])),
-            ("Marqueurs manquants", ", ".join(self.lsc_result['missing_markers']) or "Aucun")
-        ]
-        
-        for i, (param, val) in enumerate(rows):
-            self.table_lsc.setItem(i, 0, QTableWidgetItem(param))
-            self.table_lsc.setItem(i, 1, QTableWidgetItem(val))
-        
-        # Dessiner le graphique de composition
-        self._draw_lsc_composition()
-        
-    def _draw_lsc_composition(self):
-        """Dessine le graphique de composition des populations LSC."""
-        if self.lsc_canvas is None:
-            return
-        self.lsc_canvas.clear_figure()
-        
-        if not self.lsc_result or not self.result:
-            return
-        
-        try:
-            cell_data = self.result['cell_data']
-            n_cells = cell_data.shape[0]
-            
-            # Donnes pour le pie chart
-            lsc_count = self.lsc_result['lsc_mask'].sum()
-            other_count = n_cells - lsc_count
-            
-            ax = self.lsc_canvas.fig.add_subplot(121)
-            
-            sizes = [lsc_count, other_count]
-            labels = [f'LSC\n({lsc_count:,})', f'Autres\n({other_count:,})']
-            colors_pie = ['#f38ba8', '#89b4fa']
-            explode = (0.05, 0)
-            
-            ax.pie(sizes, explode=explode, labels=labels, colors=colors_pie,
-                   autopct='%1.2f%%', shadow=True, startangle=90,
-                   textprops={'color': '#cdd6f4', 'fontsize': 10})
-            ax.set_title('Population LSC', color='#cdd6f4', fontsize=12, fontweight='bold')
-            
-            # Graphique en barres des marqueurs
-            ax2 = self.lsc_canvas.fig.add_subplot(122)
-            
-            markers = ['CD34+', 'CD38-\n(de CD34+)', 'CD123+\n(de CD34+/CD38-)']
-            values = [
-                self.lsc_result['cd34_pos_percentage'],
-                self.lsc_result['cd38_neg_percentage'],
-                self.lsc_result['cd123_pos_percentage']
-            ]
-            colors_bar = ['#94e2d5', '#f9e2af', '#cba6f7']
-            
-            bars = ax2.bar(markers, values, color=colors_bar, edgecolor='white', linewidth=0.5)
-            
-            for bar, val in zip(bars, values):
-                ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
-                        f'{val:.1f}%', ha='center', va='bottom', color='#cdd6f4', fontsize=9)
-            
-            ax2.set_ylabel('Pourcentage (%)', color='#cdd6f4')
-            ax2.set_title('Hierarchie LSC', color='#cdd6f4', fontsize=12, fontweight='bold')
-            ax2.tick_params(colors='#cdd6f4')
-            ax2.set_facecolor('#1e1e2e')
-            ax2.spines['bottom'].set_color('#45475a')
-            ax2.spines['left'].set_color('#45475a')
-            ax2.spines['top'].set_visible(False)
-            ax2.spines['right'].set_visible(False)
-            
-            self.lsc_canvas.fig.patch.set_facecolor('#1e1e2e')
-            self.lsc_canvas.fig.tight_layout()
-            self.lsc_canvas.draw()
-            
-        except Exception as e:
-            self._log(f"Erreur graphique LSC: {str(e)}")
-    
-    # =========================================================================
     # METHODES SUIVI PATIENT
     # =========================================================================
     
@@ -4212,7 +5014,9 @@ class FlowSOMApp(QMainWindow):
         self._save_patients_to_disk()
         
         self._log(f"Timepoint {timepoint} sauvegarde pour patient {patient_id}")
-        self._update_patient_timeline()
+        # Mettre a jour la timeline si current_patient existe
+        if self.current_patient:
+            self._update_patient_timeline({'timepoints': list(self.current_patient.timepoints.values()), 'patient_id': patient_id})
         
         QMessageBox.information(self, "Succes", f"Timepoint {timepoint} sauvegarde!")
         
@@ -4233,7 +5037,9 @@ class FlowSOMApp(QMainWindow):
                 self.current_patient = patient
                 self.edit_patient_id.setText(patient.patient_id)
                 
-                self._update_patient_timeline()
+                # Convertir les timepoints pour la mise a jour
+                tp_list = [{'id': tid, 'date': tp.get('date', ''), 'files_analyzed': tp.get('files', []), 'n_clusters': tp.get('results', {}).get('n_clusters', 0), 'notes': tp.get('notes', '')} for tid, tp in patient.timepoints.items()]
+                self._update_patient_timeline({'timepoints': tp_list, 'patient_id': patient.patient_id})
                 self._log(f"Historique patient {patient.patient_id} charge ({len(patient.timepoints)} timepoints)")
                 
             except Exception as e:
@@ -4241,19 +5047,19 @@ class FlowSOMApp(QMainWindow):
                 
     def _save_patients_to_disk(self):
         """Sauvegarde tous les patients sur disque."""
+        data_folder = self._get_patient_data_folder()
         for patient_id, patient in self.patients_db.items():
             try:
-                filename = f"patient_{patient_id.replace(' ', '_')}.json"
-                filepath = Path.home() / ".flowsom_patients" / filename
-                filepath.parent.mkdir(exist_ok=True)
+                filename = f"{patient_id.replace(' ', '_')}.json"
+                filepath = data_folder / filename
                 
                 with open(filepath, 'w', encoding='utf-8') as f:
                     json.dump(patient.to_dict(), f, indent=2, ensure_ascii=False)
             except Exception as e:
                 self._log(f"Erreur sauvegarde patient {patient_id}: {str(e)}")
                 
-    def _update_patient_timeline(self):
-        """Met a jour l'affichage de la timeline patient."""
+    def _update_patient_timeline_from_current(self):
+        """Met a jour l'affichage de la timeline patient depuis current_patient."""
         if not self.current_patient or self.patient_timeline is None:
             return
         
@@ -4363,14 +5169,14 @@ class FlowSOMApp(QMainWindow):
             
             # Figure principale
             with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                self.canvas.fig.savefig(tmp.name, dpi=150, bbox_inches='tight',
+                self.canvas.fig.savefig(tmp.name, dpi=800, bbox_inches='tight',
                                        facecolor='white', edgecolor='none')
                 fig_paths.append(tmp.name)
             
             # Figure LSC si disponible
             if self.lsc_result and hasattr(self, 'lsc_canvas') and self.lsc_canvas:
                 with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                    self.lsc_canvas.fig.savefig(tmp.name, dpi=150, bbox_inches='tight',
+                    self.lsc_canvas.fig.savefig(tmp.name, dpi=800, bbox_inches='tight',
                                                facecolor='white', edgecolor='none')
                     fig_paths.append(tmp.name)
             
