@@ -3003,9 +3003,14 @@ class FlowSOMApp(QMainWindow):
                 color_data = X[:, color_idx]
             
             # Detecter si ce sont des coordonnees SOM (qui necessitent du jitter)
-            som_coord_cols = ['xgrid', 'ygrid', 'xnodes', 'ynodes']
-            is_som_x = x_marker.lower() in som_coord_cols
-            is_som_y = y_marker.lower() in som_coord_cols
+            som_grid_cols = ['xgrid', 'ygrid']  # Coordonnees grille (entieres)
+            som_nodes_cols = ['xnodes', 'ynodes']  # Coordonnees MST (continues)
+            is_grid_x = x_marker.lower() in som_grid_cols
+            is_grid_y = y_marker.lower() in som_grid_cols
+            is_nodes_x = x_marker.lower() in som_nodes_cols
+            is_nodes_y = y_marker.lower() in som_nodes_cols
+            is_som_x = is_grid_x or is_nodes_x
+            is_som_y = is_grid_y or is_nodes_y
             
             # Appliquer le jitter si demande et si ce sont des coordonnees SOM
             apply_jitter = hasattr(self, 'chk_fcs_jitter') and self.chk_fcs_jitter.isChecked()
@@ -3017,10 +3022,14 @@ class FlowSOMApp(QMainWindow):
                 # Angle aleatoire
                 theta = np.random.uniform(0, 2 * np.pi, n_points)
                 
-                # Amplitude du jitter
-                x_range = x_data.max() - x_data.min() if is_som_x else 1
-                y_range = y_data.max() - y_data.min() if is_som_y else 1
-                jitter_radius = 0.35 if max(x_range, y_range) < 20 else 0.15
+                # Amplitude du jitter selon le type de coordonnees (style Kaluza)
+                if is_grid_x or is_grid_y:
+                    # Pour la grille (valeurs entieres 0-10): rayon ~0.35 pour cercles bien separes
+                    jitter_radius = 0.35
+                else:
+                    # Pour les coordonnees MST (xNodes/yNodes echelle ~1000): rayon fixe petit
+                    # Kaluza utilise un jitter d'environ 20-25 unites sur echelle 1000
+                    jitter_radius = 20.0
                 
                 # Appliquer le jitter circulaire
                 if is_som_x:
