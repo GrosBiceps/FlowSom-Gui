@@ -57,3 +57,11 @@ patient_*.json
 # OS files
 .DS_Store
 Thumbs.db
+
+# Working/archived files
+Ajout.ipynb
+CHANGELOG_V1_to_V2.md
+Data/
+Last/
+output/
+FlowSOM_Analysis_Pipeline_MRD_Test.ipynb
