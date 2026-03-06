@@ -327,7 +327,7 @@ def select_cytometry_cols(
         keep_height=True → conserver les marqueurs se terminant par '-H' (Height).
         Les marqueurs sans suffixe -A/-H sont toujours conservés.
     """
-    exclude_additional = exclude_additional or []
+    exclude_additional = [ex for ex in (exclude_additional or []) if ex.strip()]
     scatter_prefixes = ("FSC", "SSC", "TIME", "TIME_")
 
     # ── Étape 1 : filtrage -A / -H (copie de la logique Section 8 du notebook) ──
