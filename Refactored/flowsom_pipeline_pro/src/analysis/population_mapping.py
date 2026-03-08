@@ -1,4 +1,4 @@
-"""
+﻿"""
 population_mapping.py â€” Assignation de populations aux nÅ“uds FlowSOM.
 
 Sections implÃ©mentÃ©es (fidÃ¨le au monolithe flowsom_pipeline.py) :
@@ -381,6 +381,9 @@ def extract_node_centroids_from_fcs(
 
             sample = fk.Sample(str(fcs_path))
             df_fcs = sample.as_dataframe(source="raw")
+            # flowkit retourne un MultiIndex (channel_id, label) -> aplatir en strings
+            if len(df_fcs.columns) > 0 and isinstance(df_fcs.columns[0], tuple):
+                df_fcs.columns = [c[0] for c in df_fcs.columns]
             _logger.info("FCS lu via flowkit: %d cellules, %d canaux", *df_fcs.shape)
         except Exception as exc2:
             raise RuntimeError(f"Impossible de lire {fcs_path}: {exc2}") from exc2
@@ -388,11 +391,16 @@ def extract_node_centroids_from_fcs(
     all_cols = list(df_fcs.columns)
 
     # â”€â”€ 2. VÃ©rification de la colonne nÅ“ud â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # fcswrite supprime les underscores : FlowSOM_cluster -> FlowSOMcluster
     if col_cluster not in all_cols:
-        raise ValueError(
-            f"Colonne '{col_cluster}' absente du FCS. "
-            f"Colonnes disponibles: {all_cols[:20]}..."
-        )
+        alt = col_cluster.replace("_", "")
+        if alt in all_cols:
+            col_cluster = alt
+        else:
+            raise ValueError(
+                f"Colonne '{col_cluster}' absente du FCS. "
+                f"Colonnes disponibles: {all_cols[:20]}..."
+            )
 
     # IDs nÅ“uds (1-indexÃ©s dans le FCS â†’ 0-indexÃ©s ici)
     node_ids_1indexed = df_fcs[col_cluster].to_numpy(dtype=np.int32)

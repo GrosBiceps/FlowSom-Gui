@@ -29,6 +29,7 @@ from .blast_detection import (
     categorize_blast_score,
     build_blast_score_dataframe,
     compute_reference_normalization,
+    build_weight_vector,
     BLAST_HIGH_THRESHOLD,
     BLAST_MODERATE_THRESHOLD,
 )
@@ -57,6 +58,7 @@ __all__ = [
     "categorize_blast_score",
     "build_blast_score_dataframe",
     "compute_reference_normalization",
+    "build_weight_vector",
     "BLAST_HIGH_THRESHOLD",
     "BLAST_MODERATE_THRESHOLD",
     # Statistics

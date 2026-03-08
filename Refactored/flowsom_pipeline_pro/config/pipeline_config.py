@@ -176,6 +176,7 @@ class PopulationMappingConfig:
     arcsinh_cofactor: float = 5.0
     apply_to_scatter: bool = False
     # Stats biologiques (Mahalanobis / KNN)
+    compute_population_stats: bool = True
     knn_sample_size: int = 2000
     knn_k: int = 15
     cov_reg_alpha: float = 1e-4
@@ -352,7 +353,7 @@ class PipelineConfig:
                 setattr(cfg.downsampling, attr, ds[attr])
 
         viz = raw.get("visualization", {})
-        for attr in ("save_plots", "plot_format", "dpi"):
+        for attr in ("save_plots", "umap_enabled", "plot_format", "dpi"):
             if attr in viz:
                 setattr(cfg.visualization, attr, viz[attr])
 
@@ -380,6 +381,7 @@ class PipelineConfig:
                 "transform_method",
                 "arcsinh_cofactor",
                 "apply_to_scatter",
+                "compute_population_stats",
                 "knn_sample_size",
                 "knn_k",
                 "cov_reg_alpha",

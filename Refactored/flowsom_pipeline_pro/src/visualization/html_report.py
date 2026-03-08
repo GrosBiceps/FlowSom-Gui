@@ -513,3 +513,41 @@ def generate_html_report(
         len(matplotlib_figures),
     )
     return True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Alias publics — compatibilité avec flowsom_pipeline.py
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def fig_to_base64(fig_mpl: Any) -> str:
+    """
+    Alias public de ``_fig_to_base64``.
+
+    Convertit une figure matplotlib en chaîne base64 PNG embarquable
+    directement dans un bloc HTML ``<img src="data:image/png;base64,...">``.
+
+    Args:
+        fig_mpl: Figure matplotlib.
+
+    Returns:
+        Chaîne base64 encodée (str).
+    """
+    return _fig_to_base64(fig_mpl)
+
+
+def plotly_to_html_div(fig_plotly: Any, fig_id: str = "") -> str:
+    """
+    Alias public de ``_plotly_to_html_div``.
+
+    Convertit une figure Plotly en div HTML auto-contenu (sans CDN externe),
+    prêt à être inséré dans un rapport HTML.
+
+    Args:
+        fig_plotly: Figure Plotly.
+        fig_id: Identifiant CSS optionnel du div englobant.
+
+    Returns:
+        Chaîne HTML contenant le div Plotly.
+    """
+    return _plotly_to_html_div(fig_plotly, fig_id)

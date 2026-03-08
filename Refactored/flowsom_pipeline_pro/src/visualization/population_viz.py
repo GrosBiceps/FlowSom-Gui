@@ -117,6 +117,7 @@ def plot_blast_radar(
     title: str = "Profils Blast — Radar Charts",
     output_dir: Optional[Path] = None,
     timestamp: str = "",
+    ref_profiles: Optional[Dict[str, "pd.Series"]] = None,
 ) -> Optional["go.Figure"]:
     """
     Radar (spider) charts : un subplot par nœud candidat blast.
@@ -132,6 +133,9 @@ def plot_blast_radar(
         title: Titre global.
         output_dir: Répertoire de sortie.
         timestamp: Suffixe du fichier.
+        ref_profiles: Dict optionnel {nom_population: pd.Series(valeurs_M8_normalisées)}
+                      pour superposer des profils de référence (Granulocytes, Lymphocytes…)
+                      sur chaque subplot radar.
 
     Returns:
         Figure Plotly.
@@ -207,6 +211,36 @@ def plot_blast_radar(
             row=r_idx,
             col=c_idx,
         )
+
+        # ── Superposition des profils de référence ────────────────────────────
+        if ref_profiles:
+            _ref_colors = ["#22c55e", "#3b82f6", "#f59e0b", "#a855f7"]
+            for _ri, (_ref_name, _ref_series) in enumerate(ref_profiles.items()):
+                _ref_markers = [c.replace("_M8", "") for c in marker_cols]
+                _ref_vals = []
+                for m in _ref_markers:
+                    _candidates = [k for k in _ref_series.index if m in k]
+                    _ref_vals.append(
+                        float(_ref_series[_candidates[0]]) if _candidates else 0.0
+                    )
+                _ref_closed = _ref_vals + [_ref_vals[0]]
+                fig.add_trace(
+                    go.Scatterpolar(
+                        r=_ref_closed,
+                        theta=theta,
+                        mode="lines",
+                        name=_ref_name if i == 0 else None,
+                        line=dict(
+                            color=_ref_colors[_ri % len(_ref_colors)],
+                            width=1.5,
+                            dash="dot",
+                        ),
+                        opacity=0.75,
+                        showlegend=(i == 0),
+                    ),
+                    row=r_idx,
+                    col=c_idx,
+                )
 
     fig.update_layout(
         title=dict(text=title, x=0.5),
@@ -991,3 +1025,340 @@ def _save_html(
     fig.write_html(str(dest), include_plotlyjs=include_plotlyjs)
     _logger.info("Sauvegardé: %s", dest)
     return dest
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Utilitaires — profil MFI moyen et z-score DataFrame
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def get_mean_profile(
+    node_ids: List[int],
+    mfi_df: pd.DataFrame,
+    node_count_raw: Optional[np.ndarray] = None,
+) -> Optional[pd.Series]:
+    """
+    Profil MFI moyen pondéré par la taille des nœuds SOM spécifiés.
+
+    Utilisé dans la sous-classification lymphocytaire (T_NK vs lymphocytes B)
+    pour choisir le profil de référence le plus représentatif.
+
+    Args:
+        node_ids: Indices des nœuds à moyenner (0-indexés dans mfi_df).
+        mfi_df: DataFrame [n_nodes × n_markers] avec les MFI des nœuds.
+        node_count_raw: Taille brute de chaque nœud sous forme de vecteur
+                        (n_nodes,). Si None, tous les nœuds sont pondérés
+                        uniformément.
+
+    Returns:
+        pd.Series de shape (n_markers,) avec les MFI pondérées,
+        ou None si aucun node_id n'est valide.
+    """
+    valid_ids = [i for i in node_ids if 0 <= i < len(mfi_df)]
+    if not valid_ids:
+        return None
+
+    sub = mfi_df.iloc[valid_ids]
+
+    if node_count_raw is not None:
+        raw_weights = np.array([node_count_raw[i] for i in valid_ids], dtype=np.float64)
+        weights = np.maximum(raw_weights, 1.0)
+        weighted_mean = np.average(
+            sub.values.astype(np.float64), axis=0, weights=weights
+        )
+    else:
+        weighted_mean = sub.mean(axis=0).values.astype(np.float64)
+
+    return pd.Series(weighted_mean, index=sub.columns)
+
+
+def zscore_df(df: pd.DataFrame, ddof: int = 1) -> pd.DataFrame:
+    """
+    Z-score par colonne d'un DataFrame.
+
+    Standardise chaque marqueur (colonne) pour avoir μ=0 et σ=1.
+    Les colonnes de variance nulle sont renvoyées à 0.
+
+    Args:
+        df: DataFrame numérique [n_rows × n_cols].
+        ddof: Degrés de liberté pour l'écart-type (défaut 1 = σ empirique).
+
+    Returns:
+        DataFrame de même shape et index/colonnes avec les z-scores.
+    """
+    mu = df.mean(axis=0)
+    sig = df.std(axis=0, ddof=ddof).replace(0.0, 1.0)
+    return (df - mu) / sig
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  §10.5 — Vérification biologique des nœuds Lymphocytes bruts
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Jeux de labels pour la classification lymphocytaire
+_LYMPHO_GENERIC: set = {"Lymphos", "Lymphocytes", "Lympho", "Lymphs"}
+_LYTNK_LABELS: set = {"Ly T_NK", "Lymphos T", "Lymphos T/NK", "T_NK", "T NK"}
+_LYMPHOB_LABELS: set = {"Lymphos B", "Lymphocytes B", "B cells", "B lymphocytes"}
+
+
+def plot_lympho_verification(
+    mapping_df: pd.DataFrame,
+    node_mfi_df: pd.DataFrame,
+    node_counts: Any,
+    mc_per_node: Any,
+    map_name: str,
+    output_dir: Optional[Path],
+    timestamp: str = "",
+) -> Optional["go.Figure"]:
+    """
+    §10.5 — Vérification biologique des nœuds 'Lymphocytes bruts'.
+
+    Les nœuds étiquetés comme lymphocytes génériques (ex: "Lymphos") devraient
+    contenir à la fois des sous-populations T/NK et B.  Cette fonction utilise
+    la distance cosinus pour classifier chaque nœud lympho générique comme
+    T/NK-like ou B-like par rapport aux profils de référence extraits du mapping.
+
+    Génère lympho_verification_{timestamp}.html avec une heatmap z-score MFI.
+
+    Args:
+        mapping_df: DataFrame du meilleur mapping population→nœud, avec colonnes
+                    'node_id' et 'assigned_pop'.
+        node_mfi_df: DataFrame MFI [n_nodes × n_markers] (centroïdes SOM).
+        node_counts: Taille de chaque nœud (np.ndarray ou dict {node_id: n}).
+        mc_per_node: Métacluster par nœud (np.ndarray ou dict {node_id: mc}).
+        map_name: Nom de la méthode de mapping (pour le titre).
+        output_dir: Répertoire de sauvegarde HTML (None = pas de sauvegarde).
+        timestamp: Suffixe de nom de fichier.
+
+    Returns:
+        Figure Plotly (heatmap z-score) ou None si plotly absent / données insuffisantes.
+    """
+    if not _PLOTLY_AVAILABLE:
+        return None
+
+    from scipy.spatial.distance import cosine as cosine_dist
+
+    # ── Normalisation de node_counts / mc_per_node en dict ───────────────────
+    def _to_count_dict(source: Any, n_nodes: int) -> Dict[int, int]:
+        if isinstance(source, dict):
+            return {int(k): int(v) for k, v in source.items()}
+        if source is not None:
+            try:
+                arr = np.asarray(source).ravel()
+                return {i: int(arr[i]) for i in range(len(arr))}
+            except Exception:
+                pass
+        return {i: 1 for i in range(n_nodes)}
+
+    n_nodes = len(node_mfi_df)
+    cnt_dict = _to_count_dict(node_counts, n_nodes)
+
+    # ── Extraire les nœuds par catégorie depuis mapping_df ───────────────────
+    if "node_id" not in mapping_df.columns or "assigned_pop" not in mapping_df.columns:
+        _logger.warning(
+            "plot_lympho_verification: colonnes node_id/assigned_pop manquantes."
+        )
+        return None
+
+    def _nodes_for_labels(label_set: set) -> List[int]:
+        mask = mapping_df["assigned_pop"].apply(
+            lambda p: any(lbl.lower() in str(p).lower() for lbl in label_set)
+        )
+        return [int(nid) for nid in mapping_df.loc[mask, "node_id"].values]
+
+    generic_nodes = _nodes_for_labels(_LYMPHO_GENERIC)
+    tnk_ref_nodes = _nodes_for_labels(_LYTNK_LABELS)
+    b_ref_nodes = _nodes_for_labels(_LYMPHOB_LABELS)
+
+    # ── Cas : tout déjà sous-classifié ───────────────────────────────────────
+    if not generic_nodes:
+        _logger.info(
+            "[lympho_verification] Tous les lymphocytes sont déjà sous-classifiés "
+            "(T_NK / B) — aucune vérification nécessaire."
+        )
+        return None
+
+    _logger.info(
+        "[lympho_verification] %d nœud(s) lympho générique(s) à vérifier "
+        "| %d réf T/NK | %d réf B",
+        len(generic_nodes),
+        len(tnk_ref_nodes),
+        len(b_ref_nodes),
+    )
+
+    # ── Profils de référence pondérés ────────────────────────────────────────
+    node_count_arr: Optional[np.ndarray] = None
+    if node_counts is not None:
+        try:
+            node_count_arr = np.asarray(node_counts).ravel()
+        except Exception:
+            pass
+
+    prof_tnk = get_mean_profile(tnk_ref_nodes, node_mfi_df, node_count_arr)
+    prof_b = get_mean_profile(b_ref_nodes, node_mfi_df, node_count_arr)
+
+    # ── Classification de chaque nœud générique ──────────────────────────────
+    results: List[Dict] = []
+    for nid in generic_nodes:
+        if nid < 0 or nid >= n_nodes:
+            continue
+        profile_node = node_mfi_df.iloc[nid].values.astype(float)
+        n_cells = cnt_dict.get(nid, 1)
+
+        d_tnk: Optional[float] = None
+        d_b: Optional[float] = None
+
+        if prof_tnk is not None:
+            ref_tnk = prof_tnk.values.astype(float)
+            try:
+                d_tnk = float(cosine_dist(profile_node, ref_tnk))
+            except Exception:
+                d_tnk = None
+
+        if prof_b is not None:
+            ref_b = prof_b.values.astype(float)
+            try:
+                d_b = float(cosine_dist(profile_node, ref_b))
+            except Exception:
+                d_b = None
+
+        # Décision : argmin(d_T, d_B) avec seuil d'indétermination 0.05
+        _INDETERMINATE_THRESHOLD = 0.05
+        if d_tnk is None and d_b is None:
+            decision = "Indéterminé"
+        elif d_tnk is None:
+            decision = "Lymphos B probable"
+        elif d_b is None:
+            decision = "Ly T_NK probable"
+        else:
+            diff = abs(d_tnk - d_b)
+            if diff < _INDETERMINATE_THRESHOLD:
+                decision = "Indéterminé"
+            elif d_tnk < d_b:
+                decision = "Ly T_NK probable"
+            else:
+                decision = "Lymphos B probable"
+
+        results.append(
+            {
+                "node_id": nid,
+                "n_cells": n_cells,
+                "d_tnk": d_tnk,
+                "d_b": d_b,
+                "decision": decision,
+            }
+        )
+
+    # ── Résumé et alertes cliniques ──────────────────────────────────────────
+    n_tnk_like = sum(1 for r in results if r["decision"] == "Ly T_NK probable")
+    n_b_like = sum(1 for r in results if r["decision"] == "Lymphos B probable")
+    n_indet = sum(1 for r in results if r["decision"] == "Indéterminé")
+
+    _logger.info(
+        "[lympho_verification] Résultat — T/NK-like: %d | B-like: %d | Indéterminé: %d",
+        n_tnk_like,
+        n_b_like,
+        n_indet,
+    )
+
+    # Alertes cliniques
+    if n_tnk_like > 0 and n_b_like > 0:
+        _logger.info(
+            "[lympho_verification] ✅ ATTENDU : lymphocytes T et B co-localisés dans "
+            "les nœuds génériques (SOM a correctement regroupé les deux lignées)."
+        )
+    elif n_b_like > 0 and n_tnk_like == 0:
+        _logger.warning(
+            "[lympho_verification] ⚠️  ALERTE : uniquement des nœuds B-like détectés "
+            "parmi les lymphos génériques — vérifier la représentation CD3/CD7."
+        )
+    elif n_tnk_like > 0 and n_b_like == 0:
+        _logger.warning(
+            "[lympho_verification] ⚠️  ALERTE : uniquement des nœuds T/NK-like détectés "
+            "parmi les lymphos génériques — vérifier CD19 et représentation B dans l'échantillon."
+        )
+
+    # ── Construction de la heatmap z-score ───────────────────────────────────
+    marker_cols = list(node_mfi_df.columns)
+
+    # Construire le DataFrame de toutes les lignes à afficher
+    rows_data: List[np.ndarray] = []
+    row_labels: List[str] = []
+
+    # Lignes de référence (en premier)
+    if prof_tnk is not None:
+        rows_data.append(prof_tnk.values.astype(float))
+        row_labels.append("◀ Ly T_NK (réf)")
+    if prof_b is not None:
+        rows_data.append(prof_b.values.astype(float))
+        row_labels.append("◀ Lymphos B (réf)")
+
+    # Lignes des nœuds génériques
+    for r in sorted(results, key=lambda x: -x["n_cells"]):
+        nid = r["node_id"]
+        icon = (
+            "🟣"
+            if r["decision"] == "Ly T_NK probable"
+            else ("🔵" if r["decision"] == "Lymphos B probable" else "⚪")
+        )
+        label = f"{icon} Node {nid} ({r['n_cells']} cells) → {r['decision']}"
+        rows_data.append(node_mfi_df.iloc[nid].values.astype(float))
+        row_labels.append(label)
+
+    if not rows_data:
+        return None
+
+    mat = np.array(rows_data)  # shape (n_rows, n_markers)
+
+    # Z-score par colonne sur l'ensemble des lignes (ref + génériques)
+    col_mean = mat.mean(axis=0)
+    col_std = mat.std(axis=0)
+    col_std[col_std == 0] = 1.0
+    Z = (mat - col_mean) / col_std
+
+    # Annotations : valeurs z-score arrondies
+    annotations = []
+    for i in range(Z.shape[0]):
+        for j in range(Z.shape[1]):
+            annotations.append(
+                dict(
+                    x=marker_cols[j],
+                    y=row_labels[i],
+                    text=f"{Z[i, j]:.1f}",
+                    font=dict(size=9, color="black"),
+                    showarrow=False,
+                )
+            )
+
+    n_rows_fig = len(row_labels)
+    height = max(400, n_rows_fig * 45 + 200)
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=Z,
+            x=marker_cols,
+            y=row_labels,
+            colorscale="RdBu_r",
+            zmid=0.0,
+            colorbar=dict(title="z-score MFI"),
+            hoverongaps=False,
+        )
+    )
+    fig.update_layout(
+        annotations=annotations,
+        title=dict(
+            text=f"Vérification Lymphocytes — {map_name} | {timestamp}",
+            x=0.5,
+        ),
+        xaxis=dict(tickangle=-45),
+        height=height,
+        paper_bgcolor="#fafafa",
+        plot_bgcolor="#fafafa",
+        font=dict(color="#333333"),
+        margin=dict(l=300, r=80, t=100, b=130),
+    )
+
+    if output_dir is not None:
+        _save_html(fig, output_dir, f"lympho_verification_{timestamp}.html")
+
+    return fig

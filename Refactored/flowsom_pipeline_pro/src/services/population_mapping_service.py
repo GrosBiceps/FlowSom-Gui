@@ -448,6 +448,7 @@ class PopulationMappingService:
                 plot_blast_radar,
                 plot_blast_scores_bar,
                 plot_blast_fcs_source,
+                plot_lympho_verification,
                 plot_mst_interactive,
                 plot_som_grid_interactive,
                 plot_heatmap_comparative,
@@ -518,6 +519,24 @@ class PopulationMappingService:
                     result.figures_plotly["fig_mst"] = _fig_mst
             except Exception as exc:
                 _logger.warning("[§10.5] MST interactif échoué: %s", exc)
+
+        # ── §10.5 Vérification lymphocytes (T/NK vs B) ───────────────────────
+        if best_mapping is not None and result.node_mfi_df is not None:
+            _logger.info("[§10.5] Vérification sous-classification lymphocytaire...")
+            try:
+                _fig_lympho = plot_lympho_verification(
+                    mapping_df=best_mapping,
+                    node_mfi_df=node_mfi_aligned,
+                    node_counts=result.node_counts,
+                    mc_per_node=result.mc_per_node,
+                    map_name=result.method_used or "N/A",
+                    output_dir=output_dir,
+                    timestamp=timestamp,
+                )
+                if _fig_lympho is not None:
+                    result.figures_plotly["fig_lympho_verification"] = _fig_lympho
+            except Exception as exc:
+                _logger.warning("[§10.5] Vérification lymphocytes échouée: %s", exc)
 
         # ── §10.5b Grille SOM ScatterGL ───────────────────────────────────────
         if best_mapping is not None and cell_data is not None:

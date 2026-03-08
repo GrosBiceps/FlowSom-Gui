@@ -64,9 +64,9 @@ def phase1_silhouette_on_codebook(
         if k >= len(codebook):
             continue
         try:
-            labels = AgglomerativeClustering(
-                n_clusters=k, linkage="ward", random_state=seed
-            ).fit_predict(codebook)
+            labels = AgglomerativeClustering(n_clusters=k, linkage="ward").fit_predict(
+                codebook
+            )
             if len(np.unique(labels)) < 2:
                 scores[k] = -1.0
                 continue
@@ -127,49 +127,69 @@ def phase2_bootstrap_stability(
     if verbose:
         print(f"\n  Phase 2 — Stabilité bootstrap ({n_bootstrap} runs/k):")
 
+    # Sous-échantillon FIXE pour tous les runs (même cellules, seeds SOM différentes)
+    rng_fixed = np.random.default_rng(seed)
+    n_sample = min(sample_size, X.shape[0])
+    eval_idx = rng_fixed.choice(X.shape[0], size=n_sample, replace=False)
+    X_eval = X[eval_idx]
+
+    if verbose:
+        print(f"    Sous-échantillon fixe : {n_sample:,} cellules")
+
     for k in k_candidates:
-        ari_scores: List[float] = []
+        labels_all_runs: List[np.ndarray] = []
 
         for b in range(n_bootstrap):
-            rng = np.random.default_rng(seed + b * 1000)
-            n_sample = min(sample_size, X.shape[0])
-            idx = rng.choice(X.shape[0], size=n_sample, replace=False)
-            X_boot = X[idx]
-
             try:
-                adata = ad.AnnData(X_boot)
-                fsom_b = fs.FlowSOM(
-                    adata,
-                    cols_to_use=list(range(X_boot.shape[1])),
-                    xdim=xdim,
-                    ydim=ydim,
-                    n_clusters=k,
-                    seed=seed + b,
-                )
+                adata = ad.AnnData(X_eval.copy())
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore", category=FutureWarning, module="mudata"
+                    )
+                    warnings.filterwarnings(
+                        "ignore", category=FutureWarning, module="flowsom"
+                    )
+                    fsom_b = fs.FlowSOM(
+                        adata,
+                        cols_to_use=list(range(X_eval.shape[1])),
+                        xdim=xdim,
+                        ydim=ydim,
+                        n_clusters=k,
+                        seed=seed + 100 + b,  # Seed SOM différente à chaque run
+                    )
 
-                if hasattr(fsom_b, "obs") and "metaclustering" in fsom_b.obs.columns:
-                    labels_b = fsom_b.obs["metaclustering"].values
+                cell_data = fsom_b.get_cell_data()
+                if "metaclustering" in cell_data.obs.columns:
+                    labels_b = cell_data.obs["metaclustering"].values
+                    labels_all_runs.append(labels_b)
                 else:
-                    continue
-
-                if len(ari_scores) > 0:
-                    # ARI avec le run précédent (sur l'intersection des cellules)
-                    # Simplification: ARI sur ce run vs run précédent
-                    ari = adjusted_rand_score(labels_prev, labels_b)
-                    ari_scores.append(float(ari))
-
-                labels_prev = labels_b  # noqa: F841
+                    warnings.warn(
+                        f"    k={k}, bootstrap {b}: colonne 'metaclustering' absente"
+                    )
 
             except Exception as e:
                 warnings.warn(f"    k={k}, bootstrap {b}: échoué ({e})")
                 continue
+
+        # ARI pairwise entre toutes les paires de runs
+        ari_scores: List[float] = []
+        for i in range(len(labels_all_runs)):
+            for j in range(i + 1, len(labels_all_runs)):
+                try:
+                    ari = adjusted_rand_score(labels_all_runs[i], labels_all_runs[j])
+                    ari_scores.append(float(ari))
+                except Exception:
+                    pass
 
         stability = float(np.mean(ari_scores)) if ari_scores else 0.0
         stability_scores[k] = stability
 
         if verbose:
             ari_str = f"{stability:.3f}" if ari_scores else "N/A"
-            print(f"    k={k:3d}: stabilité ARI={ari_str}")
+            n_valid = len(labels_all_runs)
+            print(
+                f"    k={k:3d}: stabilité ARI={ari_str} ({n_valid}/{n_bootstrap} runs OK)"
+            )
 
     return stability_scores
 
@@ -287,7 +307,59 @@ def find_optimal_clusters(
         print(f"  AUTO-CLUSTERING: recherche k ∈ [{min_clusters}, {max_clusters}]")
         print(f"{'=' * 60}")
 
-    # Phase 1 : silhouette codebook (si disponible)
+    # Phase 0 : si codebook non fourni, entraîner un SOM de référence pour l'extraire.
+    # Le SOM est entraîné une seule fois (avec k=max_clusters), le codebook extrait,
+    # puis re-métaclustèré rapidement pour chaque k — pattern notebook de référence.
+    if codebook is None:
+        try:
+            import flowsom as fs
+            import anndata as ad
+
+            n_cells = X.shape[0]
+            # Sous-échantillon pour l'entraînement de référence (max 50k, quasi-instantané)
+            ref_size = min(50_000, n_cells)
+            rng_ref = np.random.default_rng(seed)
+            ref_idx = rng_ref.choice(n_cells, size=ref_size, replace=False)
+            X_ref = X[ref_idx]
+
+            if verbose:
+                print(
+                    f"\n  Phase 0 — Entraînement SOM de référence "
+                    f"({ref_size:,} cellules, k_max={max_clusters})..."
+                )
+
+            adata_ref = ad.AnnData(X_ref)
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=FutureWarning)
+                warnings.filterwarnings("ignore", category=UserWarning)
+                fsom_ref = fs.FlowSOM(
+                    adata_ref,
+                    cols_to_use=list(range(X_ref.shape[1])),
+                    xdim=xdim,
+                    ydim=ydim,
+                    n_clusters=max_clusters,
+                    seed=seed,
+                )
+
+                # Extraire le codebook DANS le bloc de suppression des warnings
+                raw_codebook = fsom_ref.get_cluster_data().X
+                if hasattr(raw_codebook, "toarray"):
+                    raw_codebook = raw_codebook.toarray()
+                codebook = np.nan_to_num(
+                    np.array(raw_codebook, dtype=np.float32), nan=0.0
+                )
+
+            if verbose:
+                print(
+                    f"  ✓ Codebook extrait : {codebook.shape[0]} nodes × "
+                    f"{codebook.shape[1]} marqueurs"
+                )
+
+        except Exception as e:
+            print(f"  [!] Phase 0 échouée ({type(e).__name__}: {e}) — Phase 1 ignorée")
+            codebook = None
+
+    # Phase 1 : silhouette sur codebook SOM (screening rapide, tous les k)
     if codebook is not None and len(codebook) >= min_clusters:
         silhouette_scores = phase1_silhouette_on_codebook(
             codebook, k_range, seed=seed, verbose=verbose

@@ -355,3 +355,16 @@ def detect_config_file(script_dir: Optional[Path] = None) -> Optional[str]:
         if candidate.exists():
             return str(candidate.resolve())
     return None
+
+
+def parse_arguments() -> "argparse.Namespace":
+    """
+    Construit le parser et parse sys.argv en une seule opération.
+
+    Alias de commodité équivalent à ``build_argument_parser().parse_args()``
+    utilisé par le point d'entrée CLI principal de ``flowsom_pipeline.py``.
+
+    Returns:
+        argparse.Namespace avec tous les arguments CLI résolus.
+    """
+    return build_argument_parser().parse_args()

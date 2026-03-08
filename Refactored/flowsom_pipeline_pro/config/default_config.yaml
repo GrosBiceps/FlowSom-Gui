@@ -30,8 +30,8 @@ pregate_advanced:
   cd34_ssc_max_percentile: 60.0
 
 flowsom:
-  xdim: 25
-  ydim: 25
+  xdim: 10
+  ydim: 10
   rlen: "auto"
   n_metaclusters: 8
   learning_rate: 0.05
@@ -42,7 +42,7 @@ flowsom:
 auto_clustering:
   enabled: false
   min_clusters: 5
-  max_clusters: 35
+  max_clusters: 20
   n_bootstrap: 10
   sample_size_bootstrap: 20000
   min_stability_threshold: 0.75
@@ -69,7 +69,7 @@ downsampling:
 
 visualization:
   save_plots: true
-  umap_enabled: true        # true = calculer UMAP après clustering
+  umap_enabled: false        # true = calculer UMAP après clustering
   plot_format: "png"        # png | pdf | svg
   dpi: 300
 
@@ -81,7 +81,7 @@ visualization:
     metacluster_dist:
       figsize: [14, 6]
     umap:
-      n_sample: 100000
+      n_sample: 10000
       point_size: 3
       alpha: 0.5
     gating:

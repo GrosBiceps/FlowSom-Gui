@@ -405,3 +405,44 @@ def trace_blast_cells_to_fcs_source(
     )
 
     return result_df
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Utilitaire — vecteur de poids depuis colonnes + dict
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def build_weight_vector(
+    cols: List[str],
+    weights: Dict[str, float],
+    default: float = 1.0,
+) -> np.ndarray:
+    """
+    Construit un vecteur numpy de poids aligné sur une liste de colonnes.
+
+    Utilisé pour les distances pondérées dans le mapping de populations :
+    chaque marqueur reçoit un poids depuis le dict ``weights``, ou
+    ``default`` s'il n'est pas présent.
+
+    Args:
+        cols: Liste ordonnée de noms de marqueurs.
+        weights: Dict {marqueur: poids}.
+        default: Poids par défaut si le marqueur est absent du dict (défaut 1.0).
+
+    Returns:
+        np.ndarray de shape (len(cols),) et dtype float64.
+
+    Example::
+
+        w = build_weight_vector(["CD34", "CD45", "SSC-A"],
+                                {"CD34": 3.0, "CD45": -2.0},
+                                default=0.5)
+        # array([ 3. , -2. ,  0.5])
+    """
+    return np.array([weights.get(c, default) for c in cols], dtype=np.float64)
+
+
+# Alias privé — compatibilité avec flowsom_pipeline.py (même logique que categorize_blast_score)
+def _categorize_blast(score: float) -> str:
+    """Alias interne de categorize_blast_score (même seuils ELN 2022)."""
+    return categorize_blast_score(score)

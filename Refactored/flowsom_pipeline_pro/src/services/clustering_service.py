@@ -279,15 +279,22 @@ def run_clustering(
 
     # Auto-clustering (trouver le k optimal)
     n_clusters = flowsom_cfg.n_metaclusters
-    if getattr(config.auto_clustering, "enabled", False) and n_clusters is None:
+    if getattr(config.auto_clustering, "enabled", False):
         _logger.info("Auto-clustering activé — recherche du k optimal...")
         n_clusters = find_optimal_clusters(
             X,
-            min_clusters=getattr(config.auto_clustering, "min_k", 5),
-            max_clusters=getattr(config.auto_clustering, "max_k", 35),
+            min_clusters=getattr(config.auto_clustering, "min_clusters", 5),
+            max_clusters=getattr(config.auto_clustering, "max_clusters", 35),
             n_bootstrap=getattr(config.auto_clustering, "n_bootstrap", 10),
             sample_size_bootstrap=getattr(
                 config.auto_clustering, "sample_size_bootstrap", 20_000
+            ),
+            min_stability_threshold=getattr(
+                config.auto_clustering, "min_stability_threshold", 0.75
+            ),
+            weight_stability=getattr(config.auto_clustering, "weight_stability", 0.65),
+            weight_silhouette=getattr(
+                config.auto_clustering, "weight_silhouette", 0.35
             ),
             xdim=flowsom_cfg.xdim,
             ydim=flowsom_cfg.ydim,

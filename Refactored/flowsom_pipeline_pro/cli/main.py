@@ -11,6 +11,7 @@ Orchestre :
 
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
 from pathlib import Path
@@ -178,3 +179,181 @@ def _build_config(args, config_path, logger):
 
 if __name__ == "__main__":
     main()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  _load_yaml_config — Mapper YAML → dict plat de clés argparse
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _load_yaml_config(config_path: str) -> dict:
+    """
+    Charge un fichier YAML et retourne un dict plat de clés argparse.
+
+    Toutes les sections du YAML de configuration (paths, analysis, pregate,
+    pregate_advanced, flowsom, auto_clustering, transform, normalize, markers,
+    downsampling, visualization, gpu) sont aplaties en un dict dont les clés
+    correspondent aux noms des arguments argparse du parser CLI.
+
+    Args:
+        config_path: Chemin vers le fichier YAML de configuration.
+
+    Returns:
+        Dict {cli_key: valeur} — vide si PyYAML absent ou fichier illisible.
+    """
+    try:
+        import yaml
+    except ImportError:
+        logging.getLogger("flowsom_pipeline_pro.cli").warning(
+            "PyYAML non installé — config YAML ignorée. (pip install pyyaml)"
+        )
+        return {}
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+
+    cfg: dict = {}
+
+    # ── paths ─────────────────────────────────────────────────────────────────
+    paths = raw.get("paths", {})
+    if paths.get("healthy_folder"):
+        cfg["healthy_folder"] = paths["healthy_folder"]
+    if paths.get("patho_folder"):
+        cfg["patho_folder"] = paths["patho_folder"]
+    if paths.get("output_dir"):
+        cfg["output"] = paths["output_dir"]
+
+    # ── analysis ─────────────────────────────────────────────────────────────
+    analysis = raw.get("analysis", {})
+    if "compare_mode" in analysis:
+        cfg["compare_mode"] = analysis["compare_mode"]
+
+    # ── pregate ──────────────────────────────────────────────────────────────
+    pregate = raw.get("pregate", {})
+    if "apply" in pregate:
+        cfg["apply_pregating"] = pregate["apply"]
+    if "mode" in pregate:
+        cfg["gating_mode"] = pregate["mode"]
+    if "mode_blastes_vs_normal" in pregate:
+        cfg["mode_blastes_vs_normal"] = pregate["mode_blastes_vs_normal"]
+    for k_yaml, k_cfg in (
+        ("viable", "pregate_viable"),
+        ("singlets", "pregate_singlets"),
+        ("cd45", "pregate_cd45"),
+        ("cd34", "pregate_cd34"),
+    ):
+        if k_yaml in pregate:
+            cfg[k_cfg] = pregate[k_yaml]
+
+    # ── pregate_advanced ─────────────────────────────────────────────────────
+    pg_adv = raw.get("pregate_advanced", {})
+    for k_yaml, k_cfg in (
+        ("debris_min_percentile", "debris_min_percentile"),
+        ("debris_max_percentile", "debris_max_percentile"),
+        ("doublets_ratio_min", "ratio_min"),
+        ("doublets_ratio_max", "ratio_max"),
+        ("cd45_threshold_percentile", "cd45_threshold_percentile"),
+        ("cd34_threshold_percentile", "cd34_threshold_percentile"),
+        ("cd34_use_ssc_filter", "use_ssc_filter_for_blasts"),
+        ("cd34_ssc_max_percentile", "ssc_max_percentile_blasts"),
+    ):
+        if k_yaml in pg_adv:
+            cfg[k_cfg] = pg_adv[k_yaml]
+
+    # ── flowsom ───────────────────────────────────────────────────────────────
+    fs = raw.get("flowsom", {})
+    for k in (
+        "xdim",
+        "ydim",
+        "n_metaclusters",
+        "learning_rate",
+        "sigma",
+        "n_iterations",
+        "seed",
+        "rlen",
+    ):
+        if k in fs:
+            cfg[k] = fs[k]
+
+    # ── auto_clustering ───────────────────────────────────────────────────────
+    ac = raw.get("auto_clustering", {})
+    if "enabled" in ac:
+        cfg["auto_cluster"] = ac["enabled"]
+    for k_yaml, k_cfg in (
+        ("min_clusters", "min_clusters_auto"),
+        ("max_clusters", "max_clusters_auto"),
+        ("n_bootstrap", "n_bootstrap"),
+        ("sample_size_bootstrap", "sample_size_bootstrap"),
+        ("min_stability_threshold", "min_stability_threshold"),
+        ("weight_stability", "w_stability"),
+        ("weight_silhouette", "w_silhouette"),
+    ):
+        if k_yaml in ac:
+            cfg[k_cfg] = ac[k_yaml]
+
+    # ── transform ─────────────────────────────────────────────────────────────
+    transform = raw.get("transform", {})
+    if "method" in transform:
+        cfg["transform"] = transform["method"]
+    if "cofactor" in transform:
+        cfg["cofactor"] = transform["cofactor"]
+    if "apply_to_scatter" in transform:
+        cfg["apply_to_scatter"] = transform["apply_to_scatter"]
+
+    # ── normalize ─────────────────────────────────────────────────────────────
+    normalize = raw.get("normalize", {})
+    if "method" in normalize:
+        cfg["normalize"] = normalize["method"]
+
+    # ── markers ───────────────────────────────────────────────────────────────
+    mk = raw.get("markers", {})
+    if "exclude_scatter" in mk:
+        cfg["exclude_scatter"] = mk["exclude_scatter"]
+    if "exclude_additional" in mk:
+        cfg["exclude_additional_markers"] = mk["exclude_additional"]
+
+    # ── downsampling ──────────────────────────────────────────────────────────
+    ds = raw.get("downsampling", {})
+    if "enabled" in ds:
+        cfg["downsample"] = ds["enabled"]
+    if "max_cells_per_file" in ds:
+        cfg["max_cells_per_file"] = ds["max_cells_per_file"]
+    if "max_cells_total" in ds:
+        cfg["max_cells_total"] = ds["max_cells_total"]
+
+    # ── visualization ─────────────────────────────────────────────────────────
+    viz = raw.get("visualization", {})
+    if "save_plots" in viz:
+        cfg["save_plots"] = viz["save_plots"]
+    if "plot_format" in viz:
+        cfg["plot_format"] = viz["plot_format"]
+    if "dpi" in viz:
+        cfg["dpi"] = viz["dpi"]
+
+    # ── gpu ───────────────────────────────────────────────────────────────────
+    gpu = raw.get("gpu", {})
+    if "enabled" in gpu:
+        cfg["use_gpu"] = gpu["enabled"]
+
+    return cfg
+
+
+def _get(args: "argparse.Namespace", yaml_cfg: dict, attr: str, default=None):
+    """
+    Résolution de priorité CLI → YAML → défaut.
+
+    Retourne la valeur CLI si non-None, sinon la valeur YAML, sinon ``default``.
+
+    Args:
+        args: Namespace argparse.
+        yaml_cfg: Dict plat retourné par _load_yaml_config().
+        attr: Nom de l'attribut CLI / clé YAML.
+        default: Valeur par défaut si absent des deux sources.
+
+    Returns:
+        Valeur résolue selon la priorité CLI > YAML > default.
+    """
+    cli_val = getattr(args, attr, None)
+    if cli_val is not None:
+        return cli_val
+    return yaml_cfg.get(attr, default)

@@ -280,6 +280,137 @@ class FlowSOMPipeline:
                     _logger.info("SOM Grid Plotly sauvegardé.")
                 except Exception as _e:
                     _logger.warning("SOM Grid Plotly échoué (non bloquant): %s", _e)
+
+            # ── Star Chart FlowSOM (§13) ──────────────────────────────────────
+            # fs.pl.plot_stars requiert un objet fs.FlowSOM natif (CPU uniquement).
+            # Pour le backend GPU on utilise plot_star_chart_custom (matplotlib pur).
+            if viz_save:
+                try:
+                    _fsom_native = getattr(clusterer, "_fsom_model", None)
+                    _used_gpu = getattr(clusterer, "used_gpu_", False)
+
+                    if (
+                        _fsom_native is not None
+                        and not _used_gpu
+                        and hasattr(_fsom_native, "get_cluster_data")
+                    ):
+                        # ── Chemin CPU : fs.pl.plot_stars ────────────────────
+                        from flowsom_pipeline_pro.src.visualization.flowsom_plots import (
+                            plot_star_chart,
+                        )
+
+                        fig_star = plot_star_chart(
+                            _fsom_native,
+                            output_dir
+                            / "plots"
+                            / f"flowsom_star_chart_{timestamp}.png",
+                        )
+                        if fig_star is not None:
+                            _mpl_figures["fig_star_chart"] = fig_star
+                        _logger.info("Star Chart (CPU natif) sauvegardé.")
+                    else:
+                        # ── Chemin GPU : star chart custom matplotlib ─────────
+                        from flowsom_pipeline_pro.src.visualization.flowsom_plots import (
+                            plot_star_chart_custom,
+                        )
+
+                        _star_marker_names = (
+                            list(processed_samples[0].markers)
+                            if processed_samples
+                            and hasattr(processed_samples[0], "markers")
+                            else None
+                        )
+                        fig_star = plot_star_chart_custom(
+                            clusterer,
+                            output_dir
+                            / "plots"
+                            / f"flowsom_star_chart_{timestamp}.png",
+                            marker_names=_star_marker_names,
+                            title=f"FlowSOM Star Chart — GPU ({clusterer.xdim}×{clusterer.ydim})",
+                        )
+                        if fig_star is not None:
+                            _mpl_figures["fig_star_chart"] = fig_star
+                        _logger.info("Star Chart (GPU custom) sauvegardé.")
+                except Exception as _e:
+                    _logger.warning("Star Chart échoué (non bloquant): %s", _e)
+
+            # ── Grille SOM statique PNG (§14) ────────────────────────────────
+            if viz_save:
+                try:
+                    from flowsom_pipeline_pro.src.visualization.flowsom_plots import (
+                        plot_som_grid_static,
+                    )
+
+                    _cond_labels_grid = (
+                        df_cells["condition"].values
+                        if "condition" in df_cells.columns
+                        else None
+                    )
+                    fig_grid_s = plot_som_grid_static(
+                        clustering,
+                        metaclustering,
+                        clusterer.get_grid_coords(),
+                        _cond_labels_grid,
+                        clusterer.xdim,
+                        clusterer.ydim,
+                        output_dir / "plots" / f"flowsom_som_grid_{timestamp}.png",
+                        seed=config.flowsom.seed,
+                    )
+                    if fig_grid_s is not None:
+                        _mpl_figures["fig_som_grid_static"] = fig_grid_s
+                    _logger.info("Grille SOM statique sauvegardée.")
+                except Exception as _e:
+                    _logger.warning(
+                        "Grille SOM statique échouée (non bloquant): %s", _e
+                    )
+
+            # ── Radar métaclusters Plotly (§15) ──────────────────────────────
+            if viz_save:
+                try:
+                    from flowsom_pipeline_pro.src.visualization.flowsom_plots import (
+                        plot_metacluster_radar,
+                    )
+
+                    fig_radar = plot_metacluster_radar(
+                        mfi_matrix.values,
+                        list(mfi_matrix.columns),
+                        metaclustering,
+                        output_dir / "plots" / f"metacluster_radar_{timestamp}.html",
+                        n_metaclusters=n_meta,
+                    )
+                    if fig_radar is not None:
+                        _plotly_figures["fig_radar"] = fig_radar
+                    _logger.info("Radar métaclusters sauvegardé.")
+                except Exception as _e:
+                    _logger.warning("Radar métaclusters échoué (non bloquant): %s", _e)
+
+            # ── Clusters exclusifs (§15) ──────────────────────────────────────
+            if viz_save:
+                try:
+                    from flowsom_pipeline_pro.src.visualization.flowsom_plots import (
+                        compute_exclusive_clusters,
+                    )
+
+                    _cond_labels_excl = (
+                        df_cells["condition"].values
+                        if "condition" in df_cells.columns
+                        else None
+                    )
+                    if _cond_labels_excl is not None:
+                        _excl = compute_exclusive_clusters(
+                            metaclustering,
+                            _cond_labels_excl,
+                            n_meta,
+                        )
+                        for _line in _excl.get("summary_lines", []):
+                            _logger.info("%s", _line)
+                    else:
+                        _logger.info(
+                            "Clusters exclusifs ignorés (condition_labels non disponible)."
+                        )
+                except Exception as _e:
+                    _logger.warning("Clusters exclusifs échoués (non bloquant): %s", _e)
+
             # ── Étape 6: Exports ───────────────────────────────────────────────────
             _logger.info("Étape 6: Exports...")
             exporter = ExportService(config, output_dir, timestamp=timestamp)
@@ -749,3 +880,56 @@ class FlowSOMPipeline:
             silhouette_score=silhouette,
             n_cells_per_cluster=n_per_cluster,
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Fonction standalone — compatibilité avec flowsom_pipeline.py
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def run_flowsom_pipeline(
+    config: Optional[PipelineConfig] = None,
+    **kwargs,
+) -> PipelineResult:
+    """
+    Point d'entrée fonctionnel du pipeline FlowSOM.
+
+    Équivalent à ``FlowSOMPipeline(config).execute()`` mais sous forme de
+    fonction standalone, selon le style de ``flowsom_pipeline.py``.
+
+    Exemples d'utilisation::
+
+        # Depuis un PipelineConfig existant
+        result = run_flowsom_pipeline(config)
+
+        # Depuis un dict de paramètres kwargs (création implicite de config)
+        result = run_flowsom_pipeline(
+            healthy_folder="/data/NBM",
+            patho_folder="/data/LAM",
+            xdim=10, ydim=10,
+            n_metaclusters=12,
+        )
+
+    Args:
+        config: PipelineConfig complet. Si None, un config est construit
+                depuis les kwargs fournis.
+        **kwargs: Paramètres nommés transmis à PipelineConfig (ignorés si
+                  config est fourni explicitement).
+
+    Returns:
+        PipelineResult avec ``success``, ``n_cells``, ``n_metaclusters``,
+        ``output_dir`` et la méthode ``summary()``.
+
+    Raises:
+        ValueError: Si config est None et qu'aucun healthy_folder n'est fourni.
+    """
+    if config is None:
+        if not kwargs:
+            raise ValueError(
+                "run_flowsom_pipeline() requiert soit un PipelineConfig, "
+                "soit des kwargs de configuration (ex. healthy_folder=…)."
+            )
+        config = PipelineConfig.from_dict(kwargs)
+
+    pipeline = FlowSOMPipeline(config=config)
+    return pipeline.execute()

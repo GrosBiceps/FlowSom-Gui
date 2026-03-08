@@ -4,6 +4,8 @@ gating_plots.py — Visualisations des étapes de pré-gating.
 Génère les graphiques de QC du gating en utilisant les helpers bas-niveau
 de plot_helpers.py. Un graphique par gate, sauvegardé en PNG.
 Inclut la génération de diagrammes Sankey Plotly (global + par fichier).
+Inclut plot_gmm_vs_kde_qc (QC débris Gate1 KDE+GMM) et
+generate_interactive_gating_dashboard (dashboard Plotly complet).
 """
 
 from __future__ import annotations
@@ -689,4 +691,914 @@ def generate_per_file_sankey(
         results[f_name] = True
         _logger.info("Mini-Sankey sauvegardé: %s", out_path.name)
 
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  QC Gate 1 — GMM vs KDE (Exclusion Débris)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def plot_gmm_vs_kde_qc(
+    fsc_a_data: np.ndarray,
+    mask_debris: np.ndarray,
+    n_subsample: int = 10_000,
+    n_grid: int = 1_000,
+    valley_range: Tuple[float, float] = (-100_000.0, 600_000.0),
+    random_seed: int = 42,
+    ax: Optional[Any] = None,
+    title: Optional[str] = None,
+    output_path: Optional[Path] = None,
+) -> Tuple[Any, Any, float, Optional[float]]:
+    """
+    Trace la densité KDE de FSC-A avec le seuil débris GMM et la vallée KDE.
+
+    Interface simplifiée : mask_debris (bool) indique Gate1. Si tout True
+    (tri cellulaire/propre), un GMM interne est utilisé pour simuler le seuil.
+
+    Args:
+        fsc_a_data: Vecteur FSC-A brut (n_events,).
+        mask_debris: Masque booléen issu du Gate G1 (True = cellule conservée).
+        n_subsample: Nombre de points pour estimer la KDE (≤10 000 recommandé).
+        n_grid: Résolution de la grille d'évaluation KDE.
+        valley_range: Intervalle de recherche de la vallée KDE [x_min, x_max].
+        random_seed: Reproductibilité.
+        ax: Axes matplotlib existants (optionnel).
+        title: Titre du graphique (auto-généré si None).
+        output_path: Chemin de sauvegarde PNG (optionnel).
+
+    Returns:
+        Tuple (fig, ax, gmm_threshold, kde_valley).
+    """
+    if not _MPL_AVAILABLE:
+        _logger.warning("matplotlib requis pour plot_gmm_vs_kde_qc")
+        return None, None, 0.0, None
+
+    try:
+        from scipy.stats import gaussian_kde
+        from scipy.signal import find_peaks
+    except ImportError:
+        _logger.warning(
+            "scipy requis pour plot_gmm_vs_kde_qc (gaussian_kde, find_peaks)"
+        )
+        return None, None, 0.0, None
+
+    fsc_a_data = np.asarray(fsc_a_data, dtype=np.float64).ravel()
+    mask_debris = np.asarray(mask_debris, dtype=bool).ravel()
+
+    if len(fsc_a_data) != len(mask_debris):
+        raise ValueError(
+            f"fsc_a_data ({len(fsc_a_data)}) et mask_debris ({len(mask_debris)}) "
+            "doivent avoir la même longueur."
+        )
+
+    n_total = len(fsc_a_data)
+    n_exclu = int((~mask_debris).sum())
+    tri_cellulaire = n_exclu == 0
+
+    # ── 1. Seuil GMM ──────────────────────────────────────────────────────────
+    if not tri_cellulaire:
+        gmm_threshold = float(np.max(fsc_a_data[~mask_debris]))
+        debris_label = "Débris exclus G1"
+    else:
+        _logger.debug("mask_debris intégral — simulation GMM interne (tri cellulaire)")
+        try:
+            from sklearn.mixture import GaussianMixture as _GMM
+        except ImportError:
+            _logger.warning("sklearn requis pour GMM fallback dans plot_gmm_vs_kde_qc")
+            gmm_threshold = float(
+                np.percentile(fsc_a_data[np.isfinite(fsc_a_data)], 20)
+            )
+            debris_label = "Seuil estimé (sklearn absent)"
+            tri_cellulaire = False
+        else:
+            _rng = np.random.default_rng(random_seed)
+            _valid = np.isfinite(fsc_a_data)
+            _n_fit = min(50_000, int(_valid.sum()))
+            _idx = _rng.choice(np.where(_valid)[0], size=_n_fit, replace=False)
+            _gmm = _GMM(n_components=2, random_state=random_seed, n_init=5)
+            _gmm.fit(fsc_a_data[_idx].reshape(-1, 1))
+            _means = _gmm.means_.flatten()
+            _all_labels = np.full(n_total, -1, dtype=int)
+            _all_labels[_valid] = _gmm.predict(fsc_a_data[_valid].reshape(-1, 1))
+            _low_cluster = int(np.argmin(_means))
+            _low_vals = fsc_a_data[_all_labels == _low_cluster]
+            gmm_threshold = (
+                float(np.percentile(_low_vals, 95))
+                if len(_low_vals) > 0
+                else float(np.percentile(fsc_a_data[_valid], 20))
+            )
+            debris_label = f"Cluster bas FSC-A (simul., μ={_means[_low_cluster]:.0f})"
+            mask_debris = _all_labels != _low_cluster
+            if title is None:
+                title = "QC Gate 1 — Simulation FSC-A bas [Tri cellulaire / propre]"
+
+    if title is None:
+        title = "QC Gate 1 — Exclusion débris (GMM vs KDE)"
+
+    # ── 2. Sous-échantillonnage pour KDE ──────────────────────────────────────
+    rng = np.random.default_rng(random_seed)
+    if n_total > n_subsample:
+        fsc_sub = fsc_a_data[rng.choice(n_total, size=n_subsample, replace=False)]
+    else:
+        fsc_sub = fsc_a_data.copy()
+
+    # ── 3. KDE ────────────────────────────────────────────────────────────────
+    finite_sub = fsc_sub[np.isfinite(fsc_sub)]
+    if len(finite_sub) < 5:
+        _logger.warning("plot_gmm_vs_kde_qc: trop peu de valeurs finies pour KDE.")
+        return None, None, gmm_threshold, None
+
+    kde = gaussian_kde(finite_sub, bw_method="scott")
+    data_min = float(np.nanmin(fsc_sub))
+    data_max = float(np.nanpercentile(fsc_sub, 99.9))
+    x_min = min(
+        valley_range[0], data_min - max(150_000.0, (data_max - data_min) * 0.15)
+    )
+    x_grid = np.linspace(x_min, data_max, n_grid)
+    density = kde(x_grid)
+
+    # ── 4. Détection de la vallée ─────────────────────────────────────────────
+    vm = (x_grid >= valley_range[0]) & (x_grid <= valley_range[1])
+    kde_valley: Optional[float] = None
+    if vm.any():
+        peaks_idx, _ = find_peaks(-density[vm], prominence=np.ptp(density[vm]) * 0.005)
+        if len(peaks_idx) > 0:
+            kde_valley = float(x_grid[vm][peaks_idx[0]])
+        else:
+            fb = (x_grid >= max(x_min, gmm_threshold - 100_000)) & (
+                x_grid <= min(data_max, gmm_threshold + 150_000)
+            )
+            if fb.any():
+                kde_valley = float(x_grid[fb][np.argmin(density[fb])])
+
+    # ── 5. Visualisation ──────────────────────────────────────────────────────
+    BG = "#1e1e2f"
+    PANEL = "#16213e"
+    TXT = "#e2e8f0"
+    GRID = "#2d2d4e"
+    RED_F = "#ef4444"
+    GRN_F = "#22c55e"
+    RED_L = "#ff6b6b"
+    BLU_L = "#60a5fa"
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(12, 5), facecolor=BG)
+    else:
+        fig = ax.get_figure()
+        fig.patch.set_facecolor(BG)
+
+    ax.set_facecolor(PANEL)
+    ax.fill_between(
+        x_grid,
+        density,
+        where=(x_grid <= gmm_threshold),
+        color=RED_F,
+        alpha=0.35,
+        label=debris_label,
+    )
+    ax.fill_between(
+        x_grid,
+        density,
+        where=(x_grid > gmm_threshold),
+        color=GRN_F,
+        alpha=0.30,
+        label="Cellules conservées",
+    )
+    ax.plot(x_grid, density, color=TXT, linewidth=1.8, label="KDE FSC-A")
+    ax.axvline(
+        gmm_threshold,
+        color=RED_L,
+        linestyle="--",
+        linewidth=2.5,
+        label=f"Seuil G1 : {gmm_threshold:,.0f}",
+    )
+
+    if kde_valley is not None:
+        ax.axvline(
+            kde_valley,
+            color=BLU_L,
+            linestyle="--",
+            linewidth=2.0,
+            label=f"Vallée KDE : {kde_valley:,.0f}",
+        )
+        delta = abs(gmm_threshold - kde_valley)
+        ax.annotate(
+            f"Δ = {delta:,.0f}",
+            xy=((gmm_threshold + kde_valley) / 2, 0.88),
+            xycoords=("data", "axes fraction"),
+            ha="center",
+            va="top",
+            color=TXT,
+            fontsize=9,
+        )
+
+    n_debris = int((~mask_debris).sum())
+    pct_deb = 100.0 * n_debris / n_total
+    stats_text = (
+        f"Total   : {n_total:,}\n"
+        f"Exclus  : {n_debris:,} ({pct_deb:.1f}%)\n"
+        f"Conserv.: {n_total - n_debris:,} ({100 - pct_deb:.1f}%)\n"
+        f"KDE sur : {len(fsc_sub):,} pts"
+    )
+    ax.text(
+        0.98,
+        0.97,
+        stats_text,
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=8.5,
+        color=TXT,
+        family="monospace",
+        bbox=dict(facecolor=BG, edgecolor=GRID, alpha=0.85, pad=6),
+    )
+
+    ax.set_xlabel("FSC-A (unités linéaires)", color=TXT, fontsize=11)
+    ax.set_ylabel("Densité KDE", color=TXT, fontsize=11)
+    ax.set_title(title, color=TXT, fontsize=13, pad=12)
+    ax.tick_params(colors=TXT, labelsize=9)
+    ax.xaxis.set_major_formatter(
+        plt.FuncFormatter(lambda v, _: f"{int(v):,}".replace(",", " "))
+    )
+    for spine in ax.spines.values():
+        spine.set_edgecolor(GRID)
+    ax.grid(True, color=GRID, linewidth=0.7, linestyle="--", alpha=0.6)
+    ax.set_xlim(x_min, data_max)
+    ax.set_ylim(bottom=0, top=np.max(density) * 1.05)
+    ax.legend(
+        loc="upper left", fontsize=9, facecolor=BG, edgecolor=GRID, labelcolor=TXT
+    )
+    plt.tight_layout()
+
+    if output_path is not None:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(str(output_path), dpi=150, bbox_inches="tight")
+        _logger.info("QC GMM-KDE sauvegardé: %s", output_path)
+
+    return fig, ax, gmm_threshold, kde_valley
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Dashboard interactif Plotly — Gating complet
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def generate_interactive_gating_dashboard(
+    X_raw: np.ndarray,
+    var_names: List[str],
+    masks: Dict[str, np.ndarray],
+    conditions: np.ndarray,
+    output_dir: Path,
+    *,
+    ransac_scatter_data: Optional[Dict[str, Any]] = None,
+    singlets_summary_per_file: Optional[List[Dict[str, Any]]] = None,
+    filter_blasts: bool = False,
+    mode_blastes_vs_normal: bool = False,
+    timestamp: str = "",
+    seed: int = 42,
+) -> Dict[str, bool]:
+    """
+    Génère un dashboard Plotly interactif complet du pre-gating.
+
+    Sections générées :
+      [1]  Sankey hiérarchique global
+      [1b] Mini-Sankey par fichier (si ransac_scatter_data fourni)
+      [1c] Scatter FSC-A vs FSC-H par fichier avec droite RANSAC
+      [1d] Tableau % singlets par fichier (R², méthode)
+      [2]  Density Scatter Plots interactifs (G1→G4) en Plotly ScatterGL
+      [3]  Histogrammes 1D avec seuils GMM annotés
+      [4]  Comparaison Patho vs Sain (si mode_blastes_vs_normal)
+      [5]  Overview final coloré par étape d'exclusion + tables résumé
+
+    Args:
+        X_raw: Matrice brute pré-gating (n_cells, n_markers).
+        var_names: Noms des marqueurs.
+        masks: Dict {gate_name: mask_bool} — ex {"G1": ..., "G2": ..., ...}.
+        conditions: Vecteur de conditions par cellule.
+        output_dir: Dossier de sortie des HTML.
+        ransac_scatter_data: Dict {filename: {fsc_h, fsc_a, slope, intercept, r2, method}}.
+        singlets_summary_per_file: Liste de dicts {file, pct_singlets, r2, method}.
+        filter_blasts: True si la gate G4 (CD34+) est active.
+        mode_blastes_vs_normal: True pour activer la comparaison Patho/Sain.
+        timestamp: Suffixe de fichier.
+        seed: Graine aléatoire pour sous-échantillonnage.
+
+    Returns:
+        Dict {section_name: succès}.
+    """
+    if not _PLOTLY_AVAILABLE:
+        _logger.warning("plotly manquant — dashboard interactif désactivé")
+        return {}
+
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    def _get_mask(keys: List[str]) -> Optional[np.ndarray]:
+        for k in keys:
+            if k in masks:
+                return masks[k]
+        return None
+
+    from flowsom_pipeline_pro.src.core.gating import PreGating
+
+    fsc_a_idx = PreGating.find_marker_index(var_names, ["FSC-A"])
+    fsc_h_idx = PreGating.find_marker_index(var_names, ["FSC-H"])
+    ssc_a_idx = PreGating.find_marker_index(var_names, ["SSC-A", "SSC-H", "SSC"])
+    cd45_idx = PreGating.find_marker_index(
+        var_names, ["CD45", "CD45-PECY5", "CD45-PC5"]
+    )
+    cd34_idx = PreGating.find_marker_index(var_names, ["CD34", "CD34-PE", "CD34-APC"])
+
+    mask_g1 = _get_mask(["G1", "debris", "G1_debris"])
+    mask_g2 = _get_mask(["G2", "singlets", "G2_singlets"])
+    mask_g3 = _get_mask(["G3", "cd45", "G3_cd45"])
+    mask_g4 = _get_mask(["G4", "cd34", "G4_cd34"])
+    mask_final = _get_mask(["final", "mask_final"])
+
+    if mask_g1 is None:
+        mask_g1 = np.ones(len(conditions), dtype=bool)
+    if mask_g2 is None:
+        mask_g2 = mask_g1.copy()
+    if mask_g3 is None:
+        mask_g3 = mask_g2.copy()
+    if mask_final is None:
+        mask_final = (
+            mask_g3.copy()
+            if mask_g4 is None
+            else (mask_g4 if mask_g4 is not None else mask_g3.copy())
+        )
+
+    n_before = len(conditions)
+    n_final = int(mask_final.sum())
+
+    # Sous-échantillonnage pour Plotly
+    rng = np.random.default_rng(seed)
+    n_pts = min(40_000, n_before)
+    idx = rng.choice(n_before, n_pts, replace=False)
+
+    _m_g1 = mask_g1[idx]
+    _m_g12 = (mask_g1 & mask_g2)[idx]
+    _m_g123 = (mask_g1 & mask_g2 & mask_g3)[idx]
+    _m_final = mask_final[idx]
+    _cond_sub = conditions[idx]
+
+    def _gate_label_fn(i: int) -> str:
+        """Retourne l'étiquette de gate pour l'événement i du sous-échantillon."""
+        if not _m_g1[i]:
+            return "Débris (exclu G1)"
+        if not _m_g12[i]:
+            return "Doublet (exclu G2)"
+        if not _m_g123[i]:
+            return "CD45- Patho (exclu G3)"
+        if filter_blasts and not _m_final[i]:
+            return "Non-blaste (exclu G4)"
+        if str(_cond_sub[i]) == "Pathologique":
+            return "CD45+ Patho conservés ✓"
+        elif str(_cond_sub[i]) == "Sain":
+            return "Conservés sains NBM ✓"
+        return "Conservé ✓"
+
+    _labels = np.array([_gate_label_fn(i) for i in range(n_pts)])
+
+    _color_map = {
+        "Débris (exclu G1)": "#636363",
+        "Doublet (exclu G2)": "#e6550d",
+        "CD45- Patho (exclu G3)": "#fd8d3c",
+        "Non-blaste (exclu G4)": "#fdae6b",
+        "CD45+ Patho conservés ✓": "#d62728",
+        "Conservés sains NBM ✓": "#2ca02c",
+        "Conservé ✓": "#31a354",
+    }
+
+    def _pct_of_local(value: int, parent: int) -> str:
+        return f"{value / max(parent, 1) * 100:.1f}%"
+
+    results: Dict[str, bool] = {}
+    ts = f"_{timestamp}" if timestamp else ""
+
+    # ── [1c] RANSAC scatter per file ──────────────────────────────────────────
+    if ransac_scatter_data:
+        try:
+            _n_scatter = len(ransac_scatter_data)
+            _n_cols_sc = min(3, _n_scatter)
+            _n_rows_sc = int(np.ceil(_n_scatter / _n_cols_sc))
+            fig_ransac = make_subplots(
+                rows=_n_rows_sc,
+                cols=_n_cols_sc,
+                subplot_titles=[k[:30] for k in ransac_scatter_data.keys()],
+                horizontal_spacing=0.06,
+                vertical_spacing=0.10,
+            )
+            for _si, (_sf_name, _sf_data) in enumerate(ransac_scatter_data.items()):
+                _row = _si // _n_cols_sc + 1
+                _col = _si % _n_cols_sc + 1
+                _r2_disp = (
+                    f"R²={_sf_data['r2']:.3f}"
+                    if _sf_data.get("r2") is not None
+                    else "R²=N/A"
+                )
+                _method = _sf_data.get("method", "unknown")
+                _color_pts = "#d62728" if _method == "ratio_fallback" else "#2ca02c"
+                fig_ransac.add_trace(
+                    go.Scattergl(
+                        x=_sf_data["fsc_h"],
+                        y=_sf_data["fsc_a"],
+                        mode="markers",
+                        marker=dict(size=2, color=_color_pts, opacity=0.3),
+                        name=f"{_sf_name[:20]} ({_method})",
+                        showlegend=False,
+                        hovertemplate=f"FSC-H: %{{x:.0f}}<br>FSC-A: %{{y:.0f}}<br>{_r2_disp}<extra></extra>",
+                    ),
+                    row=_row,
+                    col=_col,
+                )
+                _x_line = sorted(_sf_data["fsc_h"])
+                _y_line = [
+                    _sf_data["slope"] * x + _sf_data["intercept"] for x in _x_line
+                ]
+                fig_ransac.add_trace(
+                    go.Scatter(
+                        x=_x_line,
+                        y=_y_line,
+                        mode="lines",
+                        line=dict(color="#ff7f0e", width=2, dash="dash"),
+                        showlegend=False,
+                    ),
+                    row=_row,
+                    col=_col,
+                )
+                fig_ransac.update_xaxes(title_text="FSC-H", row=_row, col=_col)
+                fig_ransac.update_yaxes(title_text="FSC-A", row=_row, col=_col)
+            fig_ransac.update_layout(
+                title="<b>QC RANSAC — FSC-A vs FSC-H par fichier</b>",
+                height=350 * _n_rows_sc,
+                paper_bgcolor="#fafafa",
+                plot_bgcolor="#f5f5f5",
+            )
+            out = output_dir / f"fig_ransac_scatter{ts}.html"
+            fig_ransac.write_html(str(out), include_plotlyjs="cdn")
+            results["1c_ransac"] = True
+            _logger.info("RANSAC scatter: %s", out.name)
+        except Exception as exc:
+            _logger.warning("Échec RANSAC scatter: %s", exc)
+            results["1c_ransac"] = False
+
+    # ── [1d] Tableau singlets ─────────────────────────────────────────────────
+    if singlets_summary_per_file:
+        try:
+            import pandas as pd
+
+            _df_s = pd.DataFrame(singlets_summary_per_file)
+            _cell_colors = []
+            for col_name in _df_s.columns:
+                col_colors = []
+                for ri, row in _df_s.iterrows():
+                    if (
+                        col_name == "r2"
+                        and row.get("r2") is not None
+                        and row["r2"] < 0.85
+                    ):
+                        col_colors.append("#ffe0e0")
+                    elif col_name == "method" and row.get("method") == "ratio_fallback":
+                        col_colors.append("#fff3cd")
+                    else:
+                        col_colors.append("#f9f9f9" if int(ri) % 2 == 0 else "#fff")
+                _cell_colors.append(col_colors)
+
+            fig_sing = go.Figure(
+                go.Table(
+                    header=dict(
+                        values=[f"<b>{c.upper()}</b>" for c in _df_s.columns],
+                        fill_color="#4a90d9",
+                        font=dict(color="white", size=12),
+                        align="center",
+                        height=35,
+                    ),
+                    cells=dict(
+                        values=[_df_s[c] for c in _df_s.columns],
+                        fill_color=_cell_colors,
+                        font=dict(size=11),
+                        align="center",
+                        height=28,
+                    ),
+                )
+            )
+            fig_sing.update_layout(
+                title="<b>QC Singlets — % par fichier (R² RANSAC)</b>",
+                height=50 + 30 * (len(_df_s) + 1),
+                width=900,
+                margin=dict(l=20, r=20, t=50, b=10),
+            )
+            out = output_dir / f"fig_singlets_table{ts}.html"
+            fig_sing.write_html(str(out), include_plotlyjs="cdn")
+            results["1d_singlets_table"] = True
+            _logger.info("Table singlets: %s", out.name)
+        except Exception as exc:
+            _logger.warning("Échec table singlets: %s", exc)
+            results["1d_singlets_table"] = False
+
+    # ── [2] Density Scatter Plots ─────────────────────────────────────────────
+    try:
+        _gate_plots: List[Dict[str, Any]] = []
+
+        if fsc_a_idx is not None and ssc_a_idx is not None:
+            _gate_plots.append(
+                {
+                    "title": "Gate 1 — Débris (SSC-A vs FSC-A)",
+                    "x": X_raw[idx, fsc_a_idx],
+                    "y": X_raw[idx, ssc_a_idx],
+                    "mask": _m_g1,
+                    "xlabel": "FSC-A (Taille)",
+                    "ylabel": "SSC-A (Granu.)",
+                    "label_in": "Cellules viables",
+                    "label_out": "Débris",
+                }
+            )
+        if fsc_a_idx is not None and fsc_h_idx is not None:
+            _g1_ok = _m_g1
+            _gate_plots.append(
+                {
+                    "title": "Gate 2 — Doublets (FSC-H vs FSC-A)",
+                    "x": X_raw[idx, fsc_a_idx][_g1_ok],
+                    "y": X_raw[idx, fsc_h_idx][_g1_ok],
+                    "mask": (mask_g1 & mask_g2)[idx][_g1_ok],
+                    "xlabel": "FSC-A (Area)",
+                    "ylabel": "FSC-H (Height)",
+                    "label_in": "Singlets",
+                    "label_out": "Doublets",
+                }
+            )
+        if cd45_idx is not None and ssc_a_idx is not None:
+            _g12_ok = _m_g12
+            if mode_blastes_vs_normal:
+                _patho_g12 = _g12_ok & (_cond_sub == "Pathologique")
+                _gate_plots.append(
+                    {
+                        "title": "Gate 3 — CD45+ PATHO seul",
+                        "x": X_raw[idx, cd45_idx][_patho_g12],
+                        "y": X_raw[idx, ssc_a_idx][_patho_g12],
+                        "mask": (mask_g1 & mask_g2 & mask_g3)[idx][_patho_g12],
+                        "xlabel": "CD45",
+                        "ylabel": "SSC-A",
+                        "label_in": "CD45+ Patho",
+                        "label_out": "CD45− Patho",
+                    }
+                )
+            else:
+                _gate_plots.append(
+                    {
+                        "title": "Gate 3 — CD45+ Leucocytes",
+                        "x": X_raw[idx, cd45_idx][_g12_ok],
+                        "y": X_raw[idx, ssc_a_idx][_g12_ok],
+                        "mask": (mask_g1 & mask_g2 & mask_g3)[idx][_g12_ok],
+                        "xlabel": "CD45",
+                        "ylabel": "SSC-A",
+                        "label_in": "Leucocytes CD45+",
+                        "label_out": "CD45−",
+                    }
+                )
+        if filter_blasts and cd34_idx is not None and ssc_a_idx is not None:
+            _g123_ok = _m_g123
+            _gate_plots.append(
+                {
+                    "title": "Gate 4 — CD34+ Blastes",
+                    "x": X_raw[idx, cd34_idx][_g123_ok],
+                    "y": X_raw[idx, ssc_a_idx][_g123_ok],
+                    "mask": mask_final[idx][_g123_ok],
+                    "xlabel": "CD34",
+                    "ylabel": "SSC-A",
+                    "label_in": "Blastes CD34+",
+                    "label_out": "Autres leucocytes",
+                }
+            )
+
+        if _gate_plots:
+            fig_gates = make_subplots(
+                rows=1,
+                cols=len(_gate_plots),
+                subplot_titles=[g["title"] for g in _gate_plots],
+                horizontal_spacing=0.06,
+            )
+            for col_i, gp in enumerate(_gate_plots, 1):
+                _x, _y, _mk = gp["x"], gp["y"], gp["mask"]
+                _valid = np.isfinite(_x) & np.isfinite(_y)
+                _x, _y, _mk = _x[_valid], _y[_valid], _mk[_valid]
+                fig_gates.add_trace(
+                    go.Scattergl(
+                        x=_x[~_mk],
+                        y=_y[~_mk],
+                        mode="markers",
+                        marker=dict(size=2, color="#d62728", opacity=0.25),
+                        name=gp["label_out"],
+                        legendgroup=f"g{col_i}_out",
+                        showlegend=(col_i == 1),
+                        hovertemplate=f"{gp['xlabel']}: %{{x:.0f}}<br>{gp['ylabel']}: %{{y:.0f}}<br>{gp['label_out']}<extra></extra>",
+                    ),
+                    row=1,
+                    col=col_i,
+                )
+                fig_gates.add_trace(
+                    go.Scattergl(
+                        x=_x[_mk],
+                        y=_y[_mk],
+                        mode="markers",
+                        marker=dict(size=2, color="#2ca02c", opacity=0.4),
+                        name=gp["label_in"],
+                        legendgroup=f"g{col_i}_in",
+                        showlegend=(col_i == 1),
+                        hovertemplate=f"{gp['xlabel']}: %{{x:.0f}}<br>{gp['ylabel']}: %{{y:.0f}}<br>{gp['label_in']}<extra></extra>",
+                    ),
+                    row=1,
+                    col=col_i,
+                )
+                fig_gates.update_xaxes(title_text=gp["xlabel"], row=1, col=col_i)
+                fig_gates.update_yaxes(title_text=gp["ylabel"], row=1, col=col_i)
+            fig_gates.update_layout(
+                title="<b>Gating Séquentiel — Density Scatter (Plotly interactif)</b>",
+                height=500,
+                width=min(500 * len(_gate_plots), 2000),
+                paper_bgcolor="#fafafa",
+                plot_bgcolor="#f0f0f0",
+                font=dict(size=11),
+                legend=dict(
+                    orientation="h", yanchor="bottom", y=-0.22, xanchor="center", x=0.5
+                ),
+                margin=dict(t=80, b=100),
+            )
+            out = output_dir / f"fig_gates{ts}.html"
+            fig_gates.write_html(str(out), include_plotlyjs="cdn")
+            results["2_density_scatter"] = True
+            _logger.info("Density scatter: %s", out.name)
+    except Exception as exc:
+        _logger.warning("Échec density scatter: %s", exc)
+        results["2_density_scatter"] = False
+
+    # ── [3] Histogrammes 1D ───────────────────────────────────────────────────
+    try:
+        _hist_data: List[Tuple[str, np.ndarray, Optional[str]]] = []
+        if fsc_a_idx is not None:
+            _hist_data.append(("FSC-A", X_raw[:, fsc_a_idx], None))
+        if cd45_idx is not None:
+            _hist_data.append(("CD45", X_raw[:, cd45_idx], "cd45"))
+        if filter_blasts and cd34_idx is not None:
+            _hist_data.append(("CD34", X_raw[:, cd34_idx], "cd34"))
+
+        if _hist_data:
+            fig_hist = make_subplots(
+                rows=1,
+                cols=len(_hist_data),
+                subplot_titles=[h[0] for h in _hist_data],
+                horizontal_spacing=0.08,
+            )
+            for hi, (name, vals, marker_type) in enumerate(_hist_data, 1):
+                _v = vals[np.isfinite(vals)]
+                fig_hist.add_trace(
+                    go.Histogram(
+                        x=_v,
+                        nbinsx=200,
+                        name=f"{name} (tous)",
+                        marker_color="rgba(100,100,100,0.4)",
+                        showlegend=(hi == 1),
+                        legendgroup="all",
+                    ),
+                    row=1,
+                    col=hi,
+                )
+                _v_kept = vals[mask_final & np.isfinite(vals)]
+                fig_hist.add_trace(
+                    go.Histogram(
+                        x=_v_kept,
+                        nbinsx=200,
+                        name=f"{name} (conservés)",
+                        marker_color="rgba(44,160,44,0.6)",
+                        showlegend=(hi == 1),
+                        legendgroup="kept",
+                    ),
+                    row=1,
+                    col=hi,
+                )
+                fig_hist.update_xaxes(title_text=name, row=1, col=hi)
+                fig_hist.update_yaxes(title_text="N événements", row=1, col=hi)
+            fig_hist.update_layout(
+                title="<b>Distributions 1D — Avant / Après Gating</b>",
+                barmode="overlay",
+                height=400,
+                paper_bgcolor="#fafafa",
+                plot_bgcolor="#f5f5f5",
+                legend=dict(
+                    orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5
+                ),
+                margin=dict(t=70, b=90),
+            )
+            out = output_dir / f"fig_hist{ts}.html"
+            fig_hist.write_html(str(out), include_plotlyjs="cdn")
+            results["3_histograms"] = True
+            _logger.info("Histogrammes: %s", out.name)
+    except Exception as exc:
+        _logger.warning("Échec histogrammes: %s", exc)
+        results["3_histograms"] = False
+
+    # ── [4] Comparaison Patho vs Sain ─────────────────────────────────────────
+    if mode_blastes_vs_normal and cd45_idx is not None and ssc_a_idx is not None:
+        try:
+            fig_comp = make_subplots(
+                rows=1,
+                cols=2,
+                subplot_titles=[
+                    "Pathologique (CD45 strict)",
+                    "Sain / NBM (pas de gate CD45)",
+                ],
+                horizontal_spacing=0.08,
+            )
+            for ci, (cond_label, color_kept, color_all) in enumerate(
+                [
+                    ("Pathologique", "#d62728", "#ffcccc"),
+                    ("Sain", "#2ca02c", "#ccffcc"),
+                ],
+                1,
+            ):
+                _sel = conditions == cond_label
+                _sel_final = _sel & mask_final
+                _xc = X_raw[:, cd45_idx]
+                _yc = X_raw[:, ssc_a_idx]
+                _sub_idx = rng.choice(
+                    min(len(_xc), 20_000), min(20_000, _sel.sum()), replace=False
+                )
+                _sel_idx = np.where(_sel)[0]
+                if len(_sel_idx) > 20_000:
+                    _sel_idx = _sel_idx[
+                        rng.choice(len(_sel_idx), 20_000, replace=False)
+                    ]
+                fig_comp.add_trace(
+                    go.Scattergl(
+                        x=_xc[_sel_idx],
+                        y=_yc[_sel_idx],
+                        mode="markers",
+                        marker=dict(size=2, color=color_all, opacity=0.15),
+                        name=f"{cond_label} (tous)",
+                        showlegend=True,
+                    ),
+                    row=1,
+                    col=ci,
+                )
+                _final_idx = np.where(_sel_final)[0]
+                if len(_final_idx) > 20_000:
+                    _final_idx = _final_idx[
+                        rng.choice(len(_final_idx), 20_000, replace=False)
+                    ]
+                fig_comp.add_trace(
+                    go.Scattergl(
+                        x=_xc[_final_idx],
+                        y=_yc[_final_idx],
+                        mode="markers",
+                        marker=dict(size=2.5, color=color_kept, opacity=0.5),
+                        name=f"{cond_label} (conservés)",
+                        showlegend=True,
+                    ),
+                    row=1,
+                    col=ci,
+                )
+                fig_comp.update_xaxes(title_text="CD45", row=1, col=ci)
+                fig_comp.update_yaxes(title_text="SSC-A", row=1, col=ci)
+            fig_comp.update_layout(
+                title="<b>Gating Asymétrique — Patho vs Sain</b>",
+                height=500,
+                width=1100,
+                paper_bgcolor="#fafafa",
+                plot_bgcolor="#f0f0f0",
+                legend=dict(
+                    orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5
+                ),
+                margin=dict(t=70, b=90),
+            )
+            out = output_dir / f"fig_comp{ts}.html"
+            fig_comp.write_html(str(out), include_plotlyjs="cdn")
+            results["4_comparison"] = True
+            _logger.info("Comparaison Patho/Sain: %s", out.name)
+        except Exception as exc:
+            _logger.warning("Échec comparaison Patho/Sain: %s", exc)
+            results["4_comparison"] = False
+
+    # ── [5] Overview final coloré par étape ───────────────────────────────────
+    if fsc_a_idx is not None and ssc_a_idx is not None:
+        try:
+            _xo = X_raw[idx, fsc_a_idx]
+            _yo = X_raw[idx, ssc_a_idx]
+            fig_ov = go.Figure()
+            _order = [
+                "Débris (exclu G1)",
+                "Doublet (exclu G2)",
+                "CD45- Patho (exclu G3)",
+                "Non-blaste (exclu G4)",
+                "CD45+ Patho conservés ✓",
+                "Conservés sains NBM ✓",
+                "Conservé ✓",
+            ]
+            for cat in _order:
+                _sel_cat = _labels == cat
+                if _sel_cat.sum() == 0:
+                    continue
+                _is_kept = cat.endswith("✓")
+                fig_ov.add_trace(
+                    go.Scattergl(
+                        x=_xo[_sel_cat],
+                        y=_yo[_sel_cat],
+                        mode="markers",
+                        marker=dict(
+                            size=2.5,
+                            color=_color_map.get(cat, "#999"),
+                            opacity=0.55 if _is_kept else 0.25,
+                        ),
+                        name=f"{cat} ({_sel_cat.sum():,})",
+                        hovertemplate=f"FSC-A: %{{x:.0f}}<br>SSC-A: %{{y:.0f}}<br>{cat}<extra></extra>",
+                    )
+                )
+            fig_ov.update_layout(
+                title="<b>Overview — Événements colorés par étape d'exclusion</b>",
+                xaxis_title="FSC-A (Taille)",
+                yaxis_title="SSC-A (Granularité)",
+                height=600,
+                width=900,
+                paper_bgcolor="#fafafa",
+                plot_bgcolor="#f0f0f0",
+                legend=dict(
+                    title="Catégorie",
+                    font=dict(size=12),
+                    bgcolor="rgba(255,255,255,0.9)",
+                    bordercolor="#ccc",
+                    borderwidth=1,
+                ),
+                margin=dict(t=70, b=50),
+            )
+            out = output_dir / f"fig_overview{ts}.html"
+            fig_ov.write_html(str(out), include_plotlyjs="cdn")
+            results["5_overview"] = True
+            _logger.info("Overview: %s", out.name)
+        except Exception as exc:
+            _logger.warning("Échec overview: %s", exc)
+            results["5_overview"] = False
+
+    # ── [5b] Table résumé ─────────────────────────────────────────────────────
+    try:
+        import pandas as pd
+
+        _stages = [
+            "Initial",
+            "Gate 1 (Débris)",
+            "Gate 2 (Doublets)",
+            "Gate 3 (CD45+ Patho)" if mode_blastes_vs_normal else "Gate 3 (CD45+)",
+        ]
+        _events = [
+            n_before,
+            int(mask_g1.sum()),
+            int((mask_g1 & mask_g2).sum()),
+            int((mask_g1 & mask_g2 & mask_g3).sum()),
+        ]
+        if filter_blasts:
+            _stages.append("Gate 4 (CD34+)")
+            _events.append(n_final)
+        _stages.append("Population finale")
+        _events.append(n_final)
+        _retention = [round(e / max(n_before, 1) * 100, 1) for e in _events]
+
+        _sum_df = pd.DataFrame(
+            {"Étape": _stages, "Événements": _events, "Rétention (%)": _retention}
+        )
+        fig_tbl = go.Figure(
+            go.Table(
+                header=dict(
+                    values=[f"<b>{c}</b>" for c in _sum_df.columns],
+                    fill_color="#4a90d9",
+                    font=dict(color="white", size=13),
+                    align="center",
+                    height=35,
+                ),
+                cells=dict(
+                    values=[_sum_df[c] for c in _sum_df.columns],
+                    fill_color=[["#f9f9f9", "#fff"] * (len(_sum_df) // 2 + 1)] * 3,
+                    font=dict(size=12),
+                    align="center",
+                    height=30,
+                ),
+            )
+        )
+        fig_tbl.update_layout(
+            title="<b>Résumé Pre-Gating — Statistiques par étape</b>",
+            height=50 + 35 * (len(_sum_df) + 1),
+            width=700,
+            margin=dict(l=20, r=20, t=50, b=10),
+        )
+        out = output_dir / f"fig_table{ts}.html"
+        fig_tbl.write_html(str(out), include_plotlyjs="cdn")
+        results["5b_summary_table"] = True
+        _logger.info("Table résumé: %s", out.name)
+    except Exception as exc:
+        _logger.warning("Échec table résumé: %s", exc)
+        results["5b_summary_table"] = False
+
+    _logger.info("Dashboard interactif généré (%d sections)", len(results))
     return results
