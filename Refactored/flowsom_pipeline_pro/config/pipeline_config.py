@@ -50,6 +50,9 @@ from .constants import (
     DEFAULT_CD34_SSC_MAX_PCT,
     DEFAULT_PLOT_FORMAT,
     DEFAULT_DPI,
+    GMM_MAX_SAMPLES,
+    RANSAC_R2_THRESHOLD,
+    RANSAC_MAD_FACTOR,
 )
 
 
@@ -83,6 +86,11 @@ class PregateConfig:
     cd34_threshold_percentile: float = DEFAULT_CD34_THRESHOLD_PCT
     cd34_use_ssc_filter: bool = True
     cd34_ssc_max_percentile: float = DEFAULT_CD34_SSC_MAX_PCT
+    # Paramètres GMM (sous-échantillonnage avant fit)
+    gmm_max_samples: int = GMM_MAX_SAMPLES
+    # Paramètres RANSAC singlets
+    ransac_r2_threshold: float = RANSAC_R2_THRESHOLD
+    ransac_mad_factor: float = RANSAC_MAD_FACTOR
 
 
 @dataclass
@@ -220,6 +228,8 @@ class PipelineConfig:
     downsampling: DownsamplingConfig = field(default_factory=DownsamplingConfig)
     visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
     gpu: GPUConfig = field(default_factory=GPUConfig)
+    # Sections YAML libres — accessibles via config.extra("section_name")
+    _extra: dict = field(default_factory=dict, repr=False)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     population_mapping: PopulationMappingConfig = field(
         default_factory=PopulationMappingConfig
@@ -262,6 +272,28 @@ class PipelineConfig:
     def _from_dict(cls, raw: dict) -> "PipelineConfig":
         """Construit un PipelineConfig depuis un dictionnaire YAML brut."""
         cfg = cls()
+
+        # Conserver les sections présentes dans le YAML mais non structurées
+        # (ex: export_cluster_distribution, mrd, lsc_markers...)
+        _structured_keys = {
+            "paths",
+            "analysis",
+            "pregate",
+            "pregate_advanced",
+            "flowsom",
+            "auto_clustering",
+            "transform",
+            "normalize",
+            "markers",
+            "downsampling",
+            "visualization",
+            "gpu",
+            "logging",
+            "population_mapping",
+            "pipeline_version",
+        }
+        cfg._extra = {k: v for k, v in raw.items() if k not in _structured_keys}
+
         p = raw.get("paths", {})
         if p.get("healthy_folder"):
             cfg.paths.healthy_folder = p["healthy_folder"]
@@ -297,6 +329,9 @@ class PipelineConfig:
             "cd34_threshold_percentile": "cd34_threshold_percentile",
             "cd34_use_ssc_filter": "cd34_use_ssc_filter",
             "cd34_ssc_max_percentile": "cd34_ssc_max_percentile",
+            "gmm_max_samples": "gmm_max_samples",
+            "ransac_r2_threshold": "ransac_r2_threshold",
+            "ransac_mad_factor": "ransac_mad_factor",
         }
         for yaml_key, attr in mapping_pregate.items():
             if yaml_key in pg_adv:

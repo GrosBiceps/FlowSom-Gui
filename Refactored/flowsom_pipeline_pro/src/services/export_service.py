@@ -27,6 +27,9 @@ from flowsom_pipeline_pro.src.io.csv_exporter import (
     export_per_file_csv,
     compute_cluster_statistics,
 )
+from flowsom_pipeline_pro.src.io.cluster_distribution_exporter import (
+    export_cluster_distribution,
+)
 from flowsom_pipeline_pro.src.io.json_exporter import (
     export_analysis_metadata,
     build_analysis_metadata,
@@ -75,6 +78,7 @@ class ExportService:
         input_files: List[str],
         gating_logger: Optional[GatingLogger] = None,
         df_fcs: Optional[pd.DataFrame] = None,
+        clustering: Optional[np.ndarray] = None,
     ) -> Dict[str, str]:
         """
         Exporte tous les fichiers de résultats en une seule passe.
@@ -174,6 +178,35 @@ class ExportService:
             self.output_dir,
         )
         return paths
+
+    def export_cluster_distribution(
+        self,
+        clustering: np.ndarray,
+        metaclustering: np.ndarray,
+        condition_labels: np.ndarray,
+    ) -> Dict[str, str]:
+        """
+        Exporte la distribution Sain/Patho par noeud SOM et par metacluster.
+
+        Args:
+            clustering:       Assignation cellule -> noeud SOM.
+            metaclustering:   Assignation cellule -> metacluster.
+            condition_labels: Label de condition par cellule.
+
+        Returns:
+            Dict {cle: chemin_fichier}.
+        """
+        export_cfg = getattr(self.config, "_extra", {}).get(
+            "export_cluster_distribution", {}
+        )
+        return export_cluster_distribution(
+            clustering=clustering,
+            metaclustering=metaclustering,
+            condition_labels=condition_labels,
+            output_dir=self._dirs["csv"],
+            timestamp=self.timestamp,
+            export_cfg=export_cfg,
+        )
 
     def export_gating_plots(
         self,

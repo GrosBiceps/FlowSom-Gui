@@ -346,9 +346,26 @@ class FlowSOMPipeline:
                         if "condition" in df_cells.columns
                         else None
                     )
+                    # plot_som_grid_static attend un metaclustering par NODE
+                    # (n_nodes,), PAS par cellule (n_cells,).
+                    _mc_per_node = getattr(clusterer, "metacluster_map_", None)
+                    if _mc_per_node is None:
+                        _mc_per_node = np.array(
+                            [
+                                int(
+                                    np.bincount(
+                                        metaclustering[clustering == i]
+                                    ).argmax()
+                                )
+                                if (clustering == i).any()
+                                else 0
+                                for i in range(clusterer.n_nodes)
+                            ],
+                            dtype=int,
+                        )
                     fig_grid_s = plot_som_grid_static(
                         clustering,
-                        metaclustering,
+                        _mc_per_node,
                         clusterer.get_grid_coords(),
                         _cond_labels_grid,
                         clusterer.xdim,
@@ -411,6 +428,163 @@ class FlowSOMPipeline:
                 except Exception as _e:
                     _logger.warning("Clusters exclusifs échoués (non bloquant): %s", _e)
 
+            # ── Bar charts post-clustering Plotly (§ post-FlowSOM) ────────────
+            # Chart 1: % cellules pathologiques par cluster
+            # Chart 2: % cellules par cluster (distribution globale)
+            if viz_save:
+                _cond_labels_bar = (
+                    df_cells["condition"].values
+                    if "condition" in df_cells.columns
+                    else None
+                )
+                try:
+                    from flowsom_pipeline_pro.src.visualization.flowsom_plots import (
+                        plot_patho_pct_per_cluster,
+                    )
+
+                    if _cond_labels_bar is not None:
+                        fig_patho_pct = plot_patho_pct_per_cluster(
+                            metaclustering,
+                            _cond_labels_bar,
+                            output_html=output_dir
+                            / "plots"
+                            / f"patho_pct_per_cluster_{timestamp}.html",
+                            output_jpg=output_dir
+                            / "plots"
+                            / f"patho_pct_per_cluster_{timestamp}.jpg",
+                        )
+                        if fig_patho_pct is not None:
+                            _plotly_figures["fig_patho_pct"] = fig_patho_pct
+                        _logger.info("Bar chart %% patho par cluster sauvegardé.")
+                    else:
+                        _logger.info(
+                            "Bar chart %% patho ignoré (condition_labels non disponible)."
+                        )
+                except Exception as _e:
+                    _logger.warning("Bar chart %% patho échoué (non bloquant): %s", _e)
+
+                try:
+                    from flowsom_pipeline_pro.src.visualization.flowsom_plots import (
+                        plot_cells_pct_per_cluster,
+                    )
+
+                    fig_cells_pct = plot_cells_pct_per_cluster(
+                        metaclustering,
+                        output_html=output_dir
+                        / "plots"
+                        / f"cells_pct_per_cluster_{timestamp}.html",
+                        output_jpg=output_dir
+                        / "plots"
+                        / f"cells_pct_per_cluster_{timestamp}.jpg",
+                        condition_labels=_cond_labels_bar,
+                    )
+                    if fig_cells_pct is not None:
+                        _plotly_figures["fig_cells_pct"] = fig_cells_pct
+                    _logger.info("Bar chart %% cellules par cluster sauvegardé.")
+                except Exception as _e:
+                    _logger.warning(
+                        "Bar chart %% cellules par cluster échoué (non bloquant): %s",
+                        _e,
+                    )
+
+            # ── Bar charts par nœud SOM (clusters fins, ex. 100 pour grille 10×10) ─
+            # Chart 3: % cellules pathologiques par nœud SOM
+            # Chart 4: % cellules par nœud SOM (distribution globale)
+            if viz_save:
+                try:
+                    from flowsom_pipeline_pro.src.visualization.flowsom_plots import (
+                        plot_patho_pct_per_som_node,
+                    )
+
+                    _cond_labels_som = (
+                        df_cells["condition"].values
+                        if "condition" in df_cells.columns
+                        else None
+                    )
+                    if _cond_labels_som is not None:
+                        fig_patho_som = plot_patho_pct_per_som_node(
+                            clustering,
+                            _cond_labels_som,
+                            output_html=output_dir
+                            / "plots"
+                            / f"patho_pct_per_som_node_{timestamp}.html",
+                            output_jpg=output_dir
+                            / "plots"
+                            / f"patho_pct_per_som_node_{timestamp}.jpg",
+                        )
+                        if fig_patho_som is not None:
+                            _plotly_figures["fig_patho_pct_som"] = fig_patho_som
+                        _logger.info("Bar chart %% patho par nœud SOM sauvegardé.")
+                    else:
+                        _logger.info(
+                            "Bar chart %% patho SOM ignoré (condition_labels non disponible)."
+                        )
+                except Exception as _e:
+                    _logger.warning(
+                        "Bar chart %% patho par nœud SOM échoué (non bloquant): %s", _e
+                    )
+
+                try:
+                    from flowsom_pipeline_pro.src.visualization.flowsom_plots import (
+                        plot_cells_pct_per_som_node,
+                    )
+
+                    _cond_labels_som2 = (
+                        df_cells["condition"].values
+                        if "condition" in df_cells.columns
+                        else None
+                    )
+                    fig_cells_som = plot_cells_pct_per_som_node(
+                        clustering,
+                        output_html=output_dir
+                        / "plots"
+                        / f"cells_pct_per_som_node_{timestamp}.html",
+                        output_jpg=output_dir
+                        / "plots"
+                        / f"cells_pct_per_som_node_{timestamp}.jpg",
+                        condition_labels=_cond_labels_som2,
+                    )
+                    if fig_cells_som is not None:
+                        _plotly_figures["fig_cells_pct_som"] = fig_cells_som
+                    _logger.info("Bar chart %% cellules par nœud SOM sauvegardé.")
+                except Exception as _e:
+                    _logger.warning(
+                        "Bar chart %% cellules par nœud SOM échoué (non bloquant): %s",
+                        _e,
+                    )
+
+            # ── Vue combinée : patho + cellules, triée par % patho décroissant ─
+            if viz_save:
+                try:
+                    from flowsom_pipeline_pro.src.visualization.flowsom_plots import (
+                        plot_combined_som_node_html,
+                    )
+
+                    _cond_labels_combined = (
+                        df_cells["condition"].values
+                        if "condition" in df_cells.columns
+                        else None
+                    )
+                    if _cond_labels_combined is not None:
+                        fig_combined = plot_combined_som_node_html(
+                            clustering,
+                            _cond_labels_combined,
+                            output_html=output_dir
+                            / "plots"
+                            / f"som_node_combined_{timestamp}.html",
+                        )
+                        if fig_combined is not None:
+                            _plotly_figures["fig_som_combined"] = fig_combined
+                        _logger.info("Vue combinée nœuds SOM sauvegardée.")
+                    else:
+                        _logger.info(
+                            "Vue combinée SOM ignorée (condition_labels non disponible)."
+                        )
+                except Exception as _e:
+                    _logger.warning(
+                        "Vue combinée nœuds SOM échouée (non bloquant): %s", _e
+                    )
+
             # ── Étape 6: Exports ───────────────────────────────────────────────────
             _logger.info("Étape 6: Exports...")
             exporter = ExportService(config, output_dir, timestamp=timestamp)
@@ -424,7 +598,31 @@ class FlowSOMPipeline:
                 selected_markers=selected_markers,
                 input_files=input_files,
                 gating_logger=self._gating_logger,
+                clustering=clustering,
             )
+
+            # ── Étape 6b: Distribution Sain/Patho par cluster SOM ────────────
+            _cond_dist = (
+                df_cells["condition"].values
+                if "condition" in df_cells.columns
+                else None
+            )
+            if _cond_dist is not None:
+                try:
+                    dist_paths = exporter.export_cluster_distribution(
+                        clustering=clustering,
+                        metaclustering=metaclustering,
+                        condition_labels=_cond_dist,
+                    )
+                    export_paths.update(dist_paths)
+                    _logger.info(
+                        "Distribution Sain/Patho exportee: %d fichier(s)",
+                        len(dist_paths),
+                    )
+                except Exception as _e:
+                    _logger.warning(
+                        "Export distribution clusters echoue (non bloquant): %s", _e
+                    )
 
             # Plots (si activés dans la config)
             if viz_cfg is not None and viz_save:
@@ -606,6 +804,8 @@ class FlowSOMPipeline:
                         "fig_barplots": "Blast Score — Profil Marqueurs",
                         "fig_radar": "Profils Blast — Radar Charts",
                         "fig_stars": "Blast Scores — Bar Chart",
+                        "fig_patho_pct": "% Cellules Pathologiques par Cluster",
+                        "fig_cells_pct": "% Cellules par Cluster (Distribution Globale)",
                     }
 
                     html_path = exporter.export_html_report(

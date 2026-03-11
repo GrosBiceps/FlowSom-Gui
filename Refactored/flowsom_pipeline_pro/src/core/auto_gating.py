@@ -77,6 +77,8 @@ class AutoGating:
 
     # Seuil R² minimal pour la régression RANSAC (en dessous → fallback ratio)
     RANSAC_R2_THRESHOLD = 0.85
+    # Facteur MAD pour le seuil de résidus ("médiane + N * MAD")
+    RANSAC_MAD_FACTOR = 3.0
     # Sous-échantillonnage max avant GMM (convergence + performance)
     GMM_MAX_SAMPLES = 200_000
 
@@ -380,6 +382,7 @@ class AutoGating:
         file_origin: Optional[np.ndarray] = None,
         per_file: bool = True,
         r2_threshold: float = 0.85,
+        mad_factor: float = RANSAC_MAD_FACTOR,
     ) -> np.ndarray:
         """
         Gate singlets adaptatif par régression linéaire robuste (RANSAC).
@@ -574,8 +577,8 @@ class AutoGating:
                     median_residual = np.median(residuals)
                     mad = np.median(np.abs(residuals - median_residual))
 
-                    # Seuil: médiane + 3 * MAD
-                    threshold_upper = median_residual + 3.0 * mad
+                    # Seuil: médiane + mad_factor * MAD
+                    threshold_upper = median_residual + mad_factor * mad
 
                     # Singlets: points près de la diagonale (pas trop au-dessus)
                     singlets_file = residuals <= threshold_upper
@@ -674,7 +677,7 @@ class AutoGating:
                 print(
                     f"\n   {'Fichier':<30} {'Méthode':<18} {'R²':>6} {'% Singlets':>12}"
                 )
-                print(f"   {'─' * 30} {'─' * 18} {'─' * 6} {'─' * 12}")
+                print(f"   {'-' * 30} {'-' * 18} {'-' * 6} {'-' * 12}")
                 for row in singlets_summary_per_file:
                     r2_disp = f"{row['r2']:.3f}" if row["r2"] is not None else "N/A"
                     fname_short = (
@@ -750,7 +753,7 @@ class AutoGating:
             # Seuil adaptatif MAD
             median_residual = np.median(residuals)
             mad = np.median(np.abs(residuals - median_residual))
-            threshold_upper = median_residual + 3.0 * mad
+            threshold_upper = median_residual + mad_factor * mad
 
             # Masque singlets
             singlets_mask = residuals <= threshold_upper
@@ -766,7 +769,7 @@ class AutoGating:
                 f"   [Auto-RANSAC] Droite: y = {slope:.3f}x + {intercept:.0f}{r2_str}"
             )
             print(
-                f"   [Auto-RANSAC] Seuil MAD: médiane + {3.0:.1f}×MAD = {threshold_upper:.0f}"
+                f"   [Auto-RANSAC] Seuil MAD: médiane + {mad_factor:.1f}×MAD = {threshold_upper:.0f}"
             )
             print(
                 f"   [Auto-RANSAC] Singlets: {n_singlets:,} ({n_singlets / valid.sum() * 100:.1f}%)"

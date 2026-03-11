@@ -252,24 +252,34 @@ class FlowSOMClusterer:
         """Extrait les assignations depuis le modèle CPU (flowsom)."""
         try:
             fsom = self._fsom_model
-            # fs.FlowSOM retourne directement les cluster assignments
-            if hasattr(fsom, "obs") and "clustering" in fsom.obs.columns:
-                self.node_assignments_ = fsom.obs["clustering"].values.astype(int)
-            elif hasattr(fsom, "cluster_labels_"):
-                self.node_assignments_ = fsom.cluster_labels_.astype(int)
+            # fs.FlowSOM expose les données via get_cell_data() (AnnData)
+            cell_data = fsom.get_cell_data()
+
+            if "clustering" in cell_data.obs.columns:
+                self.node_assignments_ = cell_data.obs["clustering"].values.astype(int)
             else:
                 self.node_assignments_ = np.zeros(X.shape[0], dtype=int)
                 warnings.warn(
                     "Impossible d'extraire node_assignments depuis flowsom CPU"
                 )
 
-            if hasattr(fsom, "obs") and "metaclustering" in fsom.obs.columns:
-                self.metacluster_assignments_ = fsom.obs[
+            if "metaclustering" in cell_data.obs.columns:
+                self.metacluster_assignments_ = cell_data.obs[
                     "metaclustering"
                 ].values.astype(int)
             else:
                 # Recalcul par AgglomerativeClustering sur le codebook
                 self._recompute_metaclusters()
+
+            # Extraire le metacluster_map_ (node → metacluster) depuis cluster_data
+            try:
+                cluster_data = fsom.get_cluster_data()
+                if "metaclustering" in cluster_data.obs.columns:
+                    self.metacluster_map_ = cluster_data.obs[
+                        "metaclustering"
+                    ].values.astype(int)
+            except Exception:
+                pass
 
         except Exception as e:
             warnings.warn(f"Extraction assignations CPU échouée: {e}")
@@ -308,6 +318,35 @@ class FlowSOMClusterer:
         ).coords
         return np.array(layout, dtype=float)
 
+    def _get_codebook(self) -> Optional[np.ndarray]:
+        """
+        Récupère le codebook SOM (centroïdes des nodes) depuis le modèle.
+
+        Gère les deux backends:
+          - GPU: _fsom_model.codes
+          - CPU (saeyslab): _fsom_model.get_cluster_data().X
+
+        Returns:
+            Array (n_nodes, n_markers) ou None si indisponible.
+        """
+        if self._fsom_model is None:
+            return None
+
+        # GPU backend — attribut .codes direct
+        if hasattr(self._fsom_model, "codes"):
+            return np.asarray(self._fsom_model.codes, dtype=float)
+
+        # CPU saeyslab — codebook dans get_cluster_data().X
+        if hasattr(self._fsom_model, "get_cluster_data"):
+            try:
+                cluster_data = self._fsom_model.get_cluster_data()
+                if cluster_data.X is not None:
+                    return np.asarray(cluster_data.X, dtype=float)
+            except Exception:
+                pass
+
+        return None
+
     def _recompute_metaclusters(self) -> None:
         """Recalcule les métaclusters par clustering hiérarchique sur le codebook SOM."""
         try:
@@ -317,13 +356,8 @@ class FlowSOMClusterer:
                 return
 
             # Obtenir le codebook (centroïdes des nodes)
-            if hasattr(self._fsom_model, "codes"):
-                codebook = self._fsom_model.codes
-            elif hasattr(self._fsom_model, "model") and hasattr(
-                self._fsom_model.model, "codes"
-            ):
-                codebook = self._fsom_model.model.codes
-            else:
+            codebook = self._get_codebook()
+            if codebook is None:
                 return
 
             n_nodes = codebook.shape[0]
@@ -444,10 +478,10 @@ class FlowSOMClusterer:
             except Exception:
                 pass
 
-        # Calcul à la demande depuis le codebook (GPU sans _mst_layout_ pré-calculé)
-        if self._fsom_model is not None and hasattr(self._fsom_model, "codes"):
+        # Calcul à la demande depuis le codebook (GPU ou CPU)
+        codebook = self._get_codebook()
+        if codebook is not None:
             try:
-                codebook = np.asarray(self._fsom_model.codes, dtype=float)
                 self._mst_layout_ = self._compute_mst_layout(codebook)
                 return self._mst_layout_
             except Exception as e:
@@ -552,10 +586,10 @@ def _train_som_codebook(
                 rlen=rlen,
                 seed=seed,
             )
-            node_assignments = fsom.obs["clustering"].values.astype(int)
-            if hasattr(fsom, "codes"):
-                codebook = fsom.codes
-            else:
+            cell_data = fsom.get_cell_data()
+            node_assignments = cell_data.obs["clustering"].values.astype(int)
+            codebook = fsom.get_cluster_data().X
+            if codebook is None:
                 n_nodes = xdim * ydim
                 codebook = np.array(
                     [

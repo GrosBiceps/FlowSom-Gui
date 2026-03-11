@@ -245,6 +245,10 @@ def _apply_gating(
     # Gate 1 – Débris
     if getattr(pregate_cfg, "viable", True):
         if mode == "auto":
+            # Appliquer le sous-échantillonnage GMM configuré (pregate_advanced.gmm_max_samples)
+            AutoGating.GMM_MAX_SAMPLES = getattr(
+                pregate_cfg, "gmm_max_samples", AutoGating.GMM_MAX_SAMPLES
+            )
             mask = AutoGating.auto_gate_debris(X, var_names)
         else:
             mask = PreGating.gate_viable_cells(
@@ -261,7 +265,12 @@ def _apply_gating(
     # Gate 2 – Singlets
     if getattr(pregate_cfg, "singlets", True):
         if mode == "auto":
-            mask = AutoGating.auto_gate_singlets(X, var_names)
+            mask = AutoGating.auto_gate_singlets(
+                X,
+                var_names,
+                r2_threshold=getattr(pregate_cfg, "ransac_r2_threshold", 0.85),
+                mad_factor=getattr(pregate_cfg, "ransac_mad_factor", 3.0),
+            )
         else:
             mask = PreGating.gate_singlets(
                 X,
@@ -716,6 +725,9 @@ def _apply_gating_combined(
     if getattr(pregate_cfg, "viable", True):
         _logger.info("Gate 1 — Débris [%s] sur %d cellules combinées", mode, n_before)
         if mode == "auto":
+            AutoGating.GMM_MAX_SAMPLES = getattr(
+                pregate_cfg, "gmm_max_samples", AutoGating.GMM_MAX_SAMPLES
+            )
             mask_debris = AutoGating.auto_gate_debris(X, var_names)
         else:
             mask_debris = PreGating.gate_viable_cells(
@@ -756,6 +768,8 @@ def _apply_gating_combined(
                 var_names,
                 file_origin=file_origins,
                 per_file=True,
+                r2_threshold=getattr(pregate_cfg, "ransac_r2_threshold", 0.85),
+                mad_factor=getattr(pregate_cfg, "ransac_mad_factor", 3.0),
             )
         else:
             mask_singlets = PreGating.gate_singlets(

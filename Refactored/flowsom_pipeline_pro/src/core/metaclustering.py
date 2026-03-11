@@ -404,6 +404,6 @@ def find_optimal_clusters(
         return default_k
 
     if verbose:
-        print(f"\n  ✓ k OPTIMAL SÉLECTIONNÉ: {best_k}")
+        print(f"\n  [OK] k OPTIMAL SELECTIONNE: {best_k}")
 
     return best_k

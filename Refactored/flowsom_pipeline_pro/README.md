@@ -2,7 +2,7 @@
 
 Pipeline d'analyse de cytométrie en flux pour la **Maladie Résiduelle Détectable (MRD)** en hématologie — conforme aux recommandations **ELN 2022**.
 
-Architecture modulaire production-ready, issue de la refactorisation complète d'un script monolithique de 12 000+ lignes.
+Architecture modulaire production-ready, issue de la refactorisation complète d'un script monolithique de 12 000+ lignes. **Version 2.0.**
 
 ---
 
@@ -35,6 +35,7 @@ Architecture modulaire production-ready, issue de la refactorisation complète d
   - [Référence CLI](#référence-cli)
   - [Fichier de configuration YAML](#fichier-de-configuration-yaml)
   - [Sorties produites](#sorties-produites)
+    - [Distribution Sain/Patho par cluster](#distribution-sainpatho-par-cluster)
     - [Colonnes ajoutées aux fichiers FCS](#colonnes-ajoutées-aux-fichiers-fcs)
   - [Seuils cliniques ELN 2022](#seuils-cliniques-eln-2022)
     - [Poids de détection des blastes](#poids-de-détection-des-blastes)
@@ -88,6 +89,14 @@ Deux modes disponibles :
 | **CD45+** | Sélection des leucocytes (CD45 positif) |
 | **CD34+** | Sélection des progéniteurs (optionnel) |
 
+**Paramètres GMM/RANSAC configurables via YAML** (`pregate_advanced`) :
+
+| Paramètre | Défaut | Description |
+|---|---|---|
+| `gmm_max_samples` | `200 000` | Plafond de sous-échantillonnage avant fitting GMM. Réduire pour accélérer sur grands datasets ; augmenter pour plus de précision. |
+| `ransac_r2_threshold` | `0.85` | R² minimum sur les inliers RANSAC. En dessous → fallback automatique vers gating ratio FSC-A/FSC-H. |
+| `ransac_mad_factor` | `3.0` | Facteur multiplicatif appliqué à la MAD (écart absolu médian) pour définir le seuil d'exclusion des doublets (`médiane + N × MAD`). |
+
 ### Clustering FlowSOM
 
 - Grille SOM 2D (défaut 10×10 = 100 nodes) - réglable
@@ -110,6 +119,7 @@ Deux modes disponibles :
 
 - Fichiers **FCS** avec colonnes de clustering ajoutées (compatible Kaluza)
 - **CSV** : cellules complètes, statistiques par cluster, MFI par marqueur/metacluster
+- **Distribution Sain/Patho** : tableau CSV + rapport texte ASCII de la représentation cellulaire par nœud SOM et par métacluster, triée par % Patho décroissant (voir [section dédiée](#distribution-sainpatho-par-cluster))
 - **JSON** : log de gating, métadonnées du run, configuration
 - **Graphiques** : heatmap MFI, distribution des metaclusters, UMAP, plots de gating
 
@@ -146,6 +156,7 @@ flowsom_pipeline_pro/
 │   │   ├── fcs_reader.py     # Lecture FCS → FlowSample
 │   │   ├── fcs_writer.py     # Export FCS + colonnes clustering
 │   │   ├── csv_exporter.py   # Export statistiques CSV
+│   │   ├── cluster_distribution_exporter.py  # Distribution Sain/Patho par cluster (TXT + CSV)
 │   │   └── json_exporter.py  # Export métadonnées JSON
 │   │
 │   ├── visualization/        # Graphiques matplotlib (thème sombre)
@@ -460,6 +471,10 @@ pregate_advanced:
   cd34_threshold_percentile: 85.0
   cd34_use_ssc_filter:      true
   cd34_ssc_max_percentile:  60.0
+  # Paramètres GMM/RANSAC (mode auto uniquement)
+  gmm_max_samples:          200000  # Plafond avant sous-échantillonnage GMM
+  ransac_r2_threshold:      0.85    # R² min RANSAC avant fallback ratio
+  ransac_mad_factor:        3.0     # médiane + N×MAD pour seuil doublets
 
 flowsom:
   xdim:          10
@@ -508,6 +523,19 @@ gpu:
 
 logging:
   level: "INFO"                 # DEBUG | INFO | WARNING | ERROR
+
+# Distribution Sain/Patho par cluster — export automatique
+export_cluster_distribution:
+  enabled: true
+  level: "both"                 # "node" (noeuds SOM) | "metacluster" | "both"
+  sort_by: "pct_patho_in_cluster"  # Colonne de tri (toute colonne numérique)
+  ascending: false              # false = décroissant (patho enrichi en premier)
+  txt_enabled: true             # Rapport texte ASCII
+  csv_enabled: true             # CSV prêt Excel / R
+  txt_decimal_places: 1         # Précision dans le rapport texte (ex: 92.7%)
+  csv_decimal_places: 3         # Précision dans le CSV (ex: 92.747%)
+  sain_labels: ["Sain", "Normal", "NBM", "Healthy", "Moelle normale"]
+  patho_labels: ["Pathologique", "Patho", "AML", "Disease"]
 ```
 
 ---
@@ -521,10 +549,12 @@ Results/
 │   └── cells_clustered_kaluza.fcs   # Variante compatible Kaluza
 │
 ├── csv/
-│   ├── cells_complete.csv           # DataFrame complet (1 ligne = 1 cellule)
-│   ├── cluster_statistics.csv       # Statistiques par metacluster (n, %, MFI)
-│   ├── mfi_matrix.csv               # Matrice MFI (marqueurs × metaclusters)
-│   └── per_file_summary.csv         # Résumé par fichier FCS source
+│   ├── cells_complete.csv                         # DataFrame complet (1 ligne = 1 cellule)
+│   ├── cluster_statistics.csv                     # Statistiques par metacluster (n, %, MFI)
+│   ├── mfi_matrix.csv                             # Matrice MFI (marqueurs × metaclusters)
+│   ├── per_file_summary.csv                       # Résumé par fichier FCS source
+│   ├── cluster_distribution_nodes_<ts>.csv        # Distribution Sain/Patho par nœud SOM
+│   └── cluster_distribution_metaclusters_<ts>.csv # Distribution Sain/Patho par métacluster
 │
 ├── plots/
 │   ├── gating_overview.png          # Vue d'ensemble du gating (FSC/SSC)
@@ -537,9 +567,31 @@ Results/
 │   └── flowsom_umap.png             # Projection UMAP (si disponible)
 │
 └── other/
-    ├── gating_log_<timestamp>.json  # Log détaillé de chaque étape de gating
-    └── analysis_metadata.json       # Métadonnées complètes du run (config, métriques, durée)
+    ├── cluster_distribution_<ts>.txt        # Rapport texte ASCII (nœuds SOM + métaclusters)
+    ├── gating_log_<timestamp>.json          # Log détaillé de chaque étape de gating
+    └── analysis_metadata.json              # Métadonnées complètes du run (config, métriques, durée)
 ```
+
+### Distribution Sain/Patho par cluster
+
+Les fichiers `cluster_distribution_*` récapitulent pour chaque nœud SOM (grille fine, ex. 100 nœuds pour 10×10) et chaque métacluster (regroupement) :
+
+| Colonne | Description |
+|---|---|
+| `cluster_id` | Identifiant du nœud SOM ou du métacluster |
+| `metacluster` | Métacluster majoritaire du nœud (vue nœud uniquement) |
+| `n_total` | Nombre total de cellules dans ce cluster |
+| `pct_total` | % de l'ensemble des cellules |
+| `n_sain` | Nombre de cellules Sain dans le cluster |
+| `pct_sain_in_cluster` | % des cellules du cluster qui sont Sain |
+| `pct_sain_of_sain` | % des cellules Sain totales qui se trouvent dans ce cluster |
+| `n_patho` | Nombre de cellules Pathologiques dans le cluster |
+| `pct_patho_in_cluster` | **% des cellules du cluster qui sont Patho** (colonne de tri principale) |
+| `pct_patho_of_patho` | % des cellules Patho totales qui se trouvent dans ce cluster |
+
+**Tri par défaut** : `pct_patho_in_cluster` décroissant — les clusters les plus enrichis en cellules pathologiques apparaissent en premier.
+
+Le rapport texte `.txt` contient les deux tableaux (métacluster + nœud) avec alignement ASCII, lisible directement dans un terminal ou un éditeur.
 
 ### Colonnes ajoutées aux fichiers FCS
 
@@ -632,11 +684,15 @@ flowsom_pipeline_pro/
 │   ├── models/              # Dataclasses (FlowSample, PipelineResult…)
 │   ├── utils/               # Logger, validators
 │   ├── io/                  # Lecture/écriture fichiers
+│   │   ├── csv_exporter.py                    # Stats, MFI, données cellulaires
+│   │   ├── cluster_distribution_exporter.py   # Distribution Sain/Patho (TXT + CSV)
+│   │   ├── fcs_reader.py / fcs_writer.py      # FCS natif (flowio / fcswrite)
+│   │   └── json_exporter.py                   # Métadonnées de run
 │   ├── visualization/       # Graphiques matplotlib
 │   ├── analysis/            # Analyses biologiques (MRD, blastes, stats)
 │   ├── services/            # Orchestration (preprocessing, clustering, export)
 │   └── pipeline/
-│       └── pipeline_executor.py  # FlowSOMPipeline — 6 étapes
+│       └── pipeline_executor.py  # FlowSOMPipeline — 7 étapes
 │
 └── tests/                   # Tests unitaires (à compléter)
 ```

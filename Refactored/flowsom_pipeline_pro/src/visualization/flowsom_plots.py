@@ -396,120 +396,86 @@ def plot_mst_static(
         return None
 
     try:
-        from scipy.spatial.distance import cdist
-        from scipy.sparse.csgraph import minimum_spanning_tree
-        from scipy.sparse import csr_matrix
-        from collections import defaultdict
+        from matplotlib.patches import Patch
 
         layout_coords = clusterer.get_layout_coords()  # (n_nodes, 2)
         node_sizes = clusterer.get_node_sizes()  # (n_nodes,)
         n_nodes = clusterer.n_nodes
 
-        # ── Métacluster dominant par node ─────────────────────────────────────
-        mc_per_node = np.full(n_nodes, -1, dtype=int)
-        na = getattr(clusterer, "node_assignments_", None)
-        ma = getattr(clusterer, "metacluster_assignments_", None)
-        if na is not None and ma is not None:
-            for node_id in range(n_nodes):
-                cells_in_node = na == node_id
-                if cells_in_node.any():
-                    mc_per_node[node_id] = int(np.bincount(ma[cells_in_node]).argmax())
+        # ── Métacluster par node — utilise metacluster_map_ en priorité ───────
+        mc_per_node = getattr(clusterer, "metacluster_map_", None)
+        if mc_per_node is None:
+            na = getattr(clusterer, "node_assignments_", None)
+            ma = getattr(clusterer, "metacluster_assignments_", None)
+            if na is not None and ma is not None:
+                mc_per_node = np.array(
+                    [
+                        int(np.bincount(ma[na == i]).argmax()) if (na == i).any() else 0
+                        for i in range(n_nodes)
+                    ],
+                    dtype=int,
+                )
+            else:
+                mc_per_node = np.zeros(n_nodes, dtype=int)
+        mc_per_node = np.asarray(mc_per_node, dtype=int)
 
-        # ── Arêtes MST depuis le codebook ─────────────────────────────────────
-        edges: List[Tuple[int, int]] = []
-        codebook = None
-        fsm = getattr(clusterer, "_fsom_model", None)
-        if fsm is not None:
-            if hasattr(fsm, "codes"):
-                codebook = np.asarray(fsm.codes, dtype=float)
-            elif hasattr(fsm, "model") and hasattr(fsm.model, "codes"):
-                codebook = np.asarray(fsm.model.codes, dtype=float)
-        if codebook is not None:
-            dist_mat = cdist(codebook, codebook, metric="euclidean")
-            mst = minimum_spanning_tree(csr_matrix(dist_mat))
-            coo = mst.tocoo()
-            edges = list(zip(coo.row.tolist(), coo.col.tolist()))
+        # ── Style identique au notebook ───────────────────────────────────────
+        max_size = float(node_sizes.max()) if node_sizes.max() > 0 else 1.0
+        sizes = 100 + (node_sizes / max_size) * 800
 
-        # ── Dessin ────────────────────────────────────────────────────────────
-        n_meta = int(metaclustering.max()) + 1 if len(metaclustering) > 0 else 1
-        cmap = plt.cm.get_cmap("tab20", n_meta)
-        max_sz = float(node_sizes.max()) if node_sizes.max() > 0 else 1.0
-        display_sizes = 80 + (node_sizes / max_sz) * 500
+        n_meta = len(np.unique(mc_per_node))
+        cmap = plt.cm.tab20 if n_meta <= 20 else plt.cm.turbo
+        # Couleur indexée comme le notebook : cmap(int(m) / max(n_meta-1, 1))
+        colors = [cmap(int(m) / max(n_meta - 1, 1)) for m in mc_per_node]
 
-        fig, ax = plt.subplots(figsize=figsize, facecolor=BG_COLOR)
-        ax.set_facecolor(BG_COLOR)
+        fig, ax = plt.subplots(figsize=figsize)
 
-        # Arêtes
-        for i, j in edges:
-            ax.plot(
-                [layout_coords[i, 0], layout_coords[j, 0]],
-                [layout_coords[i, 1], layout_coords[j, 1]],
-                color=SPINE_COLOR,
-                lw=1.2,
-                zorder=1,
-                alpha=0.7,
-            )
-
-        # Nodes
-        node_colors = [
-            cmap(mc_per_node[i] % 20)
-            if mc_per_node[i] >= 0
-            else (0.45, 0.45, 0.45, 1.0)
-            for i in range(n_nodes)
-        ]
         ax.scatter(
             layout_coords[:, 0],
             layout_coords[:, 1],
-            s=display_sizes,
-            c=node_colors,
-            zorder=2,
-            edgecolors=TEXT_COLOR,
-            linewidths=0.5,
+            s=sizes,
+            c=colors,
+            edgecolors="white",
+            linewidths=1.5,
             alpha=0.9,
+            zorder=2,
         )
 
-        # Labels — centroïde de chaque métacluster
-        mc_pts: dict = defaultdict(list)
+        # Label par node (MC id) — identique au notebook
         for i in range(n_nodes):
-            if mc_per_node[i] >= 0:
-                mc_pts[mc_per_node[i]].append(layout_coords[i])
-        for mc_id, pts in mc_pts.items():
-            centroid = np.mean(pts, axis=0)
-            ax.text(
-                centroid[0],
-                centroid[1],
-                f"MC{mc_id}",
+            ax.annotate(
+                str(int(mc_per_node[i])),
+                (layout_coords[i, 0], layout_coords[i, 1]),
                 ha="center",
                 va="center",
-                fontsize=9,
-                fontweight="bold",
+                fontsize=8,
                 color="white",
-                zorder=3,
+                fontweight="bold",
             )
 
-        ax.set_title(title, fontsize=14, fontweight="bold", color=TEXT_COLOR, pad=12)
-        ax.set_xlabel("MST Dim 1", fontsize=11, color=TEXT_COLOR)
-        ax.set_ylabel("MST Dim 2", fontsize=11, color=TEXT_COLOR)
-        ax.tick_params(colors=TEXT_COLOR)
-        for spine in ax.spines.values():
-            spine.set_color(SPINE_COLOR)
-
-        # Légende métaclusters
-        legend_handles = [
-            plt.scatter([], [], s=80, color=cmap(i % 20), label=f"MC{i}")
-            for i in range(n_meta)
-        ]
-        ax.legend(
-            handles=legend_handles,
-            loc="best",
-            facecolor="#313244",
-            labelcolor=TEXT_COLOR,
-            edgecolor=SPINE_COLOR,
-            fontsize=9,
-            title="Métacluster",
-            title_fontsize=9,
+        ax.set_xlabel("xNodes", fontsize=12, fontweight="bold")
+        ax.set_ylabel("yNodes", fontsize=12, fontweight="bold")
+        ax.set_title(
+            f"Arbre MST - {n_nodes} nodes, {n_meta} métaclusters",
+            fontsize=14,
+            fontweight="bold",
+            pad=15,
         )
+        ax.grid(True, alpha=0.15, linestyle="--")
 
+        if n_meta <= 15:
+            legend_elements = [
+                Patch(facecolor=cmap(i / max(n_meta - 1, 1)), label=f"MC {i}")
+                for i in range(n_meta)
+            ]
+            ax.legend(
+                handles=legend_elements,
+                loc="center left",
+                bbox_to_anchor=(1.02, 0.5),
+                fontsize=9,
+            )
+
+        plt.tight_layout()
         save_figure(fig, output_path)
         _logger.info("MST statique sauvegardé: %s", output_path)
         return fig
@@ -563,41 +529,90 @@ def plot_mst_plotly(
         node_sizes = clusterer.get_node_sizes()
         n_nodes = clusterer.n_nodes
 
-        # Métacluster dominant par node
-        mc_per_node = np.full(n_nodes, -1, dtype=int)
-        na = getattr(clusterer, "node_assignments_", None)
-        ma = getattr(clusterer, "metacluster_assignments_", None)
-        if na is not None and ma is not None:
-            for node_id in range(n_nodes):
-                mask_node = na == node_id
-                if mask_node.any():
-                    mc_per_node[node_id] = int(np.bincount(ma[mask_node]).argmax())
+        # Métacluster par node — utilise metacluster_map_ en priorité
+        mc_per_node = getattr(clusterer, "metacluster_map_", None)
+        if mc_per_node is None:
+            na = getattr(clusterer, "node_assignments_", None)
+            ma = getattr(clusterer, "metacluster_assignments_", None)
+            if na is not None and ma is not None:
+                mc_per_node = np.array(
+                    [
+                        int(np.bincount(ma[na == i]).argmax()) if (na == i).any() else 0
+                        for i in range(n_nodes)
+                    ],
+                    dtype=int,
+                )
+            else:
+                mc_per_node = np.zeros(n_nodes, dtype=int)
+        mc_per_node = np.asarray(mc_per_node, dtype=int)
 
-        # Arêtes MST
+        # ── Arêtes MST ────────────────────────────────────────────────────────
+        # Priorité 1 (CPU) : graphe MST stocké dans cluster_data.uns['mst'] (igraph)
+        # Priorité 2 (GPU/fallback) : recompute depuis codebook
         edge_x: List[Optional[float]] = []
         edge_y: List[Optional[float]] = []
         fsm = getattr(clusterer, "_fsom_model", None)
-        codebook = None
-        if fsm is not None:
-            if hasattr(fsm, "codes"):
-                codebook = np.asarray(fsm.codes, dtype=float)
-            elif hasattr(fsm, "model") and hasattr(fsm.model, "codes"):
-                codebook = np.asarray(fsm.model.codes, dtype=float)
-        if codebook is not None:
-            dist_mat = cdist(codebook, codebook, metric="euclidean")
-            mst = minimum_spanning_tree(csr_matrix(dist_mat))
-            coo = mst.tocoo()
-            for i, j in zip(coo.row.tolist(), coo.col.tolist()):
-                edge_x += [layout_coords[i, 0], layout_coords[j, 0], None]
-                edge_y += [layout_coords[i, 1], layout_coords[j, 1], None]
+        _mst_loaded = False
 
-        palette = (
-            px.colors.qualitative.Set1
-            + px.colors.qualitative.Pastel
-            + px.colors.qualitative.Set2
-        )
-        n_meta = int(metaclustering.max()) + 1 if len(metaclustering) > 0 else 1
+        # Tentative via cluster_data.uns['mst'] (fs.FlowSOM CPU)
+        if fsm is not None and hasattr(fsm, "get_cluster_data"):
+            try:
+                import igraph as _ig
+
+                cluster_data_mst = fsm.get_cluster_data()
+                if "mst" in cluster_data_mst.uns:
+                    _mst_graph = cluster_data_mst.uns["mst"]
+                    if isinstance(_mst_graph, _ig.Graph):
+                        for edge in _mst_graph.es:
+                            s, t = edge.source, edge.target
+                            if s < n_nodes and t < n_nodes:
+                                edge_x += [
+                                    layout_coords[s, 0],
+                                    layout_coords[t, 0],
+                                    None,
+                                ]
+                                edge_y += [
+                                    layout_coords[s, 1],
+                                    layout_coords[t, 1],
+                                    None,
+                                ]
+                        _mst_loaded = True
+            except Exception:
+                pass
+
+        # Fallback : recompute depuis le codebook (GPU ou cluster_data sans uns['mst'])
+        if not _mst_loaded:
+            codebook = None
+            if fsm is not None:
+                if hasattr(fsm, "codes"):
+                    codebook = np.asarray(fsm.codes, dtype=float)
+                elif hasattr(fsm, "model") and hasattr(fsm.model, "codes"):
+                    codebook = np.asarray(fsm.model.codes, dtype=float)
+                elif hasattr(fsm, "get_cluster_data"):
+                    try:
+                        codebook = np.asarray(fsm.get_cluster_data().X, dtype=float)
+                    except Exception:
+                        pass
+            if codebook is not None:
+                from scipy.spatial.distance import cdist
+                from scipy.sparse.csgraph import minimum_spanning_tree
+                from scipy.sparse import csr_matrix
+
+                dist_mat = cdist(codebook, codebook, metric="euclidean")
+                mst_sparse = minimum_spanning_tree(csr_matrix(dist_mat))
+                coo = mst_sparse.tocoo()
+                for i, j in zip(coo.row.tolist(), coo.col.tolist()):
+                    edge_x += [layout_coords[i, 0], layout_coords[j, 0], None]
+                    edge_y += [layout_coords[i, 1], layout_coords[j, 1], None]
+
+        # ── Palette & sizing ─────────────────────────────────────────────────
+        n_meta = len(np.unique(mc_per_node))
         max_sz = float(node_sizes.max()) if node_sizes.max() > 0 else 1.0
+
+        if n_meta <= 20:
+            palette = px.colors.qualitative.Alphabet[:n_meta]
+        else:
+            palette = [f"hsl({int(i * 360 / n_meta)},70%,55%)" for i in range(n_meta)]
 
         traces: List[Any] = []
         # Arêtes en premier
@@ -607,31 +622,31 @@ def plot_mst_plotly(
                     x=edge_x,
                     y=edge_y,
                     mode="lines",
-                    line=dict(color="rgba(180,180,180,0.35)", width=1.5),
+                    line=dict(color="rgba(100,100,100,0.5)", width=1.5),
                     showlegend=False,
                     hoverinfo="skip",
                 )
             )
 
         # Nodes par métacluster
+        _bubble_sizes = 10 + (node_sizes / max_sz) * 40
         for mc_id in range(n_meta):
             indices = [i for i in range(n_nodes) if mc_per_node[i] == mc_id]
             if not indices:
                 continue
             idx = np.array(indices)
-            node_sz = 10 + (node_sizes[idx] / max_sz) * 38
 
             mc_key = f"MC{mc_id}"
             if mc_key in mfi_matrix.index:
                 top2 = mfi_matrix.loc[mc_key].nlargest(2).index.tolist()
                 hover = [
-                    f"Node {i}<br><b>MC{mc_id}</b><br>Cellules: {int(node_sizes[i]):,}<br>Top: {', '.join(top2)}"
-                    for i in idx
+                    f"<b>Node {ni}</b><br>MC {mc_id}<br>Cellules: {int(node_sizes[ni]):,}<br>Top: {', '.join(top2)}"
+                    for ni in idx
                 ]
             else:
                 hover = [
-                    f"Node {i}<br><b>MC{mc_id}</b><br>Cellules: {int(node_sizes[i]):,}"
-                    for i in idx
+                    f"<b>Node {ni}</b><br>MC {mc_id}<br>Cellules: {int(node_sizes[ni]):,}<br>x: {layout_coords[ni, 0]:.2f}, y: {layout_coords[ni, 1]:.2f}"
+                    for ni in idx
                 ]
 
             traces.append(
@@ -640,15 +655,15 @@ def plot_mst_plotly(
                     y=layout_coords[idx, 1].tolist(),
                     mode="markers+text",
                     marker=dict(
-                        size=node_sz.tolist(),
+                        size=_bubble_sizes[idx].tolist(),
                         color=palette[mc_id % len(palette)],
-                        line=dict(color="white", width=0.8),
+                        line=dict(color="white", width=1.5),
                         opacity=0.9,
                     ),
-                    text=[f"MC{mc_id}"] * len(idx),
+                    text=[str(int(mc_id))] * len(idx),
+                    textfont=dict(size=9, color="white", family="Arial Black"),
                     textposition="middle center",
-                    textfont=dict(size=8, color="white"),
-                    name=f"MC{mc_id}",
+                    name=f"MC{mc_id} ({int(node_sizes[idx].sum()):,} cells)",
                     hovertext=hover,
                     hoverinfo="text",
                 )
@@ -656,16 +671,43 @@ def plot_mst_plotly(
 
         fig = go.Figure(data=traces)
         fig.update_layout(
-            title=dict(text=f"<b>{title}</b>", font=dict(size=16)),
-            paper_bgcolor="#1e1e2e",
-            plot_bgcolor="#1e1e2e",
-            font=dict(color="#e2e8f0"),
-            height=620,
-            showlegend=True,
-            legend=dict(bgcolor="#313244", bordercolor="#585b70"),
-            xaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-            yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-            margin=dict(l=20, r=20, t=60, b=20),
+            title=dict(
+                text=(
+                    f"<b>Arbre MST — {n_nodes} nodes, {n_meta} métaclusters</b><br>"
+                    "<sup>Taille des bulles ∝ nombre de cellules · Cliquez la légende pour filtrer</sup>"
+                ),
+                font=dict(size=14),
+            ),
+            xaxis=dict(
+                title="xNodes",
+                showgrid=True,
+                gridcolor="rgba(0,0,0,0.06)",
+                zeroline=False,
+            ),
+            yaxis=dict(
+                title="yNodes",
+                showgrid=True,
+                gridcolor="rgba(0,0,0,0.06)",
+                zeroline=False,
+                scaleanchor="x",
+                scaleratio=1,
+            ),
+            height=750,
+            width=900,
+            paper_bgcolor="#fafafa",
+            plot_bgcolor="#f5f5f5",
+            legend=dict(
+                title="Métacluster",
+                font=dict(size=10),
+                bgcolor="rgba(255,255,255,0.85)",
+                bordercolor="#ccc",
+                borderwidth=1,
+                yanchor="top",
+                y=1,
+                xanchor="left",
+                x=1.02,
+            ),
+            margin=dict(t=80, b=50, l=60, r=200),
         )
 
         if output_path is not None:
@@ -1759,3 +1801,907 @@ def compute_exclusive_clusters(
         "mixed": mixed,
         "summary_lines": summary_lines,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Post-clustering bar charts Plotly
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def plot_patho_pct_per_cluster(
+    metaclustering: np.ndarray,
+    condition_labels: np.ndarray,
+    output_html: Optional[Path | str] = None,
+    output_jpg: Optional[Path | str] = None,
+    *,
+    patho_label: str = "Pathologique",
+    title: str = "% Cellules pathologiques par cluster (post-FlowSOM)",
+) -> Optional[Any]:
+    """
+    Bar chart Plotly : % de cellules provenant de la moelle pathologique dans chaque cluster.
+
+    Pour chaque métacluster, calcule :
+        pct_patho = n_cells_patho_in_cluster / n_cells_total_in_cluster × 100
+
+    Utile pour identifier les clusters enrichis en cellules pathologiques (populations LAIP).
+
+    Args:
+        metaclustering: Assignation métacluster par cellule (n_cells,).
+        condition_labels: Étiquette de condition par cellule (n_cells,).
+        output_html: Chemin HTML de sortie (optionnel).
+        output_jpg: Chemin JPG de sortie (optionnel).
+        patho_label: Valeur dans condition_labels désignant la condition pathologique.
+        title: Titre du graphique.
+
+    Returns:
+        Figure Plotly ou None si plotly absent.
+    """
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        _logger.warning("plotly requis pour plot_patho_pct_per_cluster")
+        return None
+
+    try:
+        cond_arr = np.asarray(condition_labels)
+        cluster_ids_sorted = np.sort(np.unique(metaclustering))
+        labels = [f"MC{int(c)}" for c in cluster_ids_sorted]
+
+        pct_patho: List[float] = []
+        hover_texts: List[str] = []
+
+        for cid in cluster_ids_sorted:
+            mask = metaclustering == cid
+            total = int(mask.sum())
+            n_patho = int((mask & (cond_arr == patho_label)).sum())
+            pct = (n_patho / total * 100) if total > 0 else 0.0
+            pct_patho.append(round(pct, 2))
+            hover_texts.append(
+                f"<b>MC{int(cid)}</b><br>"
+                f"Cellules patho : {n_patho:,}<br>"
+                f"Total cluster  : {total:,}<br>"
+                f"% Patho        : {pct:.2f}%"
+            )
+
+        # Gradient rouge (fort % patho) → bleu (faible % patho)
+        bar_colors = [
+            f"rgba({int(243 * p / 100 + 137 * (1 - p / 100))}, "
+            f"{int(139 * (1 - p / 100))}, "
+            f"{int(168 * (1 - p / 100) + 250 * (1 - p / 100))}, 0.85)"
+            for p in pct_patho
+        ]
+
+        fig = go.Figure(
+            go.Bar(
+                x=labels,
+                y=pct_patho,
+                marker=dict(
+                    color=bar_colors,
+                    line=dict(color="#585b70", width=0.8),
+                ),
+                hovertext=hover_texts,
+                hoverinfo="text",
+                text=[f"{p:.1f}%" for p in pct_patho],
+                textposition="outside",
+                textfont=dict(color="#e2e8f0", size=11),
+            )
+        )
+
+        max_y = max(pct_patho) if pct_patho else 10.0
+        fig.update_layout(
+            title=dict(
+                text=f"<b>{title}</b>",
+                font=dict(size=16, color="#e2e8f0"),
+                x=0.5,
+            ),
+            xaxis=dict(
+                title="Métacluster",
+                color="#e2e8f0",
+                gridcolor="#313244",
+                tickfont=dict(size=11),
+            ),
+            yaxis=dict(
+                title="% Cellules pathologiques",
+                color="#e2e8f0",
+                gridcolor="#313244",
+                range=[0, min(max_y * 1.18, 105)],
+                ticksuffix="%",
+            ),
+            paper_bgcolor="#1e1e2e",
+            plot_bgcolor="#1e1e2e",
+            font=dict(color="#e2e8f0"),
+            height=520,
+            margin=dict(l=60, r=40, t=80, b=60),
+            bargap=0.25,
+        )
+
+        # Ligne de référence à 100 %
+        fig.add_hline(
+            y=100,
+            line=dict(color="#f38ba8", dash="dash", width=1.5),
+            annotation_text="100 % patho",
+            annotation_font=dict(color="#f38ba8", size=10),
+        )
+
+        if output_html is not None:
+            out_html = Path(output_html)
+            out_html.parent.mkdir(parents=True, exist_ok=True)
+            fig.write_html(str(out_html), include_plotlyjs="cdn")
+            _logger.info("Patho%% par cluster (HTML) sauvegardé: %s", out_html.name)
+
+        if output_jpg is not None:
+            out_jpg = Path(output_jpg)
+            out_jpg.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                fig.write_image(
+                    str(out_jpg), format="jpg", width=1400, height=620, scale=2
+                )
+                _logger.info("Patho%% par cluster (JPG) sauvegardé: %s", out_jpg.name)
+            except Exception as _img_err:
+                _logger.warning(
+                    "Export JPG échoué (kaleido requis — pip install kaleido): %s",
+                    _img_err,
+                )
+
+        return fig
+
+    except Exception as exc:
+        _logger.error("Échec plot_patho_pct_per_cluster: %s", exc)
+        return None
+
+
+def plot_cells_pct_per_cluster(
+    metaclustering: np.ndarray,
+    output_html: Optional[Path | str] = None,
+    output_jpg: Optional[Path | str] = None,
+    *,
+    condition_labels: Optional[np.ndarray] = None,
+    title: str = "% Cellules par cluster (post-FlowSOM)",
+) -> Optional[Any]:
+    """
+    Bar chart Plotly : distribution en % des cellules par métacluster.
+
+    Pour chaque métacluster :
+        pct = n_cells_in_cluster / n_cells_total × 100
+
+    Si ``condition_labels`` est fourni, les barres sont empilées par condition
+    (Sain / Pathologique), permettant de visualiser la composition de chaque cluster.
+
+    Args:
+        metaclustering: Assignation métacluster par cellule (n_cells,).
+        output_html: Chemin HTML de sortie (optionnel).
+        output_jpg: Chemin JPG de sortie (optionnel).
+        condition_labels: Étiquette de condition par cellule (optionnel).
+        title: Titre du graphique.
+
+    Returns:
+        Figure Plotly ou None si plotly absent.
+    """
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        _logger.warning("plotly requis pour plot_cells_pct_per_cluster")
+        return None
+
+    try:
+        total_cells = len(metaclustering)
+        cluster_ids_sorted = np.sort(np.unique(metaclustering))
+        labels = [f"MC{int(c)}" for c in cluster_ids_sorted]
+
+        _COND_COLORS = ["#89b4fa", "#f38ba8", "#a6e3a1", "#f9e2af", "#cba6f7"]
+
+        if condition_labels is not None:
+            cond_arr = np.asarray(condition_labels)
+            unique_conds = sorted(set(cond_arr.tolist()))
+            traces: List[Any] = []
+            for ci, cond in enumerate(unique_conds):
+                cond_mask = cond_arr == cond
+                pcts: List[float] = []
+                hover_texts: List[str] = []
+                for cid in cluster_ids_sorted:
+                    mask = metaclustering == cid
+                    n_in_cond = int((mask & cond_mask).sum())
+                    pct = n_in_cond / total_cells * 100
+                    pcts.append(round(pct, 3))
+                    hover_texts.append(
+                        f"<b>MC{int(cid)}</b> — {cond}<br>"
+                        f"Cellules : {n_in_cond:,}<br>"
+                        f"% global : {pct:.2f}%"
+                    )
+                traces.append(
+                    go.Bar(
+                        name=str(cond),
+                        x=labels,
+                        y=pcts,
+                        marker=dict(
+                            color=_COND_COLORS[ci % len(_COND_COLORS)],
+                            line=dict(color="#585b70", width=0.6),
+                        ),
+                        hovertext=hover_texts,
+                        hoverinfo="text",
+                        text=[f"{p:.1f}%" for p in pcts],
+                        textposition="inside",
+                        textfont=dict(color="white", size=9),
+                    )
+                )
+            barmode = "stack"
+        else:
+            counts = np.array(
+                [int((metaclustering == c).sum()) for c in cluster_ids_sorted]
+            )
+            pcts = [round(int(cnt) / total_cells * 100, 3) for cnt in counts]
+            hover_texts = [
+                f"<b>MC{int(cid)}</b><br>"
+                f"Cellules : {int(cnt):,}<br>"
+                f"% Total  : {pct:.2f}%"
+                for cid, cnt, pct in zip(cluster_ids_sorted, counts, pcts)
+            ]
+            n = len(cluster_ids_sorted)
+            color_scale = [
+                f"hsl({int(240 - 240 * i / max(n - 1, 1))}, 70%, 60%)" for i in range(n)
+            ]
+            traces = [
+                go.Bar(
+                    x=labels,
+                    y=pcts,
+                    marker=dict(
+                        color=color_scale, line=dict(color="#585b70", width=0.8)
+                    ),
+                    hovertext=hover_texts,
+                    hoverinfo="text",
+                    text=[f"{p:.1f}%" for p in pcts],
+                    textposition="outside",
+                    textfont=dict(color="#e2e8f0", size=11),
+                )
+            ]
+            barmode = "group"
+
+        fig = go.Figure(data=traces)
+        fig.update_layout(
+            title=dict(
+                text=f"<b>{title}</b>",
+                font=dict(size=16, color="#e2e8f0"),
+                x=0.5,
+            ),
+            barmode=barmode,
+            xaxis=dict(
+                title="Métacluster",
+                color="#e2e8f0",
+                gridcolor="#313244",
+                tickfont=dict(size=11),
+            ),
+            yaxis=dict(
+                title="% Cellules",
+                color="#e2e8f0",
+                gridcolor="#313244",
+                ticksuffix="%",
+            ),
+            paper_bgcolor="#1e1e2e",
+            plot_bgcolor="#1e1e2e",
+            font=dict(color="#e2e8f0"),
+            height=520,
+            margin=dict(l=60, r=40, t=80, b=60),
+            bargap=0.25,
+            legend=dict(bgcolor="#313244", bordercolor="#585b70"),
+        )
+
+        if output_html is not None:
+            out_html = Path(output_html)
+            out_html.parent.mkdir(parents=True, exist_ok=True)
+            fig.write_html(str(out_html), include_plotlyjs="cdn")
+            _logger.info("%%Cellules par cluster (HTML) sauvegardé: %s", out_html.name)
+
+        if output_jpg is not None:
+            out_jpg = Path(output_jpg)
+            out_jpg.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                fig.write_image(
+                    str(out_jpg), format="jpg", width=1400, height=620, scale=2
+                )
+                _logger.info(
+                    "%%Cellules par cluster (JPG) sauvegardé: %s", out_jpg.name
+                )
+            except Exception as _img_err:
+                _logger.warning(
+                    "Export JPG échoué (kaleido requis — pip install kaleido): %s",
+                    _img_err,
+                )
+
+        return fig
+
+    except Exception as exc:
+        _logger.error("Échec plot_cells_pct_per_cluster: %s", exc)
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Bar charts POST-FlowSOM par nœud SOM (100 clusters pour grille 10×10)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def plot_patho_pct_per_som_node(
+    clustering: np.ndarray,
+    condition_labels: np.ndarray,
+    output_html: Optional[Path | str] = None,
+    output_jpg: Optional[Path | str] = None,
+    *,
+    patho_label: str = "Pathologique",
+    title: str = "% Cellules pathologiques par cluster SOM (post-FlowSOM)",
+) -> Optional[Any]:
+    """
+    Bar chart Plotly : % de cellules provenant de la moelle pathologique dans chaque
+    nœud SOM (cluster fin, ex. 100 nœuds pour une grille 10×10).
+
+    Pour chaque nœud SOM, calcule :
+        pct_patho = n_cells_patho_in_node / n_cells_total_in_node × 100
+
+    Permet d'identifier les nœuds enrichis en cellules pathologiques (populations LAIP)
+    à une résolution plus fine que les métaclusters.
+
+    Args:
+        clustering: Assignation de nœud SOM par cellule (n_cells,), entiers 0…N-1.
+        condition_labels: Étiquette de condition par cellule (n_cells,).
+        output_html: Chemin HTML de sortie (optionnel).
+        output_jpg: Chemin JPG de sortie (optionnel).
+        patho_label: Valeur dans condition_labels désignant la condition pathologique.
+        title: Titre du graphique.
+
+    Returns:
+        Figure Plotly ou None si plotly absent.
+    """
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        _logger.warning("plotly requis pour plot_patho_pct_per_som_node")
+        return None
+
+    try:
+        cond_arr = np.asarray(condition_labels)
+        node_ids = np.sort(np.unique(clustering))
+        n_nodes = len(node_ids)
+        labels = [f"C{int(n)}" for n in node_ids]
+
+        pct_patho: List[float] = []
+        cell_counts: List[int] = []
+        hover_texts: List[str] = []
+
+        for nid in node_ids:
+            mask = clustering == nid
+            total = int(mask.sum())
+            n_patho = int((mask & (cond_arr == patho_label)).sum())
+            pct = (n_patho / total * 100) if total > 0 else 0.0
+            pct_patho.append(round(pct, 2))
+            cell_counts.append(total)
+            hover_texts.append(
+                f"<b>Cluster {int(nid)}</b><br>"
+                f"Cellules patho : {n_patho:,}<br>"
+                f"Total cluster  : {total:,}<br>"
+                f"% Patho        : {pct:.2f}%"
+            )
+
+        # Gradient rouge (fort % patho) → bleu (faible % patho)
+        bar_colors = [
+            f"rgba({int(243 * p / 100 + 137 * (1 - p / 100))}, "
+            f"{int(139 * (1 - p / 100))}, "
+            f"{int(168 * (1 - p / 100) + 250 * (1 - p / 100))}, 0.85)"
+            for p in pct_patho
+        ]
+
+        fig = go.Figure(
+            go.Bar(
+                x=labels,
+                y=pct_patho,
+                marker=dict(
+                    color=bar_colors,
+                    line=dict(color="#585b70", width=0.5),
+                ),
+                hovertext=hover_texts,
+                hoverinfo="text",
+                text=[f"{p:.1f}%" for p in pct_patho],
+                textposition="outside",
+                textfont=dict(color="#e2e8f0", size=8),
+                width=0.7,
+            )
+        )
+
+        max_y = max(pct_patho) if pct_patho else 10.0
+        fig.update_layout(
+            title=dict(
+                text=f"<b>{title}</b><br><sup>{n_nodes} nœuds SOM — {len(clustering):,} cellules</sup>",
+                font=dict(size=15, color="#e2e8f0"),
+                x=0.5,
+            ),
+            xaxis=dict(
+                title="Nœud SOM (cluster)",
+                color="#e2e8f0",
+                gridcolor="#313244",
+                tickfont=dict(size=9),
+                tickangle=90,
+                tickmode="array",
+                tickvals=labels,
+                ticktext=labels,
+            ),
+            yaxis=dict(
+                title="% Cellules pathologiques",
+                color="#e2e8f0",
+                gridcolor="#313244",
+                range=[0, min(max_y * 1.18, 105)],
+                ticksuffix="%",
+            ),
+            paper_bgcolor="#1e1e2e",
+            plot_bgcolor="#1e1e2e",
+            font=dict(color="#e2e8f0"),
+            height=580,
+            width=max(1400, n_nodes * 22),
+            margin=dict(l=70, r=40, t=100, b=110),
+            bargap=0.15,
+        )
+
+        # Ligne de référence à 100 %
+        fig.add_hline(
+            y=100,
+            line=dict(color="#f38ba8", dash="dash", width=1.5),
+            annotation_text="100 % patho",
+            annotation_font=dict(color="#f38ba8", size=10),
+        )
+
+        # Ligne de référence à 50 %
+        fig.add_hline(
+            y=50,
+            line=dict(color="#f9e2af", dash="dot", width=1.0),
+            annotation_text="50%",
+            annotation_font=dict(color="#f9e2af", size=9),
+        )
+
+        if output_html is not None:
+            out_html = Path(output_html)
+            out_html.parent.mkdir(parents=True, exist_ok=True)
+            fig.write_html(str(out_html), include_plotlyjs="cdn")
+            _logger.info("Patho%% par nœud SOM (HTML) sauvegardé: %s", out_html.name)
+
+        if output_jpg is not None:
+            out_jpg = Path(output_jpg)
+            out_jpg.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                fig.write_image(
+                    str(out_jpg),
+                    format="jpg",
+                    width=max(1800, n_nodes * 22),
+                    height=680,
+                    scale=2,
+                )
+                _logger.info("Patho%% par nœud SOM (JPG) sauvegardé: %s", out_jpg.name)
+            except Exception as _img_err:
+                _logger.warning(
+                    "Export JPG échoué (kaleido requis — pip install kaleido): %s",
+                    _img_err,
+                )
+
+        return fig
+
+    except Exception as exc:
+        _logger.error("Échec plot_patho_pct_per_som_node: %s", exc)
+        return None
+
+
+def plot_cells_pct_per_som_node(
+    clustering: np.ndarray,
+    output_html: Optional[Path | str] = None,
+    output_jpg: Optional[Path | str] = None,
+    *,
+    condition_labels: Optional[np.ndarray] = None,
+    title: str = "% Cellules par cluster SOM (post-FlowSOM)",
+) -> Optional[Any]:
+    """
+    Bar chart Plotly : distribution en % des cellules par nœud SOM (cluster fin).
+
+    Pour chaque nœud SOM :
+        pct = n_cells_in_node / n_cells_total × 100
+
+    Si ``condition_labels`` est fourni, les barres sont empilées par condition
+    (Sain / Pathologique), permettant de visualiser la composition de chaque nœud.
+
+    Args:
+        clustering: Assignation de nœud SOM par cellule (n_cells,), entiers 0…N-1.
+        output_html: Chemin HTML de sortie (optionnel).
+        output_jpg: Chemin JPG de sortie (optionnel).
+        condition_labels: Étiquette de condition par cellule (optionnel).
+        title: Titre du graphique.
+
+    Returns:
+        Figure Plotly ou None si plotly absent.
+    """
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        _logger.warning("plotly requis pour plot_cells_pct_per_som_node")
+        return None
+
+    try:
+        total_cells = len(clustering)
+        node_ids = np.sort(np.unique(clustering))
+        n_nodes = len(node_ids)
+        labels = [f"C{int(n)}" for n in node_ids]
+
+        _COND_COLORS = ["#89b4fa", "#f38ba8", "#a6e3a1", "#f9e2af", "#cba6f7"]
+
+        if condition_labels is not None:
+            cond_arr = np.asarray(condition_labels)
+            unique_conds = sorted(set(cond_arr.tolist()))
+            traces: List[Any] = []
+            for ci, cond in enumerate(unique_conds):
+                cond_mask = cond_arr == cond
+                pcts: List[float] = []
+                hover_texts: List[str] = []
+                for nid in node_ids:
+                    mask = clustering == nid
+                    n_in_cond = int((mask & cond_mask).sum())
+                    pct = n_in_cond / total_cells * 100
+                    pcts.append(round(pct, 3))
+                    hover_texts.append(
+                        f"<b>Cluster {int(nid)}</b> — {cond}<br>"
+                        f"Cellules : {n_in_cond:,}<br>"
+                        f"% global : {pct:.3f}%"
+                    )
+                traces.append(
+                    go.Bar(
+                        name=str(cond),
+                        x=labels,
+                        y=pcts,
+                        marker=dict(
+                            color=_COND_COLORS[ci % len(_COND_COLORS)],
+                            line=dict(color="#585b70", width=0.4),
+                        ),
+                        hovertext=hover_texts,
+                        hoverinfo="text",
+                        text=[f"{p:.2f}%" if p >= 0.05 else "" for p in pcts],
+                        textposition="inside",
+                        textfont=dict(color="white", size=7),
+                    )
+                )
+            barmode = "stack"
+        else:
+            counts = np.array([int((clustering == n).sum()) for n in node_ids])
+            pcts_list = [round(int(cnt) / total_cells * 100, 3) for cnt in counts]
+            hover_texts_simple = [
+                f"<b>Cluster {int(nid)}</b><br>"
+                f"Cellules : {int(cnt):,}<br>"
+                f"% Total  : {pct:.3f}%"
+                for nid, cnt, pct in zip(node_ids, counts, pcts_list)
+            ]
+            n = len(node_ids)
+            color_scale = [
+                f"hsl({int(240 - 240 * i / max(n - 1, 1))}, 70%, 60%)" for i in range(n)
+            ]
+            traces = [
+                go.Bar(
+                    x=labels,
+                    y=pcts_list,
+                    marker=dict(
+                        color=color_scale,
+                        line=dict(color="#585b70", width=0.5),
+                    ),
+                    hovertext=hover_texts_simple,
+                    hoverinfo="text",
+                    text=[f"{p:.2f}%" if p >= 0.05 else "" for p in pcts_list],
+                    textposition="outside",
+                    textfont=dict(color="#e2e8f0", size=8),
+                )
+            ]
+            barmode = "group"
+
+        fig = go.Figure(data=traces)
+        fig.update_layout(
+            title=dict(
+                text=f"<b>{title}</b><br><sup>{n_nodes} nœuds SOM — {total_cells:,} cellules</sup>",
+                font=dict(size=15, color="#e2e8f0"),
+                x=0.5,
+            ),
+            barmode=barmode,
+            xaxis=dict(
+                title="Nœud SOM (cluster)",
+                color="#e2e8f0",
+                gridcolor="#313244",
+                tickfont=dict(size=9),
+                tickangle=90,
+                tickmode="array",
+                tickvals=labels,
+                ticktext=labels,
+            ),
+            yaxis=dict(
+                title="% Cellules",
+                color="#e2e8f0",
+                gridcolor="#313244",
+                ticksuffix="%",
+            ),
+            paper_bgcolor="#1e1e2e",
+            plot_bgcolor="#1e1e2e",
+            font=dict(color="#e2e8f0"),
+            height=580,
+            width=max(1400, n_nodes * 22),
+            margin=dict(l=70, r=40, t=100, b=110),
+            bargap=0.15,
+            legend=dict(bgcolor="#313244", bordercolor="#585b70"),
+        )
+
+        if output_html is not None:
+            out_html = Path(output_html)
+            out_html.parent.mkdir(parents=True, exist_ok=True)
+            fig.write_html(str(out_html), include_plotlyjs="cdn")
+            _logger.info("%%Cellules par nœud SOM (HTML) sauvegardé: %s", out_html.name)
+
+        if output_jpg is not None:
+            out_jpg = Path(output_jpg)
+            out_jpg.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                fig.write_image(
+                    str(out_jpg),
+                    format="jpg",
+                    width=max(1800, n_nodes * 22),
+                    height=680,
+                    scale=2,
+                )
+                _logger.info(
+                    "%%Cellules par nœud SOM (JPG) sauvegardé: %s", out_jpg.name
+                )
+            except Exception as _img_err:
+                _logger.warning(
+                    "Export JPG échoué (kaleido requis — pip install kaleido): %s",
+                    _img_err,
+                )
+
+        return fig
+
+    except Exception as exc:
+        _logger.error("Échec plot_cells_pct_per_som_node: %s", exc)
+        return None
+
+
+def plot_combined_som_node_html(
+    clustering: np.ndarray,
+    condition_labels: np.ndarray,
+    output_html: Path | str,
+    *,
+    patho_label: str = "Pathologique",
+    title: str = "Analyse post-FlowSOM — Clusters SOM",
+) -> Optional[Any]:
+    """
+    HTML combiné : deux bar charts partageant le même axe X, triés par % patho décroissant.
+
+    Panneau supérieur  : % de cellules pathologiques par nœud SOM.
+    Panneau inférieur  : % de cellules (empilé Sain/Patho) par nœud SOM.
+
+    Les deux panneaux utilisent **exactement le même ordre de clusters** sur l'axe X :
+    trié par % de cellules pathologiques décroissant.  Le cluster le plus enrichi en
+    cellules patho apparaît à gauche dans les deux vues, ce qui permet de lire
+    en un coup d'œil quels nœuds SOM concentrent les cellules tumorales.
+
+    Args:
+        clustering: Assignation de nœud SOM par cellule (n_cells,), entiers 0…N-1.
+        condition_labels: Étiquette de condition par cellule (n_cells,).
+        output_html: Chemin HTML de sortie.
+        patho_label: Valeur désignant la condition pathologique.
+        title: Titre général de la figure.
+
+    Returns:
+        Figure Plotly ou None si plotly absent / condition_labels manquant.
+    """
+    try:
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+    except ImportError:
+        _logger.warning("plotly requis pour plot_combined_som_node_html")
+        return None
+
+    if condition_labels is None:
+        _logger.warning("plot_combined_som_node_html ignoré : condition_labels requis")
+        return None
+
+    try:
+        cond_arr = np.asarray(condition_labels)
+        node_ids = np.sort(np.unique(clustering))
+        n_nodes = len(node_ids)
+        total_cells = len(clustering)
+
+        # ── Calcul des métriques brutes dans l'ordre naturel ─────────────────
+        pct_patho_raw: List[float] = []
+        hover_patho_raw: List[str] = []
+        for nid in node_ids:
+            mask = clustering == nid
+            total = int(mask.sum())
+            n_patho = int((mask & (cond_arr == patho_label)).sum())
+            pct = (n_patho / total * 100) if total > 0 else 0.0
+            pct_patho_raw.append(round(pct, 2))
+            hover_patho_raw.append(
+                f"<b>Cluster {int(nid)}</b><br>"
+                f"Cellules patho : {n_patho:,}<br>"
+                f"Total cluster  : {total:,}<br>"
+                f"% Patho        : {pct:.2f}%"
+            )
+
+        # ── Tri par % patho décroissant ───────────────────────────────────────
+        sort_idx = np.argsort(pct_patho_raw)[::-1]  # indices triés
+        sorted_node_ids = node_ids[sort_idx]
+        sorted_pct_patho = [pct_patho_raw[i] for i in sort_idx]
+        sorted_hover_patho = [hover_patho_raw[i] for i in sort_idx]
+        x_labels = [f"C{int(n)}" for n in sorted_node_ids]
+
+        # ── Gradient de couleur rouge→bleu selon % patho ─────────────────────
+        bar_colors_patho = [
+            f"rgba({int(243 * p / 100 + 137 * (1 - p / 100))}, "
+            f"{int(139 * (1 - p / 100))}, "
+            f"{int(168 * (1 - p / 100) + 250 * (1 - p / 100))}, 0.85)"
+            for p in sorted_pct_patho
+        ]
+
+        # ── Métriques % cellules (panneau bas) dans le même ordre trié ───────
+        _COND_COLORS = ["#89b4fa", "#f38ba8", "#a6e3a1", "#f9e2af", "#cba6f7"]
+        unique_conds = sorted(set(cond_arr.tolist()))
+        bottom_traces: List[go.Bar] = []
+        for ci, cond in enumerate(unique_conds):
+            cond_mask = cond_arr == cond
+            pcts_cond: List[float] = []
+            hover_cond: List[str] = []
+            for nid in sorted_node_ids:
+                mask = clustering == nid
+                n_in_cond = int((mask & cond_mask).sum())
+                pct_c = n_in_cond / total_cells * 100
+                pcts_cond.append(round(pct_c, 3))
+                hover_cond.append(
+                    f"<b>Cluster {int(nid)}</b> — {cond}<br>"
+                    f"Cellules : {n_in_cond:,}<br>"
+                    f"% global : {pct_c:.3f}%"
+                )
+            bottom_traces.append(
+                go.Bar(
+                    name=str(cond),
+                    x=x_labels,
+                    y=pcts_cond,
+                    marker=dict(
+                        color=_COND_COLORS[ci % len(_COND_COLORS)],
+                        line=dict(color="#585b70", width=0.4),
+                    ),
+                    hovertext=hover_cond,
+                    hoverinfo="text",
+                    text=[f"{p:.2f}%" if p >= 0.05 else "" for p in pcts_cond],
+                    textposition="inside",
+                    textfont=dict(color="white", size=7),
+                    showlegend=True,
+                    legendgroup=str(cond),
+                )
+            )
+
+        # ── Figure à deux sous-graphiques empilés, axe X partagé ─────────────
+        fig = make_subplots(
+            rows=2,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.06,
+            subplot_titles=(
+                "% Cellules pathologiques par cluster SOM "
+                "(trié par % patho décroissant)",
+                "% Cellules par cluster SOM — distribution Sain / Patho (même ordre)",
+            ),
+        )
+
+        # Panneau 1 — % patho
+        fig.add_trace(
+            go.Bar(
+                x=x_labels,
+                y=sorted_pct_patho,
+                marker=dict(
+                    color=bar_colors_patho,
+                    line=dict(color="#585b70", width=0.5),
+                ),
+                hovertext=sorted_hover_patho,
+                hoverinfo="text",
+                text=[f"{p:.1f}%" if p >= 1.0 else "" for p in sorted_pct_patho],
+                textposition="outside",
+                textfont=dict(color="#e2e8f0", size=8),
+                showlegend=False,
+                name="% Patho",
+            ),
+            row=1,
+            col=1,
+        )
+
+        # Ligne 100 % et 50 %
+        max_y1 = max(sorted_pct_patho) if sorted_pct_patho else 10.0
+        fig.add_hline(
+            y=100,
+            line=dict(color="#f38ba8", dash="dash", width=1.5),
+            annotation_text="100%",
+            annotation_font=dict(color="#f38ba8", size=9),
+            row=1,
+            col=1,
+        )
+        fig.add_hline(
+            y=50,
+            line=dict(color="#f9e2af", dash="dot", width=1.0),
+            annotation_text="50%",
+            annotation_font=dict(color="#f9e2af", size=9),
+            row=1,
+            col=1,
+        )
+
+        # Panneau 2 — % cellules par condition
+        for trace in bottom_traces:
+            fig.add_trace(trace, row=2, col=1)
+
+        # ── Mise en page globale ──────────────────────────────────────────────
+        chart_width = max(1600, n_nodes * 25)
+        fig.update_layout(
+            title=dict(
+                text=(
+                    f"<b>{title}</b><br>"
+                    f"<sup>{n_nodes} nœuds SOM — {total_cells:,} cellules — "
+                    f"trié par % pathologique décroissant</sup>"
+                ),
+                font=dict(size=16, color="#e2e8f0"),
+                x=0.5,
+            ),
+            barmode="stack",
+            paper_bgcolor="#1e1e2e",
+            plot_bgcolor="#1e1e2e",
+            font=dict(color="#e2e8f0"),
+            height=900,
+            width=chart_width,
+            margin=dict(l=70, r=40, t=110, b=120),
+            bargap=0.12,
+            legend=dict(
+                bgcolor="#313244",
+                bordercolor="#585b70",
+                orientation="h",
+                x=0.5,
+                xanchor="center",
+                y=-0.12,
+            ),
+        )
+
+        # X partagé — labels en bas seulement (panneau 2), rotation 90°
+        fig.update_xaxes(
+            tickfont=dict(size=9),
+            tickangle=90,
+            color="#e2e8f0",
+            gridcolor="#313244",
+            tickmode="array",
+            tickvals=x_labels,
+            ticktext=x_labels,
+        )
+
+        # Axes Y panneau 1
+        fig.update_yaxes(
+            title_text="% Cellules pathologiques",
+            color="#e2e8f0",
+            gridcolor="#313244",
+            ticksuffix="%",
+            range=[0, min(max_y1 * 1.18, 105)],
+            row=1,
+            col=1,
+        )
+        # Axes Y panneau 2
+        fig.update_yaxes(
+            title_text="% Cellules",
+            color="#e2e8f0",
+            gridcolor="#313244",
+            ticksuffix="%",
+            row=2,
+            col=1,
+        )
+
+        # Titres des sous-graphiques en blanc
+        for ann in fig.layout.annotations:
+            ann.font.color = "#cdd6f4"
+            ann.font.size = 13
+
+        # ── Export HTML ───────────────────────────────────────────────────────
+        out_html = Path(output_html)
+        out_html.parent.mkdir(parents=True, exist_ok=True)
+        fig.write_html(str(out_html), include_plotlyjs="cdn")
+        _logger.info("HTML combiné nœuds SOM sauvegardé: %s", out_html.name)
+
+        return fig
+
+    except Exception as exc:
+        _logger.error("Échec plot_combined_som_node_html: %s", exc)
+        return None
