@@ -2,7 +2,7 @@
 
 Pipeline d'analyse de cytométrie en flux pour la **Maladie Résiduelle Détectable (MRD)** en hématologie — conforme aux recommandations **ELN 2022**.
 
-Architecture modulaire production-ready, issue de la refactorisation complète d'un script monolithique de 12 000+ lignes. **Version 2.0.**
+Architecture modulaire production-ready. **Version 2.0.**
 
 ---
 
