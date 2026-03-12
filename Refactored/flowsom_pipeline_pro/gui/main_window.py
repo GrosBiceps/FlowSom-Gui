@@ -73,11 +73,21 @@ try:
 except ImportError:
     _WEBENGINE = False
 
+# Flag d'utilisation effective : peut être mis à False sur Win10 depuis main()
+# avant la création de QApplication pour bypasser Chromium entièrement.
+_WEBENGINE_ACTIVE = _WEBENGINE
+
 # Chemin par défaut du YAML
-_DEFAULT_CONFIG_PATH = Path(
-    r"C:\Users\Florian Travail\Documents\FlowSom\Perplexity"
-    r"\flowsom_pipeline_pro\config\default_config.yaml"
-)
+# En mode .exe (onedir) : config/ est dans le même dossier que l'exe.
+# En mode développement : remonter au parent du package.
+if getattr(sys, "frozen", False):
+    _DEFAULT_CONFIG_PATH = (
+        Path(sys.executable).parent / "config" / "default_config.yaml"
+    )
+else:
+    _DEFAULT_CONFIG_PATH = (
+        Path(__file__).resolve().parent.parent / "config" / "default_config.yaml"
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -162,7 +172,7 @@ class FlowSomAnalyzerPro(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("FlowSOM Analyzer Pro — MRD Pipeline ELN 2022")
+        self.setWindowTitle("FlowSOM  — MRD Analyzer")
         self.setMinimumSize(1440, 900)
         self.resize(1600, 1000)
         self.setStyleSheet(STYLESHEET)
@@ -247,12 +257,12 @@ class FlowSomAnalyzerPro(QMainWindow):
     # ── Header ─────────────────────────────────────────────────────────
 
     def _build_header(self, layout: QVBoxLayout) -> None:
-        title = QLabel("FlowSOM Analyzer Pro")
+        title = QLabel("FlowSOM MRD Analyzer")
         title.setObjectName("titleLabel")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
-        subtitle = QLabel("MRD Pipeline — ELN 2022 · Cytométrie multi-paramétrique")
+        subtitle = QLabel("© Version 2.1 · Magne Florian")
         subtitle.setObjectName("subtitleLabel")
         subtitle.setAlignment(Qt.AlignCenter)
         layout.addWidget(subtitle)
@@ -597,17 +607,21 @@ class FlowSomAnalyzerPro(QMainWindow):
         self._viz_stack.addWidget(png_widget)
 
         # Page 1 : QWebEngineView ou placeholder
-        if _WEBENGINE:
+        if _WEBENGINE_ACTIVE:
             self._web_view = QWebEngineView()
             # Corrige le fond blanc/transparent dû à QWidget{background:transparent} dans le QSS
             self._web_view.page().setBackgroundColor(QColor(30, 30, 46))  # #1e1e2e
             self._viz_stack.addWidget(self._web_view)
         else:
-            html_placeholder = QLabel(
-                "QWebEngineView non disponible.\n"
+            _reason = (
+                "Figures interactives ouvertes automatiquement dans le navigateur.\n"
+                "(Mode navigateur actif sur Windows 10 pour éviter les conflits GPU/DWM)"
+                if _WEBENGINE
+                else "QWebEngineView non disponible.\n"
                 "Installez PyQtWebEngine : pip install PyQtWebEngine\n"
                 "Utilisez le bouton 'Ouvrir dans le navigateur' pour les figures interactives."
             )
+            html_placeholder = QLabel(_reason)
             html_placeholder.setAlignment(Qt.AlignCenter)
             html_placeholder.setObjectName("subtitleLabel")
             self._web_view = None
@@ -780,16 +794,20 @@ class FlowSomAnalyzerPro(QMainWindow):
         hdr2.addWidget(self.btn_open_combined)
         layout.addLayout(hdr2)
 
-        if _WEBENGINE:
+        if _WEBENGINE_ACTIVE:
             self._results_web = QWebEngineView()
             self._results_web.page().setBackgroundColor(QColor(30, 30, 46))  # #1e1e2e
             layout.addWidget(self._results_web, 1)
         else:
             self._results_web = None
-            placeholder = QLabel(
-                "Installez PyQtWebEngine pour afficher la vue interactive ici.\n"
+            _reason2 = (
+                "Vue combinée ouverte automatiquement dans le navigateur.\n"
+                "(Mode navigateur actif sur Windows 10 pour éviter les conflits GPU/DWM)"
+                if _WEBENGINE
+                else "Installez PyQtWebEngine pour afficher la vue interactive ici.\n"
                 "Utilisez le bouton ci-dessus pour l'ouvrir dans le navigateur."
             )
+            placeholder = QLabel(_reason2)
             placeholder.setAlignment(Qt.AlignCenter)
             placeholder.setObjectName("subtitleLabel")
             layout.addWidget(placeholder, 1)
@@ -1638,7 +1656,11 @@ class FlowSomAnalyzerPro(QMainWindow):
             self.btn_open_combined.setEnabled(bool(self._combined_html_path))
 
         # Charge la vue combinée dans QWebEngineView Résultats si disponible
-        if self._combined_html_path and _WEBENGINE and self._results_web is not None:
+        if (
+            self._combined_html_path
+            and _WEBENGINE_ACTIVE
+            and self._results_web is not None
+        ):
             from PyQt5.QtCore import QUrl
 
             self._results_web.setUrl(QUrl.fromLocalFile(self._combined_html_path))
@@ -1693,19 +1715,17 @@ class FlowSomAnalyzerPro(QMainWindow):
     def _show_html_plot(self, path: str) -> None:
         """
         Affiche un HTML interactif dans QWebEngineView (page 1) ou ouvre dans le navigateur."""
-        if _WEBENGINE and self._web_view is not None:
+        if _WEBENGINE_ACTIVE and self._web_view is not None:
             from PyQt5.QtCore import QUrl
 
             self._viz_stack.setCurrentIndex(1)
             self._web_view.setUrl(QUrl.fromLocalFile(str(Path(path).resolve())))
         else:
-            # Pas de WebEngine : ouvre dans le navigateur système automatiquement
+            # Win10 ou pas de WebEngine : ouvre dans le navigateur système
             webbrowser.open(str(Path(path).resolve()))
             self._viz_stack.setCurrentIndex(0)
             self._show_placeholder(
-                "Figure interactive (.html)\n"
-                "Ouverture dans le navigateur système...\n"
-                "(Installez PyQtWebEngine pour l'affichage intégré)"
+                "Figure interactive (.html)\nOuverture dans le navigateur système..."
             )
 
     def _show_placeholder(self, text: str) -> None:
@@ -2452,22 +2472,21 @@ class FlowSomAnalyzerPro(QMainWindow):
 def main() -> None:
     import platform
 
-    # ── Correctifs QtWebEngine sur Windows 10 ─────────────────────────
-    # Sur Win10, Chromium embarqué entre en conflit avec le DWM (Desktop
-    # Window Manager) et cause des crashes ou des zones noires/blanches.
-    # Sur Win11, le DWM remanié gère correctement ces conflits OpenGL/DirectX.
+    global _WEBENGINE_ACTIVE
+
+    # ── Détection Win10 / Win11 ────────────────────────────────────────
+    # Sur Win10, QtWebEngine (Chromium embarqué) entre en conflit avec le
+    # DWM (Desktop Window Manager) : zones noires, crashes GPU, écran blanc.
+    # Solution définitive : ne pas instancier QWebEngineView du tout sur
+    # Win10 — tous les HTML s'ouvrent dans le navigateur système.
     if platform.system() == "Windows":
         win_ver = platform.version()  # ex. "10.0.19045" ou "10.0.22621"
         build = int(win_ver.split(".")[-1]) if win_ver.count(".") >= 2 else 0
         is_win10 = build < 22000  # build ≥ 22000 → Windows 11
 
         if is_win10:
-            # Désactive l'accélération GPU de Chromium (solution la plus fiable)
-            os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
-            # Force ANGLE (DirectX → OpenGL émulé), très stable sur Win10
-            from PyQt5.QtCore import Qt, QCoreApplication
-
-            QCoreApplication.setAttribute(Qt.AA_UseOpenGLES)
+            # Bypasse entièrement Chromium sur Win10 (pas de QWebEngineView instancié)
+            _WEBENGINE_ACTIVE = False
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
