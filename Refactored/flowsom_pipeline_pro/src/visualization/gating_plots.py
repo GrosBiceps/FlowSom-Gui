@@ -822,7 +822,7 @@ def plot_gmm_vs_kde_qc(
     vm = (x_grid >= valley_range[0]) & (x_grid <= valley_range[1])
     kde_valley: Optional[float] = None
     if vm.any():
-        peaks_idx, _ = find_peaks(-density[vm], prominence=np.ptp(density[vm]) * 0.005)
+        peaks_idx, _ = find_peaks(-density[vm], prominence=(density[vm].max() - density[vm].min()) * 0.005)
         if len(peaks_idx) > 0:
             kde_valley = float(x_grid[vm][peaks_idx[0]])
         else:

@@ -864,6 +864,18 @@ class FlowSOMPipeline:
 
         except Exception as exc:
             _logger.exception("Erreur critique dans le pipeline: %s", exc)
+            # Sécurité : écrire l'erreur dans un fichier pour le mode frozen
+            # (logging peut échouer si sys.stderr est None)
+            try:
+                import traceback as _tb
+                err_path = Path(config.paths.output_dir) / "pipeline_error.log"
+                err_path.parent.mkdir(parents=True, exist_ok=True)
+                err_path.write_text(
+                    f"{type(exc).__name__}: {exc}\n\n{''.join(_tb.format_exception(exc))}",
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
             return PipelineResult.failure(error=str(exc), config=config)
 
     def _load_all_samples(self) -> List[FlowSample]:
@@ -987,8 +999,10 @@ class FlowSOMPipeline:
 
         # ── 4. Coordonnées MST avec jitter circulaire ─────────────────────────
         layout_coords = clusterer.get_layout_coords()  # (n_nodes, 2)
-        x_range = layout_coords[:, 0].ptp() if layout_coords[:, 0].ptp() > 0 else 1.0
-        y_range = layout_coords[:, 1].ptp() if layout_coords[:, 1].ptp() > 0 else 1.0
+        x_ptp = float(layout_coords[:, 0].max() - layout_coords[:, 0].min())
+        y_ptp = float(layout_coords[:, 1].max() - layout_coords[:, 1].min())
+        x_range = x_ptp if x_ptp > 0 else 1.0
+        y_range = y_ptp if y_ptp > 0 else 1.0
         mst_scale = min(x_range, y_range) / (clusterer.xdim * 2)
 
         xN_base = layout_coords[cl_int, 0].astype(np.float32)

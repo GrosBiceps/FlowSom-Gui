@@ -25,9 +25,9 @@ try:
     import flowsom as fs
 
     _FLOWSOM_AVAILABLE = True
-except ImportError:
+except Exception as _flowsom_err:
     _FLOWSOM_AVAILABLE = False
-    warnings.warn("flowsom non disponible: pip install flowsom")
+    warnings.warn(f"flowsom non disponible ({type(_flowsom_err).__name__}: {_flowsom_err})")
 
 from flowsom_pipeline_pro.src.models.sample import FlowSample
 from flowsom_pipeline_pro.src.utils.logger import get_logger
