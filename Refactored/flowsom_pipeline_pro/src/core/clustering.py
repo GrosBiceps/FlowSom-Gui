@@ -15,10 +15,14 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import warnings
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+_logger = logging.getLogger("core.clustering")
 
 # Imports conditionnels — wrappés pour graceful fallback
 try:
@@ -33,7 +37,9 @@ try:
     import sys
     import os
 
-    _gpu_path = r"C:\Users\Florian Travail\Documents\FlowSom"
+    # Chemin dynamique : FlowSomGpu se trouve 2 niveaux au-dessus de flowsom_pipeline_pro
+    # clustering.py → src/core → src → flowsom_pipeline_pro → Perplexity → FlowSom
+    _gpu_path = str(Path(__file__).parent.parent.parent.parent.parent)
     if _gpu_path not in sys.path:
         sys.path.insert(0, _gpu_path)
     from FlowSomGpu.models import GPUFlowSOMEstimator
@@ -183,7 +189,7 @@ class FlowSOMClusterer:
                 )
                 self._fsom_model.fit_predict(X)
                 self.used_gpu_ = True
-                print(f"[OK] FlowSOM GPU — grille {xdim}×{ydim}, rlen={rlen}")
+                _logger.info("[OK] FlowSOM GPU — grille %d×%d, rlen=%d", xdim, ydim, rlen)
                 self._extract_assignments_gpu(X)
                 return self
             except Exception as e:
@@ -212,9 +218,9 @@ class FlowSOMClusterer:
                 seed=self.seed,
             )
             self.used_gpu_ = False
-            print(
-                f"[OK] FlowSOM CPU — grille {xdim}×{ydim}, "
-                f"rlen={rlen}, k={self.n_metaclusters}"
+            _logger.info(
+                "[OK] FlowSOM CPU — grille %d×%d, rlen=%d, k=%d",
+                xdim, ydim, rlen, self.n_metaclusters,
             )
             self._extract_assignments_cpu(X)
 
@@ -242,8 +248,8 @@ class FlowSOMClusterer:
         try:
             codebook = np.asarray(self._fsom_model.codes, dtype=float)
             self._mst_layout_ = self._compute_mst_layout(codebook)
-            print(
-                f"   [OK] Layout MST calculé sur codebook GPU ({codebook.shape[0]} nodes)"
+            _logger.info(
+                "   [OK] Layout MST calculé sur codebook GPU (%d nodes)", codebook.shape[0]
             )
         except Exception as e:
             warnings.warn(f"Calcul layout MST GPU échoué: {e}")
@@ -278,8 +284,8 @@ class FlowSOMClusterer:
                     self.metacluster_map_ = cluster_data.obs[
                         "metaclustering"
                     ].values.astype(int)
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.debug("metacluster_map_ non extrait depuis cluster_data: %s", e)
 
         except Exception as e:
             warnings.warn(f"Extraction assignations CPU échouée: {e}")
@@ -342,8 +348,8 @@ class FlowSOMClusterer:
                 cluster_data = self._fsom_model.get_cluster_data()
                 if cluster_data.X is not None:
                     return np.asarray(cluster_data.X, dtype=float)
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.debug("Codebook non extrait depuis get_cluster_data(): %s", e)
 
         return None
 

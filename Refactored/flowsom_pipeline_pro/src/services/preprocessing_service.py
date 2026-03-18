@@ -538,6 +538,9 @@ def preprocess_combined(
     gate_masks: Dict[str, np.ndarray] = {}
     X_for_plot = X_raw.copy()  # Matrix brute avant gating (pour plots QC)
     var_for_plot: List[str] = list(var_names)
+    conditions_for_plot = (
+        conditions.copy()
+    )  # Conditions avant gating (pour plots QC CD45)
     if getattr(pregate_cfg, "apply", True):
         X_raw, var_names, conditions, file_origins, gate_masks = _apply_gating_combined(
             X_raw,
@@ -563,6 +566,7 @@ def preprocess_combined(
                 gate_masks,
                 output_dir=gating_plot_dir / "gating",
                 sample_name="combined",
+                conditions=conditions_for_plot,
             )
             # Renommer les figures selon les labels notebook
             _fig_map = {
@@ -571,6 +575,8 @@ def preprocess_combined(
                 "03_singlets": "fig_gate_singlets",
                 "04_cd45": "fig_gate_cd45",
                 "05_cd34": "fig_gate_cd34",
+                "06_kde_debris": "fig_kde_debris",
+                "07_kde_cd45": "fig_kde_cd45",
             }
             for _key, _fig in _fig_results.items():
                 if _fig is not None:

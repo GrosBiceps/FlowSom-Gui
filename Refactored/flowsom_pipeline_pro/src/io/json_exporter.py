@@ -131,15 +131,15 @@ def build_analysis_metadata(
 
     # Résumé par métacluster
     if metaclustering is not None and n_metaclusters > 0:
-        mc_summary: Dict[str, Dict[str, Any]] = {}
-        for i in range(n_metaclusters):
-            n = int((metaclustering == i).sum())
-            mc_summary[f"MC{i}"] = {
-                "n_cells": n,
-                "pct_total": round(n / len(metaclustering) * 100, 3)
-                if len(metaclustering) > 0
-                else 0.0,
+        counts = np.bincount(metaclustering.astype(int), minlength=n_metaclusters)
+        total = len(metaclustering)
+        mc_summary: Dict[str, Dict[str, Any]] = {
+            f"MC{i}": {
+                "n_cells": int(counts[i]),
+                "pct_total": round(int(counts[i]) / total * 100, 3) if total > 0 else 0.0,
             }
+            for i in range(n_metaclusters)
+        }
         metadata["metacluster_summary"] = mc_summary
 
     return metadata

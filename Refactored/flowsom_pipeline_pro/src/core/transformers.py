@@ -22,12 +22,14 @@ from typing import List, Optional
 
 import numpy as np
 
-# FlowKit pour la transformation Logicle précise (comportement dégradé si absent)
+# FlowKit pour la transformation Logicle précise (comportement dégradé si absent).
+# On attrape Exception (pas seulement ImportError) car flowutils.logicle_c
+# peut lever AttributeError si compilé contre NumPy 1.x et exécuté sous NumPy 2.x.
 try:
     import flowkit as fk
 
     FLOWKIT_AVAILABLE = True
-except ImportError:
+except Exception:
     FLOWKIT_AVAILABLE = False
     fk = None
 

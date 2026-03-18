@@ -16,7 +16,11 @@ import sys
 import webbrowser
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from flowsom_pipeline_pro.config.pipeline_config import PipelineConfig
+    from flowsom_pipeline_pro.src.models.pipeline_result import PipelineResult
 
 from PyQt5.QtWidgets import (
     QApplication,
@@ -178,8 +182,8 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.setStyleSheet(STYLESHEET)
 
         # État interne
-        self._config: Optional[Any] = None
-        self._result: Optional[Any] = None
+        self._config: Optional["PipelineConfig"] = None
+        self._result: Optional["PipelineResult"] = None
         self._worker: Optional[PipelineWorker] = None
         self._spider_worker: Optional[SpiderPlotWorker] = None
         self._cluster_mfi: Optional[Any] = None  # DataFrame cluster × markers

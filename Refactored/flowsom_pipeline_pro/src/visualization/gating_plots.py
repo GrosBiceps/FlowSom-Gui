@@ -329,6 +329,7 @@ def generate_all_gating_plots(
     sample_name: str = "sample",
     n_sample: int = 60_000,
     seed: int = 42,
+    conditions: Optional[np.ndarray] = None,
 ) -> Dict[str, bool]:
     """
     Génère tous les graphiques de gating pour un échantillon.
@@ -336,6 +337,7 @@ def generate_all_gating_plots(
     Args:
         X_raw: Matrice brute (pré-transformation, pré-gating).
         var_names: Noms des marqueurs.
+        conditions: Condition par cellule (ex. "Pathologique" / "Sain"), pré-gating.
         masks: Dict {gate_name: mask_array} — ex: {"G1": ..., "G2": ..., ...}.
         output_dir: Dossier de sortie.
         sample_name: Identifiant de l'échantillon pour les noms de fichiers.
@@ -409,6 +411,37 @@ def generate_all_gating_plots(
             n_sample=n_sample,
             seed=seed,
         )
+
+    # ── KDE QC plots ─────────────────────────────────────────────────────────
+    # Gate 1 KDE : densité FSC-A avec seuil GMM + vallée KDE
+    fsc_idx = _find_idx(var_names, ["FSC-A", "FSC-H"])
+    if mask_g1 is not None and fsc_idx is not None:
+        try:
+            fig_kde_g1, _, _, _ = plot_gmm_vs_kde_qc(
+                fsc_a_data=X_raw[:, fsc_idx],
+                mask_debris=mask_g1,
+                random_seed=seed,
+                output_path=output_dir / f"{name}_06_kde_debris.png",
+            )
+            results["06_kde_debris"] = fig_kde_g1
+        except Exception as _e:
+            _logger.warning("KDE Gate 1 échoué (non bloquant): %s", _e)
+
+    # Gate 3 KDE : densité CD45 avec seuil GMM + vallée KDE + encadré patho
+    cd45_idx = _find_idx(var_names, ["CD45", "CD45-PECY5", "CD45-PC5"])
+    mask_g3 = _get_mask(["G3", "cd45", "G3_cd45"])
+    if mask_g3 is not None and cd45_idx is not None:
+        try:
+            fig_kde_cd45, _, _, _ = plot_cd45_kde_qc(
+                cd45_data=X_raw[:, cd45_idx],
+                mask_cd45=mask_g3,
+                random_seed=seed,
+                output_path=output_dir / f"{name}_07_kde_cd45.png",
+                conditions=conditions,
+            )
+            results["07_kde_cd45"] = fig_kde_cd45
+        except Exception as _e:
+            _logger.warning("KDE Gate 3 CD45 échoué (non bloquant): %s", _e)
 
     return results
 
@@ -822,7 +855,9 @@ def plot_gmm_vs_kde_qc(
     vm = (x_grid >= valley_range[0]) & (x_grid <= valley_range[1])
     kde_valley: Optional[float] = None
     if vm.any():
-        peaks_idx, _ = find_peaks(-density[vm], prominence=(density[vm].max() - density[vm].min()) * 0.005)
+        peaks_idx, _ = find_peaks(
+            -density[vm], prominence=(density[vm].max() - density[vm].min()) * 0.005
+        )
         if len(peaks_idx) > 0:
             kde_valley = float(x_grid[vm][peaks_idx[0]])
         else:
@@ -935,6 +970,251 @@ def plot_gmm_vs_kde_qc(
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(str(output_path), dpi=150, bbox_inches="tight")
         _logger.info("QC GMM-KDE sauvegardé: %s", output_path)
+
+    return fig, ax, gmm_threshold, kde_valley
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  QC Gate 3 — GMM vs KDE (Auto-gating CD45)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def plot_cd45_kde_qc(
+    cd45_data: np.ndarray,
+    mask_cd45: np.ndarray,
+    n_subsample: int = 10_000,
+    n_grid: int = 1_000,
+    random_seed: int = 42,
+    ax: Optional[Any] = None,
+    title: Optional[str] = None,
+    output_path: Optional[Path] = None,
+) -> Tuple[Any, Any, float, Optional[float]]:
+    """
+    Trace la densité KDE de CD45 avec le seuil GMM et la vallée KDE.
+
+    Interface identique à plot_gmm_vs_kde_qc mais adaptée au marqueur CD45.
+    Le seuil GMM est dérivé du masque : max CD45 parmi les exclus (CD45−).
+    Si tout est True (pas de CD45−), un GMM interne 2-composantes est ajusté.
+     plot_cd45_kde_qc(
+    Args:
+        cd45_data: Vecteur CD45 brut (n_events,).
+        mask_cd45: Masque booléen Gate G3 (True = CD45+).
+        n_subsample: Points pour estimer la KDE.
+          conditions=conditions,
+        random_seed: Reproductibilité.
+        ax: Axes matplotlib existants (optionnel).
+        title: Titre du graphique (auto-généré si None).
+        output_path: Chemin de sauvegarde PNG (optionnel).
+
+    Returns:
+        Tuple (fig, ax, gmm_threshold, kde_valley).
+    """
+    if not _MPL_AVAILABLE:
+        _logger.warning("matplotlib requis pour plot_cd45_kde_qc")
+        return None, None, 0.0, None
+
+    try:
+        from scipy.stats import gaussian_kde
+        from scipy.signal import find_peaks
+    except ImportError:
+        _logger.warning("scipy requis pour plot_cd45_kde_qc")
+        return None, None, 0.0, None
+
+    cd45_data = np.asarray(cd45_data, dtype=np.float64).ravel()
+    mask_cd45 = np.asarray(mask_cd45, dtype=bool).ravel()
+
+    if len(cd45_data) != len(mask_cd45):
+        raise ValueError(
+            f"cd45_data ({len(cd45_data)}) et mask_cd45 ({len(mask_cd45)}) "
+            "doivent avoir la même longueur."
+        )
+
+    # Filtrer les valeurs non finies
+    valid = np.isfinite(cd45_data)
+    n_total = len(cd45_data)
+    n_exclu = int((~mask_cd45).sum())
+    all_positive = n_exclu == 0
+
+    # ── 1. Seuil GMM ──────────────────────────────────────────────────────────
+    if not all_positive:
+        # Cas nominal : seuil = max CD45 parmi les événements exclus (CD45−)
+        excluded_vals = cd45_data[~mask_cd45 & valid]
+        if len(excluded_vals) > 0:
+            gmm_threshold = float(np.max(excluded_vals))
+        else:
+            gmm_threshold = float(np.percentile(cd45_data[valid], 10))
+        neg_label = "CD45− exclus G3"
+    else:
+        # Tout CD45+ : GMM interne pour visualisation QC
+        _logger.debug("mask_cd45 intégral — simulation GMM interne pour QC")
+        try:
+            from sklearn.mixture import GaussianMixture as _GMM
+        except ImportError:
+            gmm_threshold = float(np.percentile(cd45_data[valid], 10))
+            neg_label = "Seuil estimé (sklearn absent)"
+            all_positive = False
+        else:
+            _rng = np.random.default_rng(random_seed)
+            _n_fit = min(50_000, int(valid.sum()))
+            _idx = _rng.choice(np.where(valid)[0], size=_n_fit, replace=False)
+            _gmm = _GMM(n_components=2, random_state=random_seed, n_init=5)
+            _gmm.fit(cd45_data[_idx].reshape(-1, 1))
+            _means = _gmm.means_.flatten()
+            _all_labels = np.full(n_total, -1, dtype=int)
+            _all_labels[valid] = _gmm.predict(cd45_data[valid].reshape(-1, 1))
+            _low_cluster = int(np.argmin(_means))
+            _low_vals = cd45_data[_all_labels == _low_cluster]
+            gmm_threshold = (
+                float(np.percentile(_low_vals, 95))
+                if len(_low_vals) > 0
+                else float(np.percentile(cd45_data[valid], 10))
+            )
+            neg_label = f"Cluster bas CD45 (simul., μ={_means[_low_cluster]:.0f})"
+            mask_cd45 = _all_labels != _low_cluster
+            if title is None:
+                title = "QC Gate 3 — Simulation CD45 bas [GMM interne]"
+
+    if title is None:
+        title = "QC Gate 3 — Auto-gating CD45 (GMM vs KDE)"
+
+    # ── 2. Sous-échantillonnage pour KDE ──────────────────────────────────────
+    rng = np.random.default_rng(random_seed)
+    if n_total > n_subsample:
+        cd45_sub = cd45_data[rng.choice(n_total, size=n_subsample, replace=False)]
+    else:
+        cd45_sub = cd45_data.copy()
+
+    # ── 3. KDE ────────────────────────────────────────────────────────────────
+    finite_sub = cd45_sub[np.isfinite(cd45_sub)]
+    if len(finite_sub) < 5:
+        _logger.warning("plot_cd45_kde_qc: trop peu de valeurs finies pour KDE.")
+        return None, None, gmm_threshold, None
+
+    kde = gaussian_kde(finite_sub, bw_method="scott")
+    data_min = float(np.nanmin(cd45_sub))
+    data_max = float(np.nanpercentile(cd45_sub, 99.9))
+    margin = max(abs(data_max - data_min) * 0.15, 1.0)
+    x_min = data_min - margin
+    x_grid = np.linspace(x_min, data_max, n_grid)
+    density = kde(x_grid)
+
+    # ── 4. Détection de la vallée ─────────────────────────────────────────────
+    kde_valley: Optional[float] = None
+    peaks_idx, _ = find_peaks(
+        -density, prominence=(density.max() - density.min()) * 0.005
+    )
+    if len(peaks_idx) > 0:
+        kde_valley = float(x_grid[peaks_idx[0]])
+    else:
+        # Fallback : minimum local autour du seuil GMM
+        fb = (x_grid >= gmm_threshold - margin) & (x_grid <= gmm_threshold + margin)
+        if fb.any():
+            kde_valley = float(x_grid[fb][np.argmin(density[fb])])
+
+    # ── 5. Visualisation ──────────────────────────────────────────────────────
+    BG = "#1e1e2f"
+    PANEL = "#16213e"
+    TXT = "#e2e8f0"
+    GRID = "#2d2d4e"
+    RED_F = "#ef4444"
+    GRN_F = "#22c55e"
+    RED_L = "#ff6b6b"
+    BLU_L = "#60a5fa"
+    PURPLE = "#a78bfa"
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(12, 5), facecolor=BG)
+    else:
+        fig = ax.get_figure()
+        fig.patch.set_facecolor(BG)
+
+    ax.set_facecolor(PANEL)
+    ax.fill_between(
+        x_grid,
+        density,
+        where=(x_grid <= gmm_threshold),
+        color=RED_F,
+        alpha=0.35,
+        label=neg_label,
+    )
+    ax.fill_between(
+        x_grid,
+        density,
+        where=(x_grid > gmm_threshold),
+        color=GRN_F,
+        alpha=0.30,
+        label="CD45+ conservés",
+    )
+    ax.plot(x_grid, density, color=TXT, linewidth=1.8, label="KDE CD45")
+    ax.axvline(
+        gmm_threshold,
+        color=PURPLE,
+        linestyle="--",
+        linewidth=2.5,
+        label=f"Seuil G3 : {gmm_threshold:,.0f}",
+    )
+
+    if kde_valley is not None:
+        ax.axvline(
+            kde_valley,
+            color=BLU_L,
+            linestyle="--",
+            linewidth=2.0,
+            label=f"Vallée KDE : {kde_valley:,.0f}",
+        )
+        delta = abs(gmm_threshold - kde_valley)
+        ax.annotate(
+            f"Δ = {delta:,.0f}",
+            xy=((gmm_threshold + kde_valley) / 2, 0.88),
+            xycoords=("data", "axes fraction"),
+            ha="center",
+            va="top",
+            color=TXT,
+            fontsize=9,
+        )
+
+    n_cd45_neg = int((~mask_cd45).sum())
+    pct_neg = 100.0 * n_cd45_neg / n_total
+    stats_text = (
+        f"Total   : {n_total:,}\n"
+        f"CD45−   : {n_cd45_neg:,} ({pct_neg:.1f}%)\n"
+        f"CD45+   : {n_total - n_cd45_neg:,} ({100 - pct_neg:.1f}%)\n"
+        f"KDE sur : {len(finite_sub):,} pts"
+    )
+    ax.text(
+        0.98,
+        0.97,
+        stats_text,
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=8.5,
+        color=TXT,
+        family="monospace",
+        bbox=dict(facecolor=BG, edgecolor=GRID, alpha=0.85, pad=6),
+    )
+
+    ax.set_xlabel("CD45 (unités linéaires)", color=TXT, fontsize=11)
+    ax.set_ylabel("Densité KDE", color=TXT, fontsize=11)
+    ax.set_title(title, color=TXT, fontsize=13, pad=12)
+    ax.tick_params(colors=TXT, labelsize=9)
+    ax.xaxis.set_major_formatter(
+        plt.FuncFormatter(lambda v, _: f"{int(v):,}".replace(",", " "))
+    )
+    for spine in ax.spines.values():
+        spine.set_edgecolor(GRID)
+    ax.grid(True, color=GRID, linewidth=0.7, linestyle="--", alpha=0.6)
+    ax.set_xlim(x_min, data_max)
+    ax.set_ylim(bottom=0, top=np.max(density) * 1.05)
+    ax.legend(
+        loc="upper left", fontsize=9, facecolor=BG, edgecolor=GRID, labelcolor=TXT
+    )
+    plt.tight_layout()
+
+    if output_path is not None:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(str(output_path), dpi=150, bbox_inches="tight")
+        _logger.info("QC CD45-KDE sauvegardé: %s", output_path)
 
     return fig, ax, gmm_threshold, kde_valley
 

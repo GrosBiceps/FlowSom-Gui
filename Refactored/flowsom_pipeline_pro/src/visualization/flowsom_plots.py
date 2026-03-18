@@ -144,7 +144,7 @@ def plot_metacluster_sizes(
 
     try:
         cluster_ids = np.arange(n_metaclusters)
-        counts_total = np.array([int((metaclustering == i).sum()) for i in cluster_ids])
+        counts_total = np.bincount(metaclustering.astype(int), minlength=n_metaclusters)
         labels = [f"MC{i}" for i in cluster_ids]
         colors = plt.cm.tab20(np.linspace(0, 1, n_metaclusters))
 
@@ -2704,4 +2704,346 @@ def plot_combined_som_node_html(
 
     except Exception as exc:
         _logger.error("Échec plot_combined_som_node_html: %s", exc)
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  MRD Résiduelle — Visualisations
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def plot_mrd_summary(
+    mrd_result: "Any",
+    output_html: Optional[Path | str] = None,
+    output_png: Optional[Path | str] = None,
+    *,
+    title: str = "MRD Résiduelle — Analyse par Nœuds SOM",
+) -> Optional["Any"]:
+    """
+    Figure Plotly scrollable (style fig_som_combined) montrant la MRD :
+
+      Panneau haut (grand) : % patho vs % sain par nœud SOM, trié par
+                              % patho décroissant. Bordure colorée selon
+                              le statut MRD (JF / Flo / les deux).
+      Panneau bas :           MRD% global — JF et Flo uniquement.
+
+    Les contrôles ELN (LOQ ≥50 events, seuil clinique 0.1%) sont appliqués
+    en amont dans le calcul mais ne sont PAS affichés comme barre séparée.
+    Le statut ELN reste visible dans le titre et les infobulles.
+
+    Args:
+        mrd_result: MRDResult du module mrd_calculator.
+        output_html: Chemin HTML interactif (optionnel).
+        output_png: Chemin PNG statique (optionnel).
+        title: Titre principal.
+
+    Returns:
+        Figure Plotly ou None.
+    """
+    try:
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+    except ImportError:
+        _logger.warning("plotly requis pour plot_mrd_summary")
+        return None
+
+    try:
+        nodes = mrd_result.per_node
+        if not nodes:
+            _logger.warning("Aucun nœud SOM dans MRDResult — pas de figure.")
+            return None
+
+        n_nodes = len(nodes)
+        total_cells = mrd_result.total_cells
+
+        # ── Tri par % patho décroissant (comme fig_som_combined) ──────────
+        sorted_nodes = sorted(nodes, key=lambda c: c.pct_patho, reverse=True)
+
+        x_labels = [f"N{c.cluster_id}" for c in sorted_nodes]
+        pct_patho = [round(c.pct_patho, 2) for c in sorted_nodes]
+        pct_sain = [round(c.pct_sain, 2) for c in sorted_nodes]
+
+        # Gradient rouge→bleu selon % patho
+        bar_colors_patho = [
+            f"rgba({int(243 * p / 100 + 137 * (1 - p / 100))}, "
+            f"{int(139 * (1 - p / 100))}, "
+            f"{int(168 * (1 - p / 100) + 250 * (1 - p / 100))}, 0.85)"
+            for p in pct_patho
+        ]
+
+        # Bordure colorée par statut MRD (JF + Flo uniquement)
+        border_colors = []
+        for c in sorted_nodes:
+            if c.is_mrd_jf and c.is_mrd_flo:
+                border_colors.append("#fab387")  # orange = les deux
+            elif c.is_mrd_jf:
+                border_colors.append("#f9e2af")  # or = JF seul
+            elif c.is_mrd_flo:
+                border_colors.append("#89dceb")  # cyan = Flo seul
+            else:
+                border_colors.append("#585b70")  # gris = non-MRD
+
+        # Statut ELN textuel (contrôle uniquement, pas de barre)
+        eln_status = ""
+        if hasattr(mrd_result, "eln_positive"):
+            if mrd_result.eln_positive:
+                eln_status = "MRD POSITIVE"
+            elif mrd_result.eln_low_level:
+                eln_status = "MRD LOW-LEVEL"
+            else:
+                eln_status = "MRD NEGATIVE"
+
+        hover_texts = [
+            f"<b>Nœud SOM {c.cluster_id}</b><br>"
+            f"Patho: {c.n_cells_patho:,} ({c.pct_patho:.2f}%)<br>"
+            f"Sain: {c.n_cells_sain:,} ({c.pct_sain:.2f}%)<br>"
+            f"Total: {c.n_cells_total:,}<br>"
+            f"─────────────<br>"
+            f"MRD JF: <b>{'OUI' if c.is_mrd_jf else 'non'}</b><br>"
+            f"MRD Flo: <b>{'OUI' if c.is_mrd_flo else 'non'}</b><br>"
+            f"ELN LOQ (≥50): <b>{'✓' if c.n_cells_total >= 50 else '✗'}</b>"
+            for c in sorted_nodes
+        ]
+
+        # ── Figure 2 panneaux, axes X indépendants ───────────────────────
+        # shared_xaxes=False : panneau 2 a ses propres labels (JF / Flo),
+        # indépendants des nœuds SOM du panneau 1.
+        fig = make_subplots(
+            rows=2,
+            cols=1,
+            shared_xaxes=False,
+            row_heights=[0.7, 0.3],
+            vertical_spacing=0.10,
+            subplot_titles=[
+                f"% Cellules Pathologiques vs Moelle Normale par Nœud SOM "
+                f"(trié par % patho décroissant — {n_nodes} nœuds)",
+                "MRD Résiduelle Globale (% vs cellules totales du patient)",
+            ],
+        )
+
+        # ── Panneau 1 : barres patho + sain par nœud ─────────────────────
+        fig.add_trace(
+            go.Bar(
+                x=x_labels,
+                y=pct_patho,
+                name="% Pathologique",
+                marker=dict(
+                    color=bar_colors_patho,
+                    line=dict(color=border_colors, width=2.5),
+                ),
+                hovertext=hover_texts,
+                hoverinfo="text",
+                text=[f"{p:.1f}%" if p >= 1.0 else "" for p in pct_patho],
+                textposition="outside",
+                textfont=dict(color="#e2e8f0", size=8),
+            ),
+            row=1,
+            col=1,
+        )
+
+        fig.add_trace(
+            go.Bar(
+                x=x_labels,
+                y=pct_sain,
+                name="% Moelle Normale",
+                marker=dict(
+                    color="rgba(137, 180, 250, 0.65)",
+                    line=dict(color="#585b70", width=0.4),
+                ),
+                text=[f"{p:.1f}%" if p >= 1.0 else "" for p in pct_sain],
+                textposition="inside",
+                textfont=dict(color="white", size=7),
+            ),
+            row=1,
+            col=1,
+        )
+
+        # Lignes de référence
+        fig.add_hline(
+            y=50,
+            line=dict(color="#f9e2af", dash="dot", width=1.0),
+            annotation_text="50%",
+            annotation_font=dict(color="#f9e2af", size=9),
+            row=1,
+            col=1,
+        )
+
+        # ── Panneau 2 : MRD% global — JF et Flo uniquement ───────────────
+        method_names = []
+        mrd_pcts = []
+        mrd_cells_list = []
+        bar_cols = []
+        n_nodes_list = []
+
+        m = mrd_result.method_used
+        if m in ("jf", "both", "all"):
+            method_names.append("Méthode JF")
+            mrd_pcts.append(round(mrd_result.mrd_pct_jf, 4))
+            mrd_cells_list.append(mrd_result.mrd_cells_jf)
+            bar_cols.append("rgba(249, 226, 175, 0.9)")
+            n_nodes_list.append(mrd_result.n_nodes_mrd_jf)
+
+        if m in ("flo", "both", "all"):
+            method_names.append("Méthode Flo")
+            mrd_pcts.append(round(mrd_result.mrd_pct_flo, 4))
+            mrd_cells_list.append(mrd_result.mrd_cells_flo)
+            bar_cols.append("rgba(137, 220, 235, 0.9)")
+            n_nodes_list.append(mrd_result.n_nodes_mrd_flo)
+
+        hover_mrd = [
+            f"<b>{name}</b><br>"
+            f"MRD: {pct:.4f}%<br>"
+            f"Cellules MRD: {cells:,} dans {nn} nœuds<br>"
+            f"Cellules totales: {total_cells:,}"
+            for name, pct, cells, nn in zip(
+                method_names, mrd_pcts, mrd_cells_list, n_nodes_list
+            )
+        ]
+
+        fig.add_trace(
+            go.Bar(
+                x=method_names,
+                y=mrd_pcts,
+                name="MRD %",
+                marker=dict(
+                    color=bar_cols,
+                    line=dict(color="#cdd6f4", width=1.5),
+                ),
+                hovertext=hover_mrd,
+                hoverinfo="text",
+                text=[f"<b>{p:.4f}%</b>" for p in mrd_pcts],
+                textposition="outside",
+                textfont=dict(color="#e2e8f0", size=14, family="monospace"),
+                width=0.35,
+                showlegend=False,
+            ),
+            row=2,
+            col=1,
+        )
+
+        # Annotations sous les barres
+        for name, cells, nn in zip(method_names, mrd_cells_list, n_nodes_list):
+            fig.add_annotation(
+                x=name,
+                y=0,
+                text=f"{cells:,} cellules · {nn} nœuds",
+                showarrow=False,
+                yshift=-15,
+                font=dict(color="#a6adc8", size=11),
+                xref="x2",
+                yref="y2",
+            )
+
+        # ── Layout — grande taille scrollable ─────────────────────────────
+        chart_width = max(1600, n_nodes * 30)
+
+        fig.update_layout(
+            title=dict(
+                text=(
+                    f"<b>{title}</b><br>"
+                    f"<sup>{n_nodes} nœuds SOM — {total_cells:,} cellules"
+                    + (f" — Contrôle ELN: {eln_status}" if eln_status else "")
+                    + "</sup>"
+                ),
+                font=dict(size=16, color="#e2e8f0"),
+                x=0.5,
+            ),
+            barmode="group",
+            paper_bgcolor="#1e1e2e",
+            plot_bgcolor="#1e1e2e",
+            font=dict(color="#e2e8f0"),
+            height=950,
+            width=chart_width,
+            margin=dict(l=70, r=40, t=110, b=130),
+            bargap=0.25,
+            legend=dict(
+                bgcolor="#313244",
+                bordercolor="#585b70",
+                orientation="h",
+                x=0.5,
+                xanchor="center",
+                y=-0.08,
+                font=dict(color="#cdd6f4", size=11),
+            ),
+        )
+
+        # X partagé — labels en bas, rotation 90°
+        fig.update_xaxes(
+            tickfont=dict(size=9),
+            tickangle=90,
+            color="#e2e8f0",
+            gridcolor="#313244",
+            tickmode="array",
+            tickvals=x_labels,
+            ticktext=x_labels,
+            row=1,
+            col=1,
+        )
+        fig.update_xaxes(color="#e2e8f0", gridcolor="#313244", row=2, col=1)
+
+        max_y1 = max(max(pct_patho, default=1), max(pct_sain, default=1))
+        max_y2 = max(mrd_pcts, default=0.01)
+        fig.update_yaxes(
+            title_text="% dans le nœud SOM",
+            color="#e2e8f0",
+            gridcolor="#313244",
+            range=[0, min(max_y1 * 1.18, 105)],
+            ticksuffix="%",
+            row=1,
+            col=1,
+        )
+        fig.update_yaxes(
+            title_text="MRD (%)",
+            color="#e2e8f0",
+            gridcolor="#313244",
+            range=[0, max(max_y2 * 1.6, 0.01)],
+            ticksuffix="%",
+            row=2,
+            col=1,
+        )
+
+        # Titres subplots en blanc
+        for ann in fig.layout.annotations:
+            ann.font.color = "#cdd6f4"
+            ann.font.size = 13
+
+        # Légende bordure MRD
+        fig.add_annotation(
+            text=(
+                "Bordure nœud: "
+                "<span style='color:#f9e2af'>■</span> MRD JF · "
+                "<span style='color:#89dceb'>■</span> MRD Flo · "
+                "<span style='color:#fab387'>■</span> Les deux · "
+                "<span style='color:#585b70'>■</span> Non-MRD"
+            ),
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=-0.13,
+            showarrow=False,
+            font=dict(color="#a6adc8", size=11),
+        )
+
+        # ── Export ────────────────────────────────────────────────────────
+        if output_html is not None:
+            out_html = Path(output_html)
+            out_html.parent.mkdir(parents=True, exist_ok=True)
+            fig.write_html(str(out_html), include_plotlyjs="cdn")
+            _logger.info("MRD summary (HTML): %s", out_html.name)
+
+        if output_png is not None:
+            out_png = Path(output_png)
+            out_png.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                fig.write_image(
+                    str(out_png), format="png", width=1800, height=950, scale=2
+                )
+                _logger.info("MRD summary (PNG): %s", out_png.name)
+            except Exception as _img_err:
+                _logger.warning("Export PNG MRD échoué (kaleido requis): %s", _img_err)
+
+        return fig
+
+    except Exception as exc:
+        _logger.error("Échec plot_mrd_summary: %s", exc)
         return None

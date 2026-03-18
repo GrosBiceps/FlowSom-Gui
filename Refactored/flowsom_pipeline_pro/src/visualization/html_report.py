@@ -314,6 +314,7 @@ def generate_html_report(
         "gating_log": "Log de gating JSON",
         "html_report": "Rapport HTML",
         "sankey_global": "Sankey global (HTML interactif)",
+        "mrd_results": "Résultats MRD (JSON)",
     }
     export_rows = ""
     for key, path_val in export_paths.items():

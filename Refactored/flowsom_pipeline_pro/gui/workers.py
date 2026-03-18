@@ -11,7 +11,10 @@ from __future__ import annotations
 import logging
 import traceback
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from flowsom_pipeline_pro.config.pipeline_config import PipelineConfig
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
@@ -99,7 +102,7 @@ class PipelineWorker(QThread):
 
     def __init__(
         self,
-        config: Any,
+        config: "PipelineConfig",
         parent: Optional[Any] = None,
     ) -> None:
         super().__init__(parent)
