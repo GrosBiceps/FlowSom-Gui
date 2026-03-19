@@ -168,3 +168,13 @@ population_mapping:
   blast_suspect_categories: ["BLAST_HIGH", "BLAST_MODERATE"] # Catégories de mapping à considérer comme suspectes pour les blastes (ex: "BLAST_HIGH", "BLAST_MODERATE") — utilisé pour identifier les cellules qui pourraient être des blastes même si elles ne sont pas mappées dans la catégorie BLAST_STRICT, en se basant sur leur proximité avec les populations de référence et leurs caractéristiques CD34+/CD45-
   viz_interactive: true # true = activer les visualisations interactives Plotly pour le mapping des populations (ex: scatter 2D, distribution des distances, etc.) dans le rapport HTML, false = visualisations statiques uniquement
   viz_max_points: 50000 # Nombre maximum de points à afficher dans les visualisations interactives du mapping (ex: 20000, 50000, 100000) — utilisé pour limiter la mémoire utilisée par les graphiques interactifs sur de grands datasets
+
+
+performance_monitoring:
+  enabled: true              # true = activer le monitoring CPU/RAM/Disque/Réseau/GPU pendant la pipeline
+  interval_seconds: 1.0       # intervalle de collecte (secondes) — 0.5 pour plus de précision, 2.0 pour moins de charge
+  include_gpu: true           # true = collecter les métriques GPU NVIDIA (nécessite : pip install gputil)
+
+patho_fcs_export:
+  enabled: true             # true = générer un FCS restreint à la moelle pathologique avec colonne Is_MRD
+  mrd_method: "flo"          # méthode utilisée pour Is_MRD : "flo" (méthode Flo) ou "jf" (méthode JF)

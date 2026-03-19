@@ -214,6 +214,23 @@ class PopulationMappingConfig:
 
 
 @dataclass
+class PerformanceMonitoringConfig:
+    """Configuration du monitoring de performance système."""
+
+    enabled: bool = False           # true = activer la collecte pendant la pipeline
+    interval_seconds: float = 1.0   # intervalle de collecte en secondes
+    include_gpu: bool = True        # true = collecter les métriques GPU (nécessite gputil)
+
+
+@dataclass
+class PathoFcsExportConfig:
+    """Configuration de l'export FCS restreint à la moelle pathologique + Is_MRD."""
+
+    enabled: bool = False           # true = générer le FCS pathologique avec Is_MRD
+    mrd_method: str = "flo"         # méthode Is_MRD : "jf" ou "flo"
+
+
+@dataclass
 class PipelineConfig:
     """Configuration complète du pipeline FlowSOM Pro."""
 
@@ -233,6 +250,12 @@ class PipelineConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     population_mapping: PopulationMappingConfig = field(
         default_factory=PopulationMappingConfig
+    )
+    performance_monitoring: PerformanceMonitoringConfig = field(
+        default_factory=PerformanceMonitoringConfig
+    )
+    patho_fcs_export: PathoFcsExportConfig = field(
+        default_factory=PathoFcsExportConfig
     )
 
     # ------------------------------------------------------------------
@@ -290,6 +313,8 @@ class PipelineConfig:
             "gpu",
             "logging",
             "population_mapping",
+            "performance_monitoring",
+            "patho_fcs_export",
             "pipeline_version",
         }
         cfg._extra = {k: v for k, v in raw.items() if k not in _structured_keys}
@@ -434,6 +459,18 @@ class PipelineConfig:
             if "population_colors" in pm:
                 cfg.population_mapping.population_colors = dict(pm["population_colors"])
 
+        pm_mon = raw.get("performance_monitoring", {})
+        if pm_mon:
+            for attr in ("enabled", "interval_seconds", "include_gpu"):
+                if attr in pm_mon:
+                    setattr(cfg.performance_monitoring, attr, pm_mon[attr])
+
+        pfe = raw.get("patho_fcs_export", {})
+        if pfe:
+            for attr in ("enabled", "mrd_method"):
+                if attr in pfe:
+                    setattr(cfg.patho_fcs_export, attr, pfe[attr])
+
         # Validation
         cfg._validate()
         return cfg
@@ -509,7 +546,27 @@ class PipelineConfig:
     # ------------------------------------------------------------------
 
     def _validate(self) -> None:
-        """Validation des paramètres critiques."""
+        """Validation des paramètres critiques et vérification de types YAML."""
+        # ── Validation de types critiques (erreurs YAML silencieuses) ──────────
+        int_fields = {
+            "flowsom.xdim": self.flowsom.xdim,
+            "flowsom.ydim": self.flowsom.ydim,
+            "flowsom.n_metaclusters": self.flowsom.n_metaclusters,
+            "flowsom.seed": self.flowsom.seed,
+        }
+        for field_name, value in int_fields.items():
+            if not isinstance(value, int):
+                raise TypeError(
+                    f"Configuration: {field_name} doit être un entier, "
+                    f"obtenu {type(value).__name__} ({value!r}). "
+                    "Vérifiez votre fichier YAML (pas de guillemets autour des entiers)."
+                )
+        if not isinstance(self.transform.cofactor, (int, float)):
+            raise TypeError(
+                f"Configuration: transform.cofactor doit être un nombre, "
+                f"obtenu {type(self.transform.cofactor).__name__} ({self.transform.cofactor!r})."
+            )
+
         if self.pregate.mode not in ("auto", "manual"):
             warnings.warn(
                 f"pregate.mode '{self.pregate.mode}' inconnu. Valeurs acceptées: 'auto', 'manual'. "

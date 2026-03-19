@@ -41,10 +41,14 @@ scanpy>=1.9
 matplotlib>=3.7
 seaborn>=0.12
 reportlab>=4.0               # génération rapports PDF
-kaleido>=0.1.0              # export statique des figures Plotly
-plotly>=5.0     
-PyQt5   
-PyQtWebEngine            # visualisations interactives (figures HTML)
+kaleido>=0.1.0               # export statique des figures Plotly
+plotly>=5.0
+PyQt5
+PyQtWebEngine                # visualisations interactives (figures HTML)
+
+# ── Monitoring de performance système ────────────────────────
+psutil>=5.9                  # collecte CPU / RAM / Disque / Réseau en temps réel
+GPUtil>=1.4.0                # métriques GPU NVIDIA (optionnel — ne bloque pas si absent)
 
 # ── Configuration ────────────────────────────────────────────
 PyYAML>=6.0

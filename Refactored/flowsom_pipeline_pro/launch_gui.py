@@ -8,6 +8,7 @@ Usage:
 
 import sys
 import os
+import logging as _logging
 from pathlib import Path
 
 # ── Mode windowed (console=False) : sys.stderr/stdout sont None → crash logging ─
@@ -34,6 +35,19 @@ if str(_BASE_DIR) not in sys.path:
 _PARENT = _BASE_DIR.parent
 if str(_PARENT) not in sys.path:
     sys.path.insert(0, str(_PARENT))
+
+# ── Suppression des logs verbeux de kaleido (Chromium/CDP) ─────────────────────
+# kaleido utilise le logger root Python — on le filtre à WARNING pour ne garder
+# que les vraies erreurs, pas les traces internes Chromium/CDP.
+for _noisy in (
+    "kaleido",
+    "kaleido.scopes",
+    "kaleido.scopes.base",
+    "kaleido.scopes.chromium",
+    "chromote",
+    "pyppeteer",
+):
+    _logging.getLogger(_noisy).setLevel(_logging.WARNING)
 
 from flowsom_pipeline_pro.gui.main_window import main
 
