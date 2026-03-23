@@ -180,4 +180,4 @@ patho_fcs_export:
   mrd_method: "flo"          # méthode utilisée pour Is_MRD : "flo" (méthode Flo) ou "jf" (méthode JF)
 
 batch:
-  enabled: false            # true = traiter chaque FCS du dossier patho individuellement (mode lot)
+  enabled: true            # true = traiter chaque FCS du dossier patho individuellement (mode lot)
