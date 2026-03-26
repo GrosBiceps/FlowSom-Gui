@@ -93,6 +93,12 @@ class PregateConfig:
     # Paramètres RANSAC singlets
     ransac_r2_threshold: float = RANSAC_R2_THRESHOLD
     ransac_mad_factor: float = RANSAC_MAD_FACTOR
+    # Méthode d'estimation de densité : "GMM" | "KDE"
+    density_method: str = "GMM"
+    # Paramètres avancés GMM
+    gmm_covariance_type: str = "full"   # "full" | "tied" | "diag" | "spherical"
+    gmm_n_components_debris: int = 3    # Nombre de composantes pour le gating débris
+    gmm_export_plot: bool = True        # Exporter le graphique des densités GMM
 
 
 @dataclass
@@ -240,6 +246,22 @@ class BatchConfig:
 
 
 @dataclass
+class ExportModeConfig:
+    """
+    Mode d'export des résultats.
+
+    - "standard" : tous les fichiers (FCS complet, CSV, JSON métadonnées, plots, rapports, MRD).
+    - "compact"  : uniquement les sorties essentielles —
+                   rapport PDF, rapport HTML, MRD JSON et FCS pathologique avec Is_MRD.
+                   Les CSV, FCS complet, TXT et JSON de métadonnées sont ignorés.
+                   Les figures sont toujours générées car nécessaires aux rapports.
+    """
+
+    mode: str = "standard"          # "standard" | "compact"
+    export_per_file_csv: bool = True  # true = exporter un CSV par fichier FCS source
+
+
+@dataclass
 class PipelineConfig:
     """Configuration complète du pipeline FlowSOM Pro."""
 
@@ -267,6 +289,7 @@ class PipelineConfig:
         default_factory=PathoFcsExportConfig
     )
     batch: BatchConfig = field(default_factory=BatchConfig)
+    export_mode: ExportModeConfig = field(default_factory=ExportModeConfig)
 
     # ------------------------------------------------------------------
     # Constructeurs alternatifs
@@ -326,6 +349,7 @@ class PipelineConfig:
             "performance_monitoring",
             "patho_fcs_export",
             "batch",
+            "export_mode",
             "pipeline_version",
         }
         cfg._extra = {k: v for k, v in raw.items() if k not in _structured_keys}
@@ -368,6 +392,10 @@ class PipelineConfig:
             "gmm_max_samples": "gmm_max_samples",
             "ransac_r2_threshold": "ransac_r2_threshold",
             "ransac_mad_factor": "ransac_mad_factor",
+            "density_method": "density_method",
+            "gmm_covariance_type": "gmm_covariance_type",
+            "gmm_n_components_debris": "gmm_n_components_debris",
+            "gmm_export_plot": "gmm_export_plot",
         }
         for yaml_key, attr in mapping_pregate.items():
             if yaml_key in pg_adv:
@@ -486,6 +514,13 @@ class PipelineConfig:
         if bt:
             if "enabled" in bt:
                 cfg.batch.enabled = bool(bt["enabled"])
+
+        em = raw.get("export_mode", {})
+        if em:
+            if "mode" in em:
+                cfg.export_mode.mode = str(em["mode"])
+            if "export_per_file_csv" in em:
+                cfg.export_mode.export_per_file_csv = bool(em["export_per_file_csv"])
 
         # Validation
         cfg._validate()
