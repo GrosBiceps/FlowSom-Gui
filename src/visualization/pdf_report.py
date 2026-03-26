@@ -139,13 +139,13 @@ def _png_size(data: bytes) -> Tuple[int, int]:
     return 800, 600  # fallback
 
 
-def _mpl_to_png(fig: Any) -> Optional[bytes]:
-    """Rend une figure matplotlib en PNG (fond blanc, dpi 150)."""
+def _mpl_to_png(fig: Any, dpi: int = 100) -> Optional[bytes]:
+    """Rend une figure matplotlib en PNG (fond blanc)."""
     if not _MPL or fig is None:
         return None
     try:
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=150,
+        fig.savefig(buf, format="png", dpi=dpi,
                     bbox_inches="tight", facecolor="white", edgecolor="none")
         buf.seek(0)
         return buf.read()
@@ -155,13 +155,19 @@ def _mpl_to_png(fig: Any) -> Optional[bytes]:
 
 
 def _plotly_to_png(fig: Any, wide: bool = False) -> Optional[bytes]:
-    """Rend une figure Plotly en PNG via kaleido."""
+    """Rend une figure Plotly en PNG via kaleido (scope persistant)."""
     if not _PLOTLY or fig is None:
         return None
     try:
+        # Réutilise le scope kaleido déjà démarré si disponible
+        try:
+            from flowsom_pipeline_pro.src.utils.kaleido_scope import ensure_kaleido_scope
+            ensure_kaleido_scope()
+        except Exception:
+            pass
         w = 2200 if wide else 1400
         h = 700  if wide else 800
-        return _pio.to_image(fig, format="png", width=w, height=h, scale=1.5)
+        return _pio.to_image(fig, format="png", width=w, height=h, scale=1.0)
     except Exception as exc:
         _logger.debug("plotly_to_png: %s", exc)
         return None
@@ -485,7 +491,8 @@ def _section_figures(styles: dict,
                      plotly_figs: Dict[str, Any],
                      mpl_figs: Dict[str, Any],
                      figure_labels: Dict[str, str],
-                     num: int = 5) -> List[Any]:
+                     num: int = 5,
+                     dpi_mpl: int = 100) -> List[Any]:
     """Génère les flowables pour toutes les figures dans l'ordre HTML."""
     items: List[Any] = [_section_header("Visualisations", num, styles)]
 
@@ -520,7 +527,7 @@ def _section_figures(styles: dict,
 
         # ── Conversion → PNG bytes ───────────────────────────────────────────
         if source == "mpl":
-            png = _mpl_to_png(fig)
+            png = _mpl_to_png(fig, dpi=dpi_mpl)
         else:
             if kaleido_missing:
                 items += [
@@ -601,6 +608,8 @@ def generate_pdf_report(
     files_data: Optional[List[Dict[str, Any]]] = None,
     export_paths: Optional[Dict[str, str]] = None,
     timestamp: str = "",
+    patho_info: Optional[Dict[str, str]] = None,
+    dpi_mpl: int = 100,
 ) -> Optional[str]:
     """
     Génère un rapport PDF A4 complet reproduisant le rapport HTML.
@@ -644,13 +653,52 @@ def generate_pdf_report(
     story.extend(_cover_page(styles, timestamp, n_cells, n_files))
     story.append(PageBreak())
 
+    # ── Encadré moelle pathologique (en haut, avant les paramètres) ──────────
+    if patho_info and _RL:
+        from reportlab.lib.styles import ParagraphStyle as _PStyle
+        _pname = patho_info.get("name", "")
+        _pdate = patho_info.get("date", "Date inconnue")
+        _warning_color = colors.HexColor("#f59e0b")
+        _warning_bg    = colors.HexColor("#fff9e6")
+        _warning_text  = colors.HexColor("#78350f")
+        _warning_label = colors.HexColor("#92400e")
+        patho_banner_data = [
+            [Paragraph("&#9888; MOELLE PATHOLOGIQUE ANALYSÉE", _PStyle(
+                "pdfPBTitle",
+                fontName="Helvetica-Bold", fontSize=9,
+                textColor=_warning_label, spaceAfter=4,
+            ))],
+            [Paragraph(f"<b>{_pname}</b>", _PStyle(
+                "pdfPBName",
+                fontName="Helvetica-Bold", fontSize=11,
+                textColor=_warning_text, spaceAfter=3,
+            ))],
+            [Paragraph(f"Date du prélèvement : <b>{_pdate}</b>", _PStyle(
+                "pdfPBDate",
+                fontName="Helvetica", fontSize=10,
+                textColor=_warning_text,
+            ))],
+        ]
+        patho_tbl = Table(patho_banner_data, colWidths=[_PW])
+        patho_tbl.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), _warning_bg),
+            ("BOX",           (0, 0), (-1, -1), 1.5, _warning_color),
+            ("LINEBEFORE",    (0, 0), (0, -1),  5,   colors.HexColor("#d97706")),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 14),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
+            ("TOPPADDING",    (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ]))
+        story += [patho_tbl, Spacer(1, 16)]
+
     story.extend(_section_params(styles, analysis_params, num=1))
     story.extend(_section_summary(styles, summary_stats,
                                    condition_data, files_data, num=2))
     story.extend(_section_markers(styles, markers, num=3))
     story.extend(_section_metaclusters(styles, metacluster_table, num=4))
     story.extend(_section_figures(styles, plotly_figures,
-                                   matplotlib_figures, figure_labels, num=5))
+                                   matplotlib_figures, figure_labels, num=5,
+                                   dpi_mpl=dpi_mpl))
     if export_paths:
         story.extend(_section_exports(styles, export_paths, num=6))
 

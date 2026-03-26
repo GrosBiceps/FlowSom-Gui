@@ -55,12 +55,17 @@ class ExportService:
         output_dir: Path | str,
         timestamp: Optional[str] = None,
         name_stem: Optional[str] = None,
+        patho_name: Optional[str] = None,
+        patho_date: Optional[str] = None,
     ) -> None:
         self.config = config
         self.output_dir = Path(output_dir)
         self.timestamp = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
         # Stem utilisé pour nommer les rapports HTML/PDF (Feature 1 : nommage dynamique)
         self.name_stem = name_stem or f"flowsom_report_{self.timestamp}"
+        # Informations sur la moelle pathologique (pour l'encadré des rapports)
+        self.patho_name = patho_name
+        self.patho_date = patho_date
 
         # Créer la structure de dossiers de sortie
         self._dirs = {
@@ -104,76 +109,99 @@ class ExportService:
         ts = self.timestamp
         paths: Dict[str, str] = {}
 
-        # ── 1. FCS ────────────────────────────────────────────────────────────
-        # Utilise df_fcs (complet, brut, toutes colonnes) si disponible, sinon df_cells
-        fcs_source = df_fcs if df_fcs is not None else df_cells
-        fcs_path = self._dirs["fcs"] / f"flowsom_results_{ts}.fcs"
-        ok = export_to_fcs_kaluza(fcs_source, fcs_path)
-        if ok:
-            paths["fcs_complete"] = str(fcs_path)
-            _logger.info("FCS exporté: %s", fcs_path.name)
-
-        # ── 2. CSV complet ─────────────────────────────────────────────────────
-        csv_path = self._dirs["csv"] / f"flowsom_complete_{ts}.csv"
-        ok = export_cells_csv(df_cells, csv_path)
-        if ok:
-            paths["csv_complete"] = str(csv_path)
-
-        # ── 3. CSV par fichier FCS source ─────────────────────────────────────
-        per_file_results = export_per_file_csv(
-            df_cells, self._dirs["csv"] / "per_file", timestamp=ts
+        # Mode compact : on saute FCS complet, CSV et JSON de métadonnées/gating.
+        # Seuls le rapport HTML/PDF, le MRD JSON et le FCS pathologique Is_MRD sont produits.
+        _compact = (
+            getattr(getattr(self.config, "export_mode", None), "mode", "standard")
+            == "compact"
         )
-        paths["csv_per_file"] = str(self._dirs["csv"] / "per_file")
 
-        # ── 4. Statistiques par cluster ────────────────────────────────────────
-        stats_df = compute_cluster_statistics(
-            df_cells,
-            marker_columns=[m for m in selected_markers if m in df_cells.columns],
-            cluster_column="FlowSOM_metacluster",
-        )
-        stats_path = self._dirs["csv"] / f"flowsom_statistics_{ts}.csv"
-        ok = export_statistics_csv(stats_df, stats_path)
-        if ok:
-            paths["csv_statistics"] = str(stats_path)
-
-        # ── 5. Matrice MFI ─────────────────────────────────────────────────────
-        mfi_path = self._dirs["csv"] / f"flowsom_mfi_{ts}.csv"
-        ok = export_mfi_matrix_csv(mfi_matrix, mfi_path)
-        if ok:
-            paths["csv_mfi"] = str(mfi_path)
-
-        # ── 6. Log de gating ──────────────────────────────────────────────────
-        if gating_logger is not None:
-            gating_path = self._dirs["other"] / f"gating_log_{ts}.json"
-            ok = export_gating_log(
-                [e.to_dict() for e in gating_logger.events],
-                gating_path,
+        if _compact:
+            _logger.info(
+                "Mode compact activé — FCS complet, CSV et JSON métadonnées ignorés."
             )
+        else:
+            # ── 1. FCS ────────────────────────────────────────────────────────
+            fcs_source = df_fcs if df_fcs is not None else df_cells
+            fcs_path = self._dirs["fcs"] / f"flowsom_results_{ts}.fcs"
+            ok = export_to_fcs_kaluza(fcs_source, fcs_path)
             if ok:
-                paths["gating_log"] = str(gating_path)
+                paths["fcs_complete"] = str(fcs_path)
+                _logger.info("FCS exporté: %s", fcs_path.name)
 
-        # ── 7. Métadonnées JSON ───────────────────────────────────────────────
-        metadata = build_analysis_metadata(
-            input_files=input_files,
-            config_dict=self.config.to_dict()
-            if hasattr(self.config, "to_dict")
-            else {},
-            n_cells=len(df_cells),
-            marker_names=list(df_cells.columns),
-            used_markers=selected_markers,
-            metaclustering=metaclustering,
-            n_metaclusters=int(metaclustering.max()) + 1
-            if len(metaclustering) > 0
-            else 0,
-            cell_data_obs=df_cells[["condition", "file_origin"]]
-            if "condition" in df_cells.columns
-            else None,
-            export_paths=paths,
-        )
-        meta_path = self._dirs["other"] / f"flowsom_metadata_{ts}.json"
-        ok = export_analysis_metadata(metadata, meta_path)
-        if ok:
-            paths["json_metadata"] = str(meta_path)
+            # ── 2. CSV complet ─────────────────────────────────────────────────
+            csv_path = self._dirs["csv"] / f"flowsom_complete_{ts}.csv"
+            ok = export_cells_csv(df_cells, csv_path)
+            if ok:
+                paths["csv_complete"] = str(csv_path)
+
+            # ── 3. CSV par fichier FCS source ──────────────────────────────────
+            _do_per_file_csv = getattr(
+                getattr(self.config, "export_mode", None), "export_per_file_csv", True
+            )
+            if _do_per_file_csv:
+                export_per_file_csv(
+                    df_cells, self._dirs["csv"] / "per_file", timestamp=ts
+                )
+                paths["csv_per_file"] = str(self._dirs["csv"] / "per_file")
+            else:
+                _logger.info("Export CSV per_file désactivé (export_per_file_csv=false).")
+
+            # ── 4. Statistiques par cluster ────────────────────────────────────
+            stats_df = compute_cluster_statistics(
+                df_cells,
+                marker_columns=[m for m in selected_markers if m in df_cells.columns],
+                cluster_column="FlowSOM_metacluster",
+            )
+            if self.patho_name is not None:
+                stats_df.insert(0, "Fichier_Patho", self.patho_name)
+            if self.patho_date is not None:
+                stats_df.insert(
+                    1 if self.patho_name is not None else 0, "Date_Patho", self.patho_date
+                )
+            stats_path = self._dirs["csv"] / f"flowsom_statistics_{ts}.csv"
+            ok = export_statistics_csv(stats_df, stats_path)
+            if ok:
+                paths["csv_statistics"] = str(stats_path)
+
+            # ── 5. Matrice MFI ─────────────────────────────────────────────────
+            mfi_path = self._dirs["csv"] / f"flowsom_mfi_{ts}.csv"
+            ok = export_mfi_matrix_csv(mfi_matrix, mfi_path)
+            if ok:
+                paths["csv_mfi"] = str(mfi_path)
+
+            # ── 6. Log de gating ──────────────────────────────────────────────
+            if gating_logger is not None:
+                gating_path = self._dirs["other"] / f"gating_log_{ts}.json"
+                ok = export_gating_log(
+                    [e.to_dict() for e in gating_logger.events],
+                    gating_path,
+                )
+                if ok:
+                    paths["gating_log"] = str(gating_path)
+
+            # ── 7. Métadonnées JSON ───────────────────────────────────────────
+            metadata = build_analysis_metadata(
+                input_files=input_files,
+                config_dict=self.config.to_dict()
+                if hasattr(self.config, "to_dict")
+                else {},
+                n_cells=len(df_cells),
+                marker_names=list(df_cells.columns),
+                used_markers=selected_markers,
+                metaclustering=metaclustering,
+                n_metaclusters=int(metaclustering.max()) + 1
+                if len(metaclustering) > 0
+                else 0,
+                cell_data_obs=df_cells[["condition", "file_origin"]]
+                if "condition" in df_cells.columns
+                else None,
+                export_paths=paths,
+            )
+            meta_path = self._dirs["other"] / f"flowsom_metadata_{ts}.json"
+            ok = export_analysis_metadata(metadata, meta_path)
+            if ok:
+                paths["json_metadata"] = str(meta_path)
 
         _logger.info(
             "Exports terminés: %d fichiers dans %s",
@@ -340,6 +368,7 @@ class ExportService:
         files_data: Optional[List[Dict[str, Any]]] = None,
         export_paths: Optional[Dict[str, str]] = None,
         self_contained: bool = True,
+        patho_info: Optional[Dict[str, str]] = None,
     ) -> Optional[str]:
         """
         Génère le rapport HTML complet self-contained.
@@ -363,6 +392,15 @@ class ExportService:
 
         html_path = self._dirs["other"] / f"{self.name_stem}.html"
 
+        # Utiliser les infos patho de l'instance si non passées explicitement
+        _patho_info = patho_info
+        if _patho_info is None and self.patho_name:
+            _patho_info = {
+                "name": self.patho_name,
+                "date": self.patho_date or "Date inconnue",
+            }
+        _viz_cfg_html = getattr(self.config, "visualization", None)
+        _html_dpi_mpl = int(getattr(_viz_cfg_html, "pdf_dpi_mpl", 100))
         ok = generate_html_report(
             html_path,
             plotly_figures=plotly_figures,
@@ -376,6 +414,8 @@ class ExportService:
             files_data=files_data,
             export_paths=export_paths,
             self_contained=self_contained,
+            patho_info=_patho_info,
+            dpi_mpl=_html_dpi_mpl,
         )
 
         return str(html_path) if ok else None
@@ -393,6 +433,7 @@ class ExportService:
         condition_data: Optional[List[Dict[str, Any]]] = None,
         files_data: Optional[List[Dict[str, Any]]] = None,
         export_paths: Optional[Dict[str, str]] = None,
+        patho_info: Optional[Dict[str, str]] = None,
     ) -> Optional[str]:
         """
         Génère le rapport PDF A4 complet (même contenu que le HTML).
@@ -408,6 +449,14 @@ class ExportService:
 
         pdf_path = self._dirs["other"] / f"{self.name_stem}.pdf"
 
+        _patho_info = patho_info
+        if _patho_info is None and self.patho_name:
+            _patho_info = {
+                "name": self.patho_name,
+                "date": self.patho_date or "Date inconnue",
+            }
+        _viz_cfg = getattr(self.config, "visualization", None)
+        _pdf_dpi_mpl = int(getattr(_viz_cfg, "pdf_dpi_mpl", 100))
         return generate_pdf_report(
             pdf_path,
             plotly_figures=plotly_figures,
@@ -421,5 +470,7 @@ class ExportService:
             files_data=files_data,
             export_paths=export_paths,
             timestamp=datetime.now().strftime("%d/%m/%Y %H:%M"),
+            patho_info=_patho_info,
+            dpi_mpl=_pdf_dpi_mpl,
         )
 

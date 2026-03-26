@@ -253,7 +253,12 @@ def _apply_gating(
     # Gate 1 – Débris
     if getattr(pregate_cfg, "viable", True):
         if mode == "auto":
-            mask = AutoGating.auto_gate_debris(X, var_names)
+            mask = AutoGating.auto_gate_debris(
+                X, var_names,
+                n_components=getattr(pregate_cfg, "gmm_n_components_debris", 3),
+                covariance_type=getattr(pregate_cfg, "gmm_covariance_type", "full"),
+                density_method=getattr(pregate_cfg, "density_method", "GMM"),
+            )
         else:
             mask = PreGating.gate_viable_cells(
                 X,
@@ -546,6 +551,17 @@ def preprocess_combined(
         conditions.copy()
     )  # Conditions avant gating (pour plots QC CD45)
     if getattr(pregate_cfg, "apply", True):
+        # Chemin pour le graphique GMM si demandé
+        _gmm_plot_path = None
+        if (
+            gating_plot_dir is not None
+            and getattr(pregate_cfg, "gmm_export_plot", False)
+            and getattr(pregate_cfg, "density_method", "GMM").upper() == "GMM"
+        ):
+            from pathlib import Path as _Path
+            _gmm_plot_path = str(
+                _Path(gating_plot_dir) / "gating" / "gmm_debris_density.png"
+            )
         X_raw, var_names, conditions, file_origins, gate_masks = _apply_gating_combined(
             X_raw,
             var_names,
@@ -553,6 +569,7 @@ def preprocess_combined(
             file_origins,
             pregate_cfg,
             gating_logger,
+            gmm_plot_path=_gmm_plot_path,
         )
 
     # ── Plots QC de gating (si plot_dir fourni) ───────────────────────────────
@@ -688,6 +705,7 @@ def _apply_gating_combined(
     file_origins: np.ndarray,
     pregate_cfg,
     gating_logger: GatingLogger,
+    gmm_plot_path: Optional[str] = None,
 ) -> Tuple[np.ndarray, List[str], np.ndarray, np.ndarray]:
     """
     Gating sur les données combinées — reproduit exactement flowsom_pipeline.py.
@@ -722,7 +740,19 @@ def _apply_gating_combined(
     if getattr(pregate_cfg, "viable", True):
         _logger.info("Gate 1 — Débris [%s] sur %d cellules combinées", mode, n_before)
         if mode == "auto":
-            mask_debris = AutoGating.auto_gate_debris(X, var_names)
+            _do_gmm_plot = (
+                getattr(pregate_cfg, "gmm_export_plot", False)
+                and gmm_plot_path is not None
+                and getattr(pregate_cfg, "density_method", "GMM").upper() == "GMM"
+            )
+            mask_debris = AutoGating.auto_gate_debris(
+                X, var_names,
+                n_components=getattr(pregate_cfg, "gmm_n_components_debris", 3),
+                covariance_type=getattr(pregate_cfg, "gmm_covariance_type", "full"),
+                density_method=getattr(pregate_cfg, "density_method", "GMM"),
+                export_plot=_do_gmm_plot,
+                plot_output_path=gmm_plot_path,
+            )
         else:
             mask_debris = PreGating.gate_viable_cells(
                 X,

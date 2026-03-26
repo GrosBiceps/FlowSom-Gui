@@ -328,9 +328,12 @@ def compute_mrd(
             is_mrd_eln=is_mrd_eln,
         ))
 
-    mrd_pct_jf = (mrd_cells_jf / n_total * 100.0) if n_total > 0 else 0.0
-    mrd_pct_flo = (mrd_cells_flo / n_total * 100.0) if n_total > 0 else 0.0
-    mrd_pct_eln = (mrd_cells_eln / n_total * 100.0) if n_total > 0 else 0.0
+    # MRD % = cellules MRD / total cellules pathologiques de la patiente
+    # (dénominateur = fichier patho uniquement, pas le total sain+patho)
+    _denom_patho = total_patho if total_patho > 0 else 1
+    mrd_pct_jf = (mrd_cells_jf / _denom_patho * 100.0) if total_patho > 0 else 0.0
+    mrd_pct_flo = (mrd_cells_flo / _denom_patho * 100.0) if total_patho > 0 else 0.0
+    mrd_pct_eln = (mrd_cells_eln / _denom_patho * 100.0) if total_patho > 0 else 0.0
 
     # Statut clinique ELN
     eln_positive = mrd_pct_eln >= mrd_cfg.eln_standards.clinical_positivity_pct

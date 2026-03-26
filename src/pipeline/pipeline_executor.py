@@ -126,6 +126,16 @@ class FlowSOMPipeline:
                 _logger.debug("Performance monitor non disponible: %s", _me)
                 _monitor = None
 
+        # ── Warm-up kaleido (démarre Chromium une seule fois, avant les exports) ──
+        try:
+            from flowsom_pipeline_pro.src.utils.kaleido_scope import (
+                ensure_kaleido_scope, warm_up_kaleido,
+            )
+            ensure_kaleido_scope()
+            warm_up_kaleido()
+        except Exception:
+            pass
+
         try:
             # ── Étape 1: Chargement des fichiers FCS ──────────────────────────
             _logger.info("Étape 1: Chargement des fichiers FCS...")
@@ -147,10 +157,22 @@ class FlowSOMPipeline:
             _single_patho = getattr(config.paths, "patho_single_file", None)
             _patho_stem = Path(_single_patho).stem if _single_patho else None
 
+            # Extraire la date du fichier FCS pathologique
+            from flowsom_pipeline_pro.src.io.csv_exporter import extract_date_from_filename
+            _patho_date: Optional[str] = None
+            if _single_patho:
+                _dt = extract_date_from_filename(_single_patho)
+                if _dt is not None:
+                    _patho_date = _dt.strftime("%Y-%m-%d")
+
             # Définir output_dir tôt (utilisé pour les plots de gating)
             _base_output = Path(config.paths.output_dir)
             if _patho_stem:
-                output_dir = _base_output / f"résultats_{_patho_stem}"
+                # Inclure la date dans le nom du dossier si disponible
+                if _patho_date:
+                    output_dir = _base_output / f"résultats_{_patho_stem}_{_patho_date}"
+                else:
+                    output_dir = _base_output / f"résultats_{_patho_stem}"
             else:
                 output_dir = _base_output
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -392,6 +414,9 @@ class FlowSOMPipeline:
                             ],
                             dtype=int,
                         )
+                    _viz_cfg = getattr(config, "visualization", None)
+                    _som_max_cells = int(getattr(_viz_cfg, "som_grid_max_display_cells", 100_000))
+                    _som_dpi = int(getattr(_viz_cfg, "som_grid_dpi", 100))
                     fig_grid_s = plot_som_grid_static(
                         clustering,
                         _mc_per_node,
@@ -401,6 +426,8 @@ class FlowSOMPipeline:
                         clusterer.ydim,
                         output_dir / "plots" / f"flowsom_som_grid_{timestamp}.png",
                         seed=config.flowsom.seed,
+                        dpi=_som_dpi,
+                        max_display_cells=_som_max_cells,
                     )
                     if fig_grid_s is not None:
                         _mpl_figures["fig_som_grid_static"] = fig_grid_s
@@ -446,6 +473,9 @@ class FlowSOMPipeline:
                     _logger.warning("Clusters exclusifs échoués (non bloquant): %s", _e)
 
                 # Bar charts par métacluster
+                _viz_cfg2 = getattr(config, "visualization", None)
+                _export_jpg = getattr(_viz_cfg2, "export_jpg_barcharts", False)
+
                 if _cond_labels is not None:
                     _safe_plot(
                         "Bar chart % patho par cluster", _plotly_figures, "fig_patho_pct",
@@ -453,7 +483,7 @@ class FlowSOMPipeline:
                         metaclustering,
                         _cond_labels,
                         output_html=output_dir / "plots" / f"patho_pct_per_cluster_{timestamp}.html",
-                        output_jpg=output_dir / "plots" / f"patho_pct_per_cluster_{timestamp}.jpg",
+                        output_jpg=output_dir / "plots" / f"patho_pct_per_cluster_{timestamp}.jpg" if _export_jpg else None,
                     )
                 else:
                     _logger.info("Bar chart %% patho ignoré (condition_labels non disponible).")
@@ -463,7 +493,7 @@ class FlowSOMPipeline:
                     _fp2.plot_cells_pct_per_cluster,
                     metaclustering,
                     output_html=output_dir / "plots" / f"cells_pct_per_cluster_{timestamp}.html",
-                    output_jpg=output_dir / "plots" / f"cells_pct_per_cluster_{timestamp}.jpg",
+                    output_jpg=output_dir / "plots" / f"cells_pct_per_cluster_{timestamp}.jpg" if _export_jpg else None,
                     condition_labels=_cond_labels,
                 )
 
@@ -475,7 +505,7 @@ class FlowSOMPipeline:
                         clustering,
                         _cond_labels,
                         output_html=output_dir / "plots" / f"patho_pct_per_som_node_{timestamp}.html",
-                        output_jpg=output_dir / "plots" / f"patho_pct_per_som_node_{timestamp}.jpg",
+                        output_jpg=output_dir / "plots" / f"patho_pct_per_som_node_{timestamp}.jpg" if _export_jpg else None,
                     )
                 else:
                     _logger.info("Bar chart %% patho SOM ignoré (condition_labels non disponible).")
@@ -485,7 +515,7 @@ class FlowSOMPipeline:
                     _fp2.plot_cells_pct_per_som_node,
                     clustering,
                     output_html=output_dir / "plots" / f"cells_pct_per_som_node_{timestamp}.html",
-                    output_jpg=output_dir / "plots" / f"cells_pct_per_som_node_{timestamp}.jpg",
+                    output_jpg=output_dir / "plots" / f"cells_pct_per_som_node_{timestamp}.jpg" if _export_jpg else None,
                     condition_labels=_cond_labels,
                 )
 
@@ -510,7 +540,8 @@ class FlowSOMPipeline:
                 f"rapport_{_patho_stem}" if _patho_stem else f"flowsom_report_{timestamp}"
             )
             exporter = ExportService(
-                config, output_dir, timestamp=timestamp, name_stem=_report_name_stem
+                config, output_dir, timestamp=timestamp, name_stem=_report_name_stem,
+                patho_name=_patho_stem, patho_date=_patho_date,
             )
 
             input_files = [str(s.path) for s in samples]
@@ -531,7 +562,11 @@ class FlowSOMPipeline:
                 if "condition" in df_cells.columns
                 else None
             )
-            if _cond_dist is not None:
+            _compact_mode = (
+                getattr(getattr(config, "export_mode", None), "mode", "standard")
+                == "compact"
+            )
+            if _cond_dist is not None and not _compact_mode:
                 try:
                     dist_paths = exporter.export_cluster_distribution(
                         clustering=clustering,
@@ -678,12 +713,14 @@ class FlowSOMPipeline:
                         from flowsom_pipeline_pro.src.visualization.flowsom_plots import (
                             plot_mrd_summary,
                         )
+                        _viz_cfg_mrd = getattr(config, "visualization", None)
+                        _export_png_mrd = getattr(_viz_cfg_mrd, "export_png_mrd", False)
                         _safe_plot(
                             "MRD Résiduelle", _plotly_figures, "fig_mrd_summary",
                             plot_mrd_summary,
                             mrd_result,
                             output_html=output_dir / "plots" / f"mrd_summary_{timestamp}.html",
-                            output_png=output_dir / "plots" / f"mrd_summary_{timestamp}.png",
+                            output_png=output_dir / "plots" / f"mrd_summary_{timestamp}.png" if _export_png_mrd else None,
                         )
 
                     # Export JSON des résultats MRD
@@ -821,6 +858,12 @@ class FlowSOMPipeline:
                         "fig_mrd_summary": "MRD Résiduelle — Nœuds SOM (JF / Flo + contrôles ELN)",
                     }
 
+                    _patho_info = None
+                    if _patho_stem:
+                        _patho_info = {
+                            "name": _patho_stem,
+                            "date": _patho_date or "Date inconnue",
+                        }
                     html_path = exporter.export_html_report(
                         analysis_params={
                             "Transformation": config.transform.method,
@@ -843,6 +886,7 @@ class FlowSOMPipeline:
                         condition_data=condition_data,
                         files_data=files_data,
                         export_paths=export_paths,
+                        patho_info=_patho_info,
                     )
                     if html_path:
                         export_paths["html_report"] = html_path
@@ -851,35 +895,41 @@ class FlowSOMPipeline:
                     _logger.warning("Rapport HTML échoué (non bloquant): %s", _e)
 
                 # ── Rapport PDF A4 ────────────────────────────────────────────
-                try:
-                    pdf_path = exporter.export_pdf_report(
-                        analysis_params={
-                            "Transformation": config.transform.method,
-                            "Normalisation": config.normalize.method,
-                            "Grille SOM": f"{config.flowsom.xdim}×{config.flowsom.ydim}",
-                            "Métaclusters": n_meta,
-                            "Seed": config.flowsom.seed,
-                        },
-                        summary_stats={
-                            "n_cells": int(X_stacked.shape[0]),
-                            "n_markers": len(selected_markers),
-                            "n_files": len(samples),
-                            "n_clusters": n_meta,
-                        },
-                        metacluster_table=mc_table,
-                        markers=list(selected_markers),
-                        matplotlib_figures=_mpl_figures,
-                        plotly_figures=_plotly_figures,
-                        figure_labels=_FIGURE_LABELS,
-                        condition_data=condition_data,
-                        files_data=files_data,
-                        export_paths=export_paths,
-                    )
-                    if pdf_path:
-                        export_paths["pdf_report"] = pdf_path
-                        _logger.info("Rapport PDF: %s", pdf_path)
-                except Exception as _e:
-                    _logger.warning("Rapport PDF échoué (non bloquant): %s", _e)
+                _viz_cfg_pdf = getattr(config, "visualization", None)
+                _export_pdf_enabled = getattr(_viz_cfg_pdf, "export_pdf", True)
+                if not _export_pdf_enabled:
+                    _logger.info("Rapport PDF désactivé via config (visualization.export_pdf=false).")
+                else:
+                    try:
+                        pdf_path = exporter.export_pdf_report(
+                            analysis_params={
+                                "Transformation": config.transform.method,
+                                "Normalisation": config.normalize.method,
+                                "Grille SOM": f"{config.flowsom.xdim}×{config.flowsom.ydim}",
+                                "Métaclusters": n_meta,
+                                "Seed": config.flowsom.seed,
+                            },
+                            summary_stats={
+                                "n_cells": int(X_stacked.shape[0]),
+                                "n_markers": len(selected_markers),
+                                "n_files": len(samples),
+                                "n_clusters": n_meta,
+                            },
+                            metacluster_table=mc_table,
+                            markers=list(selected_markers),
+                            matplotlib_figures=_mpl_figures,
+                            plotly_figures=_plotly_figures,
+                            figure_labels=_FIGURE_LABELS,
+                            condition_data=condition_data,
+                            files_data=files_data,
+                            export_paths=export_paths,
+                            patho_info=_patho_info,
+                        )
+                        if pdf_path:
+                            export_paths["pdf_report"] = pdf_path
+                            _logger.info("Rapport PDF: %s", pdf_path)
+                    except Exception as _e:
+                        _logger.warning("Rapport PDF échoué (non bloquant): %s", _e)
 
             # ── Export dashboard de performance ───────────────────────────────
             if _monitor:
@@ -911,6 +961,7 @@ class FlowSOMPipeline:
                 population_mapping=population_mapping_result,
                 mrd_result=mrd_result,
                 patho_stem=_patho_stem,
+                patho_date=_patho_date,
             )
 
             _logger.info("=" * 60)
@@ -1295,6 +1346,13 @@ class BatchPipeline:
 
             results.append((fcs_path.stem, result))
 
+            # Sauvegarde incrémentale après chaque patient — protège contre les crashs
+            self._generate_synthesis_excel(results)
+            _logger.info(
+                "BATCH [%d/%d] Excel intermédiaire mis à jour (%d patient(s))",
+                i, len(patho_files), len(results),
+            )
+
         if progress_callback:
             progress_callback(len(patho_files), len(patho_files), "Synthèse Excel...")
 
@@ -1312,10 +1370,19 @@ class BatchPipeline:
     ) -> Optional[str]:
         """Génère un Excel de synthèse global pour toute la cohorte."""
         try:
+            from flowsom_pipeline_pro.src.io.csv_exporter import extract_date_from_filename as _edf
             rows = []
             for stem, result in results:
+                # Priorité 1 : date calculée et stockée dans PipelineResult.patho_date
+                # (extraite du contenu FCS ou du nom du fichier lors du run)
+                # Priorité 2 : tentative d'extraction depuis le stem (fallback)
+                _fcs_date_str = getattr(result, "patho_date", None)
+                if not _fcs_date_str:
+                    _fcs_dt = _edf(stem)
+                    _fcs_date_str = _fcs_dt.strftime("%Y-%m-%d") if _fcs_dt else ""
                 row: Dict[str, object] = {
                     "Fichier FCS": stem,
+                    "Date FCS": _fcs_date_str,
                     "Statut": "OK" if (result is not None and result.success) else "ERREUR",
                 }
 

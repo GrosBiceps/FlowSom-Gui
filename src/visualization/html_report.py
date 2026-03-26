@@ -42,13 +42,13 @@ except ImportError:
     _MPL_AVAILABLE = False
 
 
-def _fig_to_base64(fig_mpl: Any) -> str:
+def _fig_to_base64(fig_mpl: Any, dpi: int = 100) -> str:
     """Convertit une figure matplotlib en string base64 PNG."""
     buf = BytesIO()
     fig_mpl.savefig(
         buf,
         format="png",
-        dpi=150,
+        dpi=dpi,
         bbox_inches="tight",
         facecolor="white",
         edgecolor="none",
@@ -169,6 +169,41 @@ tr:hover { background: #edf2f7; }
     .grid-3 { grid-template-columns: 1fr; }
     .toc ul { columns: 1; }
 }
+.patho-banner {
+    background: linear-gradient(135deg, #fff3cd, #ffe082);
+    border: 2px solid #f59e0b;
+    border-left: 6px solid #d97706;
+    border-radius: 10px;
+    padding: 18px 24px;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    box-shadow: 0 2px 8px rgba(245,158,11,0.2);
+}
+.patho-banner .patho-icon {
+    font-size: 2em;
+    flex-shrink: 0;
+}
+.patho-banner .patho-title {
+    font-size: 0.75em;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #92400e;
+    margin-bottom: 4px;
+}
+.patho-banner .patho-name {
+    font-size: 1.15em;
+    font-weight: 700;
+    color: #78350f;
+    word-break: break-all;
+}
+.patho-banner .patho-date {
+    font-size: 1em;
+    color: #b45309;
+    margin-top: 4px;
+}
 """
 
 
@@ -186,6 +221,8 @@ def generate_html_report(
     files_data: Optional[List[Dict[str, Any]]] = None,
     export_paths: Optional[Dict[str, str]] = None,
     self_contained: bool = True,
+    patho_info: Optional[Dict[str, str]] = None,
+    dpi_mpl: int = 100,
 ) -> bool:
     """
     Génère un rapport HTML complet avec toutes les visualisations.
@@ -230,6 +267,22 @@ def generate_html_report(
     n_markers = summary_stats.get("n_markers", len(markers))
     n_files = summary_stats.get("n_files", 0)
     n_clusters = summary_stats.get("n_clusters", 0)
+
+    # ── Encadré moelle pathologique ───────────────────────────────────────
+    _patho_banner = ""
+    if patho_info:
+        _pname = patho_info.get("name", "")
+        _pdate = patho_info.get("date", "Date inconnue")
+        _patho_banner = (
+            f'<div class="patho-banner">'
+            f'  <div class="patho-icon">&#9888;</div>'
+            f'  <div>'
+            f'    <div class="patho-title">Moelle pathologique analysée</div>'
+            f'    <div class="patho-name">{_pname}</div>'
+            f'    <div class="patho-date">Date du prélèvement : <strong>{_pdate}</strong></div>'
+            f'  </div>'
+            f'</div>'
+        )
 
     # ── Script Plotly.js ──────────────────────────────────────────────────
     if self_contained:
@@ -349,7 +402,7 @@ def generate_html_report(
         for fig_name, fig_obj in matplotlib_figures.items():
             label = figure_labels.get(fig_name, fig_name)
             try:
-                b64 = _fig_to_base64(fig_obj)
+                b64 = _fig_to_base64(fig_obj, dpi=dpi_mpl)
                 mpl_sections += (
                     f'<div class="section">\n'
                     f"  <h2>{label}</h2>\n"
@@ -422,6 +475,7 @@ def generate_html_report(
 
 <div class="container">
 
+{_patho_banner}
 <div class="toc">
     <h3>Table des matières</h3>
     <ul>

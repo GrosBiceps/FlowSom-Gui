@@ -1392,8 +1392,9 @@ def plot_som_grid_static(
     seed: int = 42,
     max_radius: float = 0.45,
     min_radius: float = 0.10,
-    dpi: int = 150,
+    dpi: int = 100,
     title_prefix: str = "Grille FlowSOM",
+    max_display_cells: int = 100_000,
 ) -> Optional["_mpl_figure.Figure"]:
     """
     Grille SOM statique matplotlib — 2 panneaux côte-à-côte.
@@ -1450,12 +1451,38 @@ def plot_som_grid_static(
         # Taille de chaque nœud (vectorisé via bincount)
         node_sizes = np.bincount(cluster_ids_int, minlength=n_nodes).astype(np.float32)
 
+        # ── Downsampling stratifié par nœud (perf) ──────────────────────────
+        if n_cells > max_display_cells:
+            rng = np.random.default_rng(seed)
+            # Fraction à conserver uniformément dans chaque nœud
+            keep_frac = max_display_cells / n_cells
+            keep_mask = np.zeros(n_cells, dtype=bool)
+            for node_id in range(n_nodes):
+                idx = np.where(cluster_ids_int == node_id)[0]
+                if len(idx) == 0:
+                    continue
+                n_keep = max(1, int(round(len(idx) * keep_frac)))
+                chosen = rng.choice(idx, size=min(n_keep, len(idx)), replace=False)
+                keep_mask[chosen] = True
+            xGrid_shifted = xGrid_shifted[keep_mask]
+            yGrid_shifted = yGrid_shifted[keep_mask]
+            metaclustering_cells = metaclustering_cells[keep_mask]
+            cluster_ids_display = cluster_ids_int[keep_mask]
+            node_sizes_display = np.bincount(cluster_ids_display, minlength=n_nodes).astype(np.float32)
+            condition_labels_display = condition_labels[keep_mask] if condition_labels is not None else None
+            n_cells_display = keep_mask.sum()
+        else:
+            cluster_ids_display = cluster_ids_int
+            node_sizes_display = node_sizes
+            condition_labels_display = condition_labels
+            n_cells_display = n_cells
+
         # Jitter circulaire vectorisé (reproductible)
         np.random.seed(seed)
         jitter_x, jitter_y = circular_jitter_viz(
-            n_cells,
-            cluster_ids_int,
-            node_sizes,
+            n_cells_display,
+            cluster_ids_display,
+            node_sizes_display,
             max_radius=max_radius,
             min_radius=min_radius,
         )
@@ -1517,8 +1544,8 @@ def plot_som_grid_static(
         # ── Panneau 2 : Conditions ────────────────────────────────────────────
         if condition_labels is not None:
             ax2 = axes[1]
-            # Vectorisé : numpy string ops plutôt qu'une list comprehension sur 787k cellules
-            cond_arr = np.asarray(condition_labels, dtype=str)
+            # Vectorisé : numpy string ops — utilise le sous-ensemble downsampé
+            cond_arr = np.asarray(condition_labels_display, dtype=str)
             cond_lower = np.char.lower(cond_arr)
             condition_num = np.where(
                 np.isin(cond_lower, ["sain", "healthy", "nbm", "normal"]), 0, 1
