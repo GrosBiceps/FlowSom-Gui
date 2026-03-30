@@ -60,6 +60,7 @@ class PipelineResult:
     population_mapping: Optional[Any] = None  # PopulationMappingResult (§10)
     mrd_result: Optional[Any] = None          # MRDResult (§8) — pour synthèse batch
     patho_stem: Optional[str] = None          # Stem du fichier patho traité (batch)
+    patho_date: Optional[str] = None         # Date du prélèvement extraite du FCS (format YYYY-MM-DD)
 
     # ------------------------------------------------------------------
     # Accès

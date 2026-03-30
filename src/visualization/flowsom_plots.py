@@ -90,7 +90,12 @@ def plot_mfi_heatmap(
             linewidths=0.5,
             linecolor=SPINE_COLOR,
             cbar_kws={"label": "z-score MFI", "shrink": 0.8},
+            annot_kws={"size": 9},
         )
+
+        # Force annotation text color to black for readability on bright cells
+        for text_obj in ax.texts:
+            text_obj.set_color("black")
 
         ax.set_title(title, fontsize=14, fontweight="bold", color=TEXT_COLOR, pad=15)
         ax.set_xlabel("Marqueurs", fontsize=12, color=TEXT_COLOR)
@@ -1392,8 +1397,9 @@ def plot_som_grid_static(
     seed: int = 42,
     max_radius: float = 0.45,
     min_radius: float = 0.10,
-    dpi: int = 150,
+    dpi: int = 100,
     title_prefix: str = "Grille FlowSOM",
+    max_display_cells: int = 100_000,
 ) -> Optional["_mpl_figure.Figure"]:
     """
     Grille SOM statique matplotlib — 2 panneaux côte-à-côte.
@@ -1450,12 +1456,38 @@ def plot_som_grid_static(
         # Taille de chaque nœud (vectorisé via bincount)
         node_sizes = np.bincount(cluster_ids_int, minlength=n_nodes).astype(np.float32)
 
+        # ── Downsampling stratifié par nœud (perf) ──────────────────────────
+        if n_cells > max_display_cells:
+            rng = np.random.default_rng(seed)
+            # Fraction à conserver uniformément dans chaque nœud
+            keep_frac = max_display_cells / n_cells
+            keep_mask = np.zeros(n_cells, dtype=bool)
+            for node_id in range(n_nodes):
+                idx = np.where(cluster_ids_int == node_id)[0]
+                if len(idx) == 0:
+                    continue
+                n_keep = max(1, int(round(len(idx) * keep_frac)))
+                chosen = rng.choice(idx, size=min(n_keep, len(idx)), replace=False)
+                keep_mask[chosen] = True
+            xGrid_shifted = xGrid_shifted[keep_mask]
+            yGrid_shifted = yGrid_shifted[keep_mask]
+            metaclustering_cells = metaclustering_cells[keep_mask]
+            cluster_ids_display = cluster_ids_int[keep_mask]
+            node_sizes_display = np.bincount(cluster_ids_display, minlength=n_nodes).astype(np.float32)
+            condition_labels_display = condition_labels[keep_mask] if condition_labels is not None else None
+            n_cells_display = keep_mask.sum()
+        else:
+            cluster_ids_display = cluster_ids_int
+            node_sizes_display = node_sizes
+            condition_labels_display = condition_labels
+            n_cells_display = n_cells
+
         # Jitter circulaire vectorisé (reproductible)
         np.random.seed(seed)
         jitter_x, jitter_y = circular_jitter_viz(
-            n_cells,
-            cluster_ids_int,
-            node_sizes,
+            n_cells_display,
+            cluster_ids_display,
+            node_sizes_display,
             max_radius=max_radius,
             min_radius=min_radius,
         )
@@ -1517,8 +1549,8 @@ def plot_som_grid_static(
         # ── Panneau 2 : Conditions ────────────────────────────────────────────
         if condition_labels is not None:
             ax2 = axes[1]
-            # Vectorisé : numpy string ops plutôt qu'une list comprehension sur 787k cellules
-            cond_arr = np.asarray(condition_labels, dtype=str)
+            # Vectorisé : numpy string ops — utilise le sous-ensemble downsampé
+            cond_arr = np.asarray(condition_labels_display, dtype=str)
             cond_lower = np.char.lower(cond_arr)
             condition_num = np.where(
                 np.isin(cond_lower, ["sain", "healthy", "nbm", "normal"]), 0, 1
@@ -1705,6 +1737,154 @@ def plot_metacluster_radar(
 
     except Exception as exc:
         _logger.error("Échec plot_metacluster_radar: %s", exc)
+        return None
+
+
+# =============================================================================
+# SECTION §14b — Radar chart par cluster SOM (nœuds, non métaclusters)
+# =============================================================================
+
+
+def plot_cluster_radar(
+    X: np.ndarray,
+    clustering: np.ndarray,
+    used_markers: List[str],
+    output_path: Path | str,
+    *,
+    title: str = "Profil d'Expression par Cluster SOM (Radar Interactif)",
+    max_clusters: int = 200,
+) -> Optional[Any]:
+    """
+    Spider / Radar chart interactif Plotly — tous les nœuds SOM (clusters).
+
+    Même logique que ``plot_metacluster_radar`` mais calculé à partir des
+    données brutes ``X`` et des assignations de nœuds SOM ``clustering``.
+    Chaque trace correspond à un nœud SOM. Les MFI (médiane par marqueur)
+    sont normalisées min-max par nœud pour rendre les profils comparables.
+
+    Args:
+        X: Matrice de données (n_cells × n_markers).
+        clustering: Assignation de nœud SOM par cellule (n_cells,).
+        used_markers: Noms des marqueurs (len == n_markers).
+        output_path: Chemin HTML de sauvegarde.
+        title: Titre de la figure.
+        max_clusters: Nombre max de nœuds à afficher (écrêtage si > max).
+
+    Returns:
+        ``plotly.graph_objects.Figure`` ou None si plotly absent.
+    """
+    try:
+        import plotly.graph_objects as go
+        import plotly.colors as pc
+    except ImportError:
+        _logger.warning("plotly requis pour plot_cluster_radar")
+        return None
+
+    try:
+        node_ids = np.sort(np.unique(clustering))
+        if len(node_ids) > max_clusters:
+            _logger.warning(
+                "plot_cluster_radar: %d nœuds > max_clusters=%d — troncature",
+                len(node_ids), max_clusters,
+            )
+            node_ids = node_ids[:max_clusters]
+
+        n_nodes = len(node_ids)
+
+        if n_nodes <= 10:
+            _palette = pc.qualitative.Set3
+        elif n_nodes <= 20:
+            _palette = pc.qualitative.Alphabet
+        else:
+            _palette = [
+                f"hsl({int(i * 360 / n_nodes)},70%,55%)"
+                for i in range(n_nodes)
+            ]
+
+        fig = go.Figure()
+
+        for idx, nid in enumerate(node_ids):
+            mask = clustering == nid
+            n_cells = int(mask.sum())
+            if n_cells == 0:
+                continue
+            mfi = np.median(X[mask], axis=0).astype(float)
+            v_min, v_max = float(mfi.min()), float(mfi.max())
+            mfi_norm = (mfi - v_min) / (v_max - v_min + 1e-10)
+
+            _c = _palette[idx % len(_palette)]
+            if "rgb" in str(_c):
+                _fill = _c.replace(")", ",0.08)").replace("rgb", "rgba")
+            else:
+                _fill = "rgba(128,128,128,0.05)"
+
+            fig.add_trace(
+                go.Scatterpolar(
+                    r=np.append(mfi_norm, mfi_norm[0]),
+                    theta=list(used_markers) + [used_markers[0]],
+                    fill="toself",
+                    fillcolor=_fill,
+                    opacity=0.85,
+                    name=f"C{int(nid)}  ({n_cells:,} cells)",
+                    line=dict(color=_c, width=1.5),
+                    marker=dict(size=4),
+                    customdata=np.stack(
+                        [
+                            np.append(mfi, mfi[0]),
+                            np.append(mfi_norm, mfi_norm[0]),
+                        ],
+                        axis=-1,
+                    ),
+                    hovertemplate=(
+                        f"<b>Cluster {int(nid)}</b><br>"
+                        "Marqueur: %{theta}<br>"
+                        "MFI brute: %{customdata[0]:.2f}<br>"
+                        "Normalisé: %{customdata[1]:.3f}<extra></extra>"
+                    ),
+                )
+            )
+
+        fig.update_layout(
+            polar=dict(
+                bgcolor="#1e1e2e",
+                radialaxis=dict(
+                    visible=True,
+                    range=[0, 1.05],
+                    tickfont=dict(size=9, color="white"),
+                    gridcolor="rgba(255,255,255,0.15)",
+                    linecolor="rgba(255,255,255,0.3)",
+                ),
+                angularaxis=dict(
+                    tickfont=dict(size=10, color="white"),
+                    gridcolor="rgba(255,255,255,0.15)",
+                    linecolor="rgba(255,255,255,0.3)",
+                ),
+            ),
+            showlegend=True,
+            title=dict(
+                text=title,
+                font=dict(size=16, color="white"),
+                x=0.5,
+            ),
+            paper_bgcolor="#1e1e2e",
+            plot_bgcolor="#1e1e2e",
+            font=dict(color="white"),
+            legend=dict(
+                bgcolor="#313244",
+                bordercolor="#45475a",
+                font=dict(color="white"),
+            ),
+            height=700,
+        )
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.write_html(str(output_path), include_plotlyjs="cdn")
+        _logger.info("Radar clusters SOM sauvegardé: %s", output_path)
+        return fig
+
+    except Exception as exc:
+        _logger.error("Échec plot_cluster_radar: %s", exc)
         return None
 
 
@@ -2464,6 +2644,8 @@ def plot_combined_som_node_html(
     *,
     patho_label: str = "Pathologique",
     title: str = "Analyse post-FlowSOM — Clusters SOM",
+    X: Optional[np.ndarray] = None,
+    used_markers: Optional[List[str]] = None,
 ) -> Optional[Any]:
     """
     HTML combiné : deux bar charts partageant le même axe X, triés par % patho décroissant.
@@ -2482,6 +2664,9 @@ def plot_combined_som_node_html(
         output_html: Chemin HTML de sortie.
         patho_label: Valeur désignant la condition pathologique.
         title: Titre général de la figure.
+        X: Matrice de données (n_cells × n_markers) — si fournie, les MFI par
+           marqueur sont ajoutées dans le hover de chaque barre.
+        used_markers: Noms des marqueurs correspondant aux colonnes de X.
 
     Returns:
         Figure Plotly ou None si plotly absent / condition_labels manquant.
@@ -2503,6 +2688,16 @@ def plot_combined_som_node_html(
         n_nodes = len(node_ids)
         total_cells = len(clustering)
 
+        # ── Pré-calcul des MFI par nœud (si X fourni) ────────────────────────
+        _has_mfi = X is not None and used_markers is not None and len(used_markers) > 0
+        _node_mfi: Dict[int, np.ndarray] = {}
+        if _has_mfi:
+            _X_arr = np.asarray(X)
+            for _nid in node_ids:
+                _m = clustering == _nid
+                if _m.sum() > 0:
+                    _node_mfi[int(_nid)] = np.median(_X_arr[_m], axis=0).astype(float)
+
         # ── Calcul des métriques brutes dans l'ordre naturel ─────────────────
         pct_patho_raw: List[float] = []
         hover_patho_raw: List[str] = []
@@ -2512,12 +2707,19 @@ def plot_combined_som_node_html(
             n_patho = int((mask & (cond_arr == patho_label)).sum())
             pct = (n_patho / total * 100) if total > 0 else 0.0
             pct_patho_raw.append(round(pct, 2))
-            hover_patho_raw.append(
+            _hover = (
                 f"<b>Cluster {int(nid)}</b><br>"
                 f"Cellules patho : {n_patho:,}<br>"
                 f"Total cluster  : {total:,}<br>"
                 f"% Patho        : {pct:.2f}%"
             )
+            if _has_mfi and int(nid) in _node_mfi:
+                _mfi_vals = _node_mfi[int(nid)]
+                _hover += "<br><br><b>MFI (médiane)</b><br>"
+                _hover += "<br>".join(
+                    f"{m}: {v:.1f}" for m, v in zip(used_markers, _mfi_vals)
+                )
+            hover_patho_raw.append(_hover)
 
         # ── Tri par % patho décroissant ───────────────────────────────────────
         sort_idx = np.argsort(pct_patho_raw)[::-1]  # indices triés
@@ -2547,11 +2749,18 @@ def plot_combined_som_node_html(
                 n_in_cond = int((mask & cond_mask).sum())
                 pct_c = n_in_cond / total_cells * 100
                 pcts_cond.append(round(pct_c, 3))
-                hover_cond.append(
+                _h = (
                     f"<b>Cluster {int(nid)}</b> — {cond}<br>"
                     f"Cellules : {n_in_cond:,}<br>"
                     f"% global : {pct_c:.3f}%"
                 )
+                if _has_mfi and int(nid) in _node_mfi:
+                    _mfi_vals = _node_mfi[int(nid)]
+                    _h += "<br><br><b>MFI (médiane)</b><br>"
+                    _h += "<br>".join(
+                        f"{m}: {v:.1f}" for m, v in zip(used_markers, _mfi_vals)
+                    )
+                hover_cond.append(_h)
             bottom_traces.append(
                 go.Bar(
                     name=str(cond),

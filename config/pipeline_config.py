@@ -93,6 +93,12 @@ class PregateConfig:
     # Paramètres RANSAC singlets
     ransac_r2_threshold: float = RANSAC_R2_THRESHOLD
     ransac_mad_factor: float = RANSAC_MAD_FACTOR
+    # Méthode d'estimation de densité : "GMM" | "KDE"
+    density_method: str = "GMM"
+    # Paramètres avancés GMM
+    gmm_covariance_type: str = "full"   # "full" | "tied" | "diag" | "spherical"
+    gmm_n_components_debris: int = 3    # Nombre de composantes pour le gating débris
+    gmm_export_plot: bool = True        # Exporter le graphique des densités GMM
 
 
 @dataclass
@@ -145,6 +151,30 @@ class DownsamplingConfig:
     enabled: bool = True
     max_cells_per_file: int = DEFAULT_MAX_CELLS_PER_FILE
     max_cells_total: int = DEFAULT_MAX_CELLS_TOTAL
+
+
+@dataclass
+class StratifiedDownsamplingConfig:
+    """
+    Déséquilibre Maîtrisé — rééquilibrage du pool d'entraînement FlowSOM.
+
+    Résout le problème d'invisibilité des clusters rares (blastes <1%) en
+    forçant un rapport sain/patho contrôlé avant le SOM.
+
+    Attributs:
+        balance_conditions: Active le rééquilibrage. Si False, aucun effet.
+        imbalance_ratio: Rapport cible n_sain / n_patho.
+            1.0 = équilibre parfait (50/50)
+            2.0 = 2 sains pour 1 blaste
+        nbm_ids: Liste de FlowSample.name des fichiers NBM à utiliser comme
+            source de cellules saines. Si vide, tous les fichiers sains sont
+            utilisés (réparti équitablement).
+        seed: Graine aléatoire pour la reproductibilité.
+    """
+    balance_conditions: bool = False
+    imbalance_ratio: float = 2.0
+    nbm_ids: List[str] = field(default_factory=list)
+    seed: int = 42
 
 
 @dataclass
@@ -240,6 +270,23 @@ class BatchConfig:
 
 
 @dataclass
+class ExportModeConfig:
+    """
+    Mode d'export des résultats.
+
+    - "standard" : tous les fichiers (FCS complet, CSV, JSON métadonnées, plots, rapports, MRD).
+    - "compact"  : uniquement les sorties essentielles —
+                   rapport PDF, rapport HTML, MRD JSON et FCS pathologique avec Is_MRD.
+                   Les CSV, FCS complet, TXT et JSON de métadonnées sont ignorés.
+                   Les figures sont toujours générées car nécessaires aux rapports.
+    """
+
+    mode: str = "standard"          # "standard" | "compact"
+    export_csv: bool = True           # false = ne pas exporter les CSV dans le dossier csv (complet, stats, MFI)
+    export_per_file_csv: bool = True  # true = exporter un CSV par fichier FCS source
+
+
+@dataclass
 class PipelineConfig:
     """Configuration complète du pipeline FlowSOM Pro."""
 
@@ -267,6 +314,10 @@ class PipelineConfig:
         default_factory=PathoFcsExportConfig
     )
     batch: BatchConfig = field(default_factory=BatchConfig)
+    export_mode: ExportModeConfig = field(default_factory=ExportModeConfig)
+    stratified_downsampling: StratifiedDownsamplingConfig = field(
+        default_factory=StratifiedDownsamplingConfig
+    )
 
     # ------------------------------------------------------------------
     # Constructeurs alternatifs
@@ -326,6 +377,8 @@ class PipelineConfig:
             "performance_monitoring",
             "patho_fcs_export",
             "batch",
+            "export_mode",
+            "stratified_downsampling",
             "pipeline_version",
         }
         cfg._extra = {k: v for k, v in raw.items() if k not in _structured_keys}
@@ -368,6 +421,10 @@ class PipelineConfig:
             "gmm_max_samples": "gmm_max_samples",
             "ransac_r2_threshold": "ransac_r2_threshold",
             "ransac_mad_factor": "ransac_mad_factor",
+            "density_method": "density_method",
+            "gmm_covariance_type": "gmm_covariance_type",
+            "gmm_n_components_debris": "gmm_n_components_debris",
+            "gmm_export_plot": "gmm_export_plot",
         }
         for yaml_key, attr in mapping_pregate.items():
             if yaml_key in pg_adv:
@@ -486,6 +543,26 @@ class PipelineConfig:
         if bt:
             if "enabled" in bt:
                 cfg.batch.enabled = bool(bt["enabled"])
+
+        em = raw.get("export_mode", {})
+        if em:
+            if "mode" in em:
+                cfg.export_mode.mode = str(em["mode"])
+            if "export_csv" in em:
+                cfg.export_mode.export_csv = bool(em["export_csv"])
+            if "export_per_file_csv" in em:
+                cfg.export_mode.export_per_file_csv = bool(em["export_per_file_csv"])
+
+        sd = raw.get("stratified_downsampling", {})
+        if sd:
+            if "balance_conditions" in sd:
+                cfg.stratified_downsampling.balance_conditions = bool(sd["balance_conditions"])
+            if "imbalance_ratio" in sd:
+                cfg.stratified_downsampling.imbalance_ratio = float(sd["imbalance_ratio"])
+            if "nbm_ids" in sd:
+                cfg.stratified_downsampling.nbm_ids = list(sd["nbm_ids"] or [])
+            if "seed" in sd:
+                cfg.stratified_downsampling.seed = int(sd["seed"])
 
         # Validation
         cfg._validate()

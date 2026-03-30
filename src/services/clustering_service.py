@@ -42,6 +42,7 @@ from flowsom_pipeline_pro.src.utils.validators import (
     check_nan,
 )
 from flowsom_pipeline_pro.src.utils.logger import get_logger
+from flowsom_pipeline_pro.src.utils.class_balancer import equilibrer_pool_flowsom
 
 _logger = get_logger("services.clustering")
 
@@ -248,7 +249,7 @@ def stack_raw_markers(
 def run_clustering(
     samples: List[FlowSample],
     config: PipelineConfig,
-) -> Tuple[np.ndarray, np.ndarray, FlowSOMClusterer, List[str]]:
+) -> Tuple[np.ndarray, np.ndarray, FlowSOMClusterer, List[str], np.ndarray, pd.DataFrame, List]:
     """
     Exécute le clustering FlowSOM complet sur la liste d'échantillons.
 
@@ -267,6 +268,64 @@ def run_clustering(
     _logger.info(
         "Marqueurs pour FlowSOM (%d): %s", len(selected_markers), selected_markers
     )
+
+    # ── Déséquilibre Maîtrisé (Stratified Downsampling) ──────────────────────
+    # Rééquilibre le pool sain/patho AVANT le SOM pour rendre les clusters rares
+    # (blastes LAIP) visibles malgré le déséquilibre extrême de classes.
+    sd_cfg = getattr(config, "stratified_downsampling", None)
+    if sd_cfg is not None and getattr(sd_cfg, "balance_conditions", False):
+        _logger.info(
+            "Déséquilibre Maîtrisé activé (ratio=%.1f×, seed=%d)...",
+            sd_cfg.imbalance_ratio,
+            sd_cfg.seed,
+        )
+        # Si nbm_ids est vide, on infère automatiquement les IDs NBM
+        # depuis les échantillons dont la condition est "Healthy".
+        nbm_ids = list(sd_cfg.nbm_ids)
+        if not nbm_ids:
+            _HEALTHY_CONDITIONS = {"Healthy", "Sain", "sain", "healthy", "Normal", "normal", "NBM"}
+            nbm_ids = [s.name for s in samples if s.condition in _HEALTHY_CONDITIONS]
+            _logger.info(
+                "nbm_ids non spécifiés → auto-détection: %d fichiers NBM (conditions: %s)",
+                len(nbm_ids),
+                sorted({s.condition for s in samples if s.condition in _HEALTHY_CONDITIONS}),
+            )
+
+        df_balanced = equilibrer_pool_flowsom(
+            samples=samples,
+            nbm_ids=nbm_ids,
+            balance_conditions=True,
+            imbalance_ratio=sd_cfg.imbalance_ratio,
+            seed=sd_cfg.seed,
+        )
+
+        # Reconstruire des FlowSample synthétiques à partir du DataFrame équilibré,
+        # un par fichier source, pour conserver condition/file_origin par cellule.
+        from flowsom_pipeline_pro.src.models.sample import FlowSample as _FlowSample
+        _meta_cols = {"condition", "file_origin", "class"}
+        _marker_cols = [c for c in df_balanced.columns if c not in _meta_cols]
+        _balanced_samples: List[_FlowSample] = []
+        for _fname, _grp in df_balanced.groupby("file_origin", sort=False):
+            _cond = _grp["condition"].iloc[0] if "condition" in _grp.columns else "Unknown"
+            # Sample original pour récupérer le raw_data si disponible
+            _orig = next((s for s in samples if s.name == _fname), None)
+            _df_markers = _grp[_marker_cols].reset_index(drop=True)
+            _s = _FlowSample(
+                name=str(_fname),
+                path=_orig.path if _orig else "",
+                condition=str(_cond),
+                data=_df_markers,
+                metadata=_orig.metadata if _orig else {},
+                n_cells_raw=len(_df_markers),
+            )
+            _balanced_samples.append(_s)
+        samples = _balanced_samples
+        _logger.info(
+            "Pool équilibré: %d cellules injectées dans FlowSOM (%d fichiers sources).",
+            len(df_balanced),
+            len(samples),
+        )
+    # ── Fin Déséquilibre Maîtrisé ─────────────────────────────────────────────
 
     # Empilement des matrices
     flowsom_cfg = config.flowsom
@@ -329,7 +388,7 @@ def run_clustering(
         clusterer, "node_assignments_", np.zeros(X.shape[0], dtype=int)
     )
 
-    return metaclustering, clustering, clusterer, selected_markers
+    return metaclustering, clustering, clusterer, selected_markers, X, obs, samples
 
 
 def extract_date_from_filename(filename: str) -> Tuple[str, int]:

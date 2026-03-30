@@ -253,7 +253,12 @@ def _apply_gating(
     # Gate 1 – Débris
     if getattr(pregate_cfg, "viable", True):
         if mode == "auto":
-            mask = AutoGating.auto_gate_debris(X, var_names)
+            mask = AutoGating.auto_gate_debris(
+                X, var_names,
+                n_components=getattr(pregate_cfg, "gmm_n_components_debris", 3),
+                covariance_type=getattr(pregate_cfg, "gmm_covariance_type", "full"),
+                density_method=getattr(pregate_cfg, "density_method", "GMM"),
+            )
         else:
             mask = PreGating.gate_viable_cells(
                 X,
@@ -546,6 +551,17 @@ def preprocess_combined(
         conditions.copy()
     )  # Conditions avant gating (pour plots QC CD45)
     if getattr(pregate_cfg, "apply", True):
+        # Chemin pour le graphique GMM si demandé
+        _gmm_plot_path = None
+        if (
+            gating_plot_dir is not None
+            and getattr(pregate_cfg, "gmm_export_plot", False)
+            and getattr(pregate_cfg, "density_method", "GMM").upper() == "GMM"
+        ):
+            from pathlib import Path as _Path
+            _gmm_plot_path = str(
+                _Path(gating_plot_dir) / "gating" / "gmm_debris_density.png"
+            )
         X_raw, var_names, conditions, file_origins, gate_masks = _apply_gating_combined(
             X_raw,
             var_names,
@@ -553,6 +569,7 @@ def preprocess_combined(
             file_origins,
             pregate_cfg,
             gating_logger,
+            gmm_plot_path=_gmm_plot_path,
         )
 
     # ── Plots QC de gating (si plot_dir fourni) ───────────────────────────────
@@ -673,12 +690,248 @@ def preprocess_combined(
             n_file,
         )
 
+    # ── Comptage CD45+ sans autogating pipeline (GMM/KDE sur données brutes) ──
+    # Utilise X_for_plot (données avant toute gate) pour compter les CD45+
+    # via GMM bimodal, sans influencer le pipeline de gating.
+    if gating_plot_dir is not None:
+        try:
+            _cd45_fig = _count_cd45_raw(
+                X_for_plot,
+                var_for_plot,
+                conditions_for_plot,
+                output_dir=Path(gating_plot_dir) / "gating",
+            )
+            if _cd45_fig is not None:
+                gating_figures["fig_cd45_count"] = _cd45_fig
+        except Exception as _e:
+            _logger.warning("Comptage CD45+ brut échoué (non bloquant): %s", _e)
+
     _logger.info(
         "Prétraitement combiné terminé: %d/%d fichiers",
         len(processed),
         len(samples),
     )
     return processed, gating_figures
+
+
+def _count_cd45_raw(
+    X: np.ndarray,
+    var_names: List[str],
+    conditions: Optional[np.ndarray],
+    output_dir: Optional[Path] = None,
+) -> Optional[Any]:
+    """
+    Compte les événements CD45+ sur les données brutes (avant tout gating pipeline)
+    via GMM bimodal (fallback KDE si GMM échoue).
+
+    Ce comptage est purement informatif — il n'influence pas le pipeline de gating.
+    L'objectif est de visualiser la population CD45+ telle qu'elle apparaît dans
+    les données brutes, sans biais lié aux gates précédentes.
+
+    Args:
+        X: Matrice brute (n_cells × n_markers).
+        var_names: Noms des marqueurs.
+        conditions: Conditions par cellule (optionnel, pour affichage).
+        output_dir: Répertoire de sortie pour la figure PNG.
+
+    Returns:
+        Figure matplotlib ou None.
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from sklearn.mixture import GaussianMixture
+        from scipy.stats import gaussian_kde
+        from scipy.signal import find_peaks
+    except ImportError as _ie:
+        _logger.warning("_count_cd45_raw: dépendances manquantes (%s)", _ie)
+        return None
+
+    cd45_idx = PreGating.find_marker_index(var_names, ["CD45", "CD45-PECY5", "CD45-PC5"])
+    if cd45_idx is None:
+        _logger.info("_count_cd45_raw: marqueur CD45 absent — comptage ignoré")
+        return None
+
+    cd45 = X[:, cd45_idx].astype(np.float64)
+    valid = np.isfinite(cd45)
+    cd45_v = cd45[valid]
+    n_total = len(cd45)
+
+    if valid.sum() < 200:
+        _logger.warning("_count_cd45_raw: pas assez de valeurs valides CD45")
+        return None
+
+    # ── GMM bimodal ────────────────────────────────────────────────────────────
+    mask_pos = np.ones(n_total, dtype=bool)  # fallback = tout positif
+    threshold = np.nan
+    method_used = "none"
+
+    try:
+        rng = np.random.default_rng(42)
+        n_fit = min(200_000, len(cd45_v))
+        idx_fit = rng.choice(len(cd45_v), size=n_fit, replace=False)
+        gmm = GaussianMixture(n_components=2, random_state=42, n_init=5, max_iter=200)
+        gmm.fit(cd45_v[idx_fit].reshape(-1, 1))
+        labels_v = gmm.predict(cd45_v.reshape(-1, 1))
+        means = gmm.means_.flatten()
+        pos_comp = int(np.argmax(means))
+        mask_valid_pos = labels_v == pos_comp
+        mask_pos = np.zeros(n_total, dtype=bool)
+        mask_pos[valid] = mask_valid_pos
+        # Seuil approximatif = creux entre les 2 gaussiennes
+        stds = np.sqrt(gmm.covariances_.flatten())
+        sorted_idx = np.argsort(means)
+        m0, m1 = means[sorted_idx[0]], means[sorted_idx[1]]
+        s0, s1 = stds[sorted_idx[0]], stds[sorted_idx[1]]
+        threshold = (m0 * s1 + m1 * s0) / (s0 + s1)
+        method_used = "GMM"
+    except Exception as _gmm_err:
+        _logger.warning("_count_cd45_raw GMM échoué: %s — fallback KDE", _gmm_err)
+        try:
+            n_kde = min(50_000, len(cd45_v))
+            rng2 = np.random.default_rng(42)
+            sub = cd45_v[rng2.choice(len(cd45_v), size=n_kde, replace=False)]
+            kde = gaussian_kde(sub)
+            grid = np.linspace(cd45_v.min(), cd45_v.max(), 2000)
+            density = kde(grid)
+            # Vallée KDE = creux entre les deux pics
+            peaks, _ = find_peaks(density, prominence=density.max() * 0.05)
+            if len(peaks) >= 2:
+                valley_region = density[peaks[0]:peaks[-1]]
+                valley_local = int(np.argmin(valley_region)) + peaks[0]
+                threshold = float(grid[valley_local])
+            else:
+                threshold = float(np.percentile(cd45_v, 10))
+            mask_pos = np.zeros(n_total, dtype=bool)
+            mask_pos[valid] = cd45[valid] > threshold
+            method_used = "KDE"
+        except Exception as _kde_err:
+            _logger.warning("_count_cd45_raw KDE échoué: %s", _kde_err)
+            return None
+
+    n_pos = int(mask_pos.sum())
+    pct_pos = n_pos / n_total * 100
+
+    # ── Figure matplotlib ──────────────────────────────────────────────────────
+    try:
+        from flowsom_pipeline_pro.src.visualization.plot_helpers import (
+            BG_COLOR, TEXT_COLOR, SPINE_COLOR, LEGEND_BG, apply_dark_style, save_figure
+        )
+    except ImportError:
+        BG_COLOR = "#1e1e2e"
+        TEXT_COLOR = "white"
+        SPINE_COLOR = "#45475a"
+        LEGEND_BG = "#313244"
+
+        def apply_dark_style(ax):  # type: ignore[misc]
+            ax.set_facecolor(BG_COLOR)
+            ax.tick_params(colors=TEXT_COLOR)
+            for sp in ax.spines.values():
+                sp.set_color(SPINE_COLOR)
+
+        def save_figure(fig, path):  # type: ignore[misc]
+            fig.savefig(str(path), dpi=100, bbox_inches="tight", facecolor=BG_COLOR)
+
+    fig, axes = plt.subplots(
+        1, 2, figsize=(14, 5),
+        facecolor=BG_COLOR,
+        gridspec_kw={"width_ratios": [2, 1]},
+    )
+
+    # Panneau gauche : densité KDE de CD45
+    ax_kde = axes[0]
+    n_plot = min(50_000, len(cd45_v))
+    rng3 = np.random.default_rng(99)
+    sub_plot = cd45_v[rng3.choice(len(cd45_v), size=n_plot, replace=False)]
+    try:
+        kde_plot = gaussian_kde(sub_plot)
+        grid_plot = np.linspace(sub_plot.min(), sub_plot.max(), 1000)
+        dens_plot = kde_plot(grid_plot)
+        ax_kde.fill_between(grid_plot, dens_plot, alpha=0.25, color="#89b4fa")
+        ax_kde.plot(grid_plot, dens_plot, color="#89b4fa", linewidth=1.5)
+        if np.isfinite(threshold):
+            ax_kde.axvline(
+                threshold, color="#f38ba8", linestyle="--", linewidth=1.5,
+                label=f"Seuil {method_used}: {threshold:.0f}",
+            )
+        ax_kde.fill_between(
+            grid_plot,
+            dens_plot,
+            where=grid_plot >= threshold,
+            alpha=0.35,
+            color="#a6e3a1",
+            label=f"CD45+ ({n_pos:,} | {pct_pos:.1f}%)",
+        )
+    except Exception:
+        ax_kde.hist(sub_plot, bins=100, color="#89b4fa", alpha=0.6)
+
+    ax_kde.set_xlabel("CD45 (intensité brute)", fontsize=11, color=TEXT_COLOR)
+    ax_kde.set_ylabel("Densité", fontsize=11, color=TEXT_COLOR)
+    ax_kde.set_title(
+        f"CD45+ bruts — méthode {method_used}\n"
+        f"{n_pos:,} / {n_total:,} événements ({pct_pos:.1f}%)",
+        fontsize=12, fontweight="bold", color=TEXT_COLOR,
+    )
+    apply_dark_style(ax_kde)
+    ax_kde.legend(
+        facecolor=LEGEND_BG, labelcolor=TEXT_COLOR, edgecolor=SPINE_COLOR,
+        fontsize=9,
+    )
+
+    # Panneau droit : bar chart CD45− / CD45+
+    ax_bar = axes[1]
+    n_neg = n_total - n_pos
+    counts = [n_neg, n_pos]
+    labels_bar = [f"CD45−\n({n_neg:,})", f"CD45+\n({n_pos:,})"]
+    colors_bar = ["#f38ba8", "#a6e3a1"]
+    bars = ax_bar.bar(labels_bar, counts, color=colors_bar, edgecolor=SPINE_COLOR,
+                      width=0.55)
+    for bar, cnt in zip(bars, counts):
+        pct = cnt / n_total * 100
+        ax_bar.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() * 1.01,
+            f"{pct:.1f}%",
+            ha="center", va="bottom", color=TEXT_COLOR, fontsize=10,
+        )
+
+    # Si conditions fournies, afficher la répartition patho
+    if conditions is not None:
+        cond_arr = np.asarray(conditions)
+        _patho_mask = (cond_arr == "Pathologique") & mask_pos
+        n_patho_pos = int(_patho_mask.sum())
+        n_patho_tot = int((cond_arr == "Pathologique").sum())
+        if n_patho_tot > 0:
+            ax_bar.text(
+                0.5, 0.02,
+                f"Patho CD45+: {n_patho_pos:,}/{n_patho_tot:,} "
+                f"({100*n_patho_pos/n_patho_tot:.1f}%)",
+                transform=ax_bar.transAxes,
+                ha="center", va="bottom", color="#f9e2af", fontsize=8,
+            )
+
+    ax_bar.set_title("Comptage CD45+\n(données brutes)", fontsize=11,
+                     fontweight="bold", color=TEXT_COLOR)
+    ax_bar.set_ylabel("Nombre d'événements", fontsize=10, color=TEXT_COLOR)
+    apply_dark_style(ax_bar)
+
+    fig.tight_layout(pad=1.5)
+
+    if output_dir is not None:
+        _out = Path(output_dir) / "cd45_count_raw.png"
+        try:
+            from flowsom_pipeline_pro.src.visualization.plot_helpers import save_figure as _sf
+            _sf(fig, _out)
+        except Exception:
+            fig.savefig(str(_out), dpi=100, bbox_inches="tight", facecolor=BG_COLOR)
+        _logger.info("Comptage CD45+ brut sauvegardé: %s", _out)
+
+    _logger.info(
+        "[CD45-RAW] %s — CD45+: %d/%d (%.1f%%), seuil=%.0f",
+        method_used, n_pos, n_total, pct_pos, threshold if np.isfinite(threshold) else -1,
+    )
+    return fig
 
 
 def _apply_gating_combined(
@@ -688,6 +941,7 @@ def _apply_gating_combined(
     file_origins: np.ndarray,
     pregate_cfg,
     gating_logger: GatingLogger,
+    gmm_plot_path: Optional[str] = None,
 ) -> Tuple[np.ndarray, List[str], np.ndarray, np.ndarray]:
     """
     Gating sur les données combinées — reproduit exactement flowsom_pipeline.py.
@@ -722,7 +976,19 @@ def _apply_gating_combined(
     if getattr(pregate_cfg, "viable", True):
         _logger.info("Gate 1 — Débris [%s] sur %d cellules combinées", mode, n_before)
         if mode == "auto":
-            mask_debris = AutoGating.auto_gate_debris(X, var_names)
+            _do_gmm_plot = (
+                getattr(pregate_cfg, "gmm_export_plot", False)
+                and gmm_plot_path is not None
+                and getattr(pregate_cfg, "density_method", "GMM").upper() == "GMM"
+            )
+            mask_debris = AutoGating.auto_gate_debris(
+                X, var_names,
+                n_components=getattr(pregate_cfg, "gmm_n_components_debris", 3),
+                covariance_type=getattr(pregate_cfg, "gmm_covariance_type", "full"),
+                density_method=getattr(pregate_cfg, "density_method", "GMM"),
+                export_plot=_do_gmm_plot,
+                plot_output_path=gmm_plot_path,
+            )
         else:
             mask_debris = PreGating.gate_viable_cells(
                 X,

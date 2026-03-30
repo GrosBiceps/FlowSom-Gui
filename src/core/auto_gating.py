@@ -218,22 +218,33 @@ class AutoGating:
         var_names: List[str],
         n_components: int = 3,
         min_cluster_fraction: float = 0.02,
+        covariance_type: str = "full",
+        density_method: str = "GMM",
+        export_plot: bool = False,
+        plot_output_path: Optional[str] = None,
     ) -> np.ndarray:
         """
-        Gate débris adaptatif par GMM 2D sur FSC-A / SSC-A.
+        Gate débris adaptatif par GMM ou KDE 2D sur FSC-A / SSC-A.
 
-        L'algorithme identifie les clusters naturels dans l'espace FSC/SSC:
-        - Débris: événements bas en FSC-A (petites particules)
-        - Cellules: population principale (cluster dominant)
-        - Saturés: événements très hauts (optionnel, détecté par BIC)
+        Méthode sélectionnable via ``density_method`` :
+          - "GMM" (défaut) : Gaussian Mixture Model — paramétrable, rapide.
+          - "KDE" : Kernel Density Estimation — non paramétrique, plus fidèle aux données.
 
-        Sélection automatique du nombre de composantes par BIC (2 ou 3).
+        En mode GMM, ``covariance_type`` contrôle la forme des gaussiennes :
+          - "full"     : forme libre par cluster (défaut, risque sur-exclusion)
+          - "tied"     : même forme pour tous les clusters (plus robuste)
+          - "diag"     : gaussiennes compactes (recommandé si sur-exclusion des viables)
+          - "spherical": forme sphérique (plus contrainte)
 
         Args:
             X: Matrice des données (n_cells, n_markers)
             var_names: Noms des marqueurs
-            n_components: Nombre max de composantes GMM à tester
+            n_components: Nombre max de composantes GMM à tester (2 ou 3)
             min_cluster_fraction: Fraction min d'événements pour inclure un cluster
+            covariance_type: Type de covariance GMM ('full', 'tied', 'diag', 'spherical')
+            density_method: 'GMM' ou 'KDE'
+            export_plot: Si True, exporte un graphique des densités GMM
+            plot_output_path: Chemin de sortie du graphique (PNG)
 
         Returns:
             Masque booléen (True = cellule viable, False = débris/saturé)
@@ -262,19 +273,28 @@ class AutoGating:
             _logger.warning("[!] Pas assez de données valides pour auto-gate débris")
             return np.ones(n_cells, dtype=bool)
 
+        # ── Méthode KDE ────────────────────────────────────────────────────────
+        if density_method.upper() == "KDE":
+            return AutoGating._auto_gate_debris_kde(
+                fsc, ssc, valid, n_cells, min_cluster_fraction
+            )
+
+        # ── Méthode GMM (défaut) ────────────────────────────────────────────────
         # Standardiser avant GMM pour meilleure convergence
         scaler = StandardScaler()
         data_scaled = scaler.fit_transform(data_2d)
 
         # Sélection automatique du nombre de composantes par BIC
+        _n_comp_candidates = list({2, min(n_components, 3)})
+        _n_comp_candidates.sort()
         best_bic = np.inf
         best_gmm = None
-        for n_comp in [2, 3]:
+        for n_comp in _n_comp_candidates:
             try:
                 gmm_test = AutoGating.safe_fit_gmm(
                     data_scaled,
                     n_components=n_comp,
-                    covariance_type="full",
+                    covariance_type=covariance_type,
                     n_init=3,
                     max_iter=200,
                 )
@@ -363,6 +383,22 @@ class AutoGating:
             },
         )
 
+        # Export graphique GMM si demandé
+        if export_plot:
+            try:
+                AutoGating._export_gmm_density_plot(
+                    data_2d=data_2d,
+                    labels=labels,
+                    mask_valid=mask_valid,
+                    cluster_fsc_means=cluster_fsc_means,
+                    cluster_sizes=cluster_sizes,
+                    n_comp=n_comp,
+                    covariance_type=covariance_type,
+                    output_path=plot_output_path,
+                )
+            except Exception as _pe:
+                _logger.warning("Export graphique GMM échoué (non bloquant): %s", _pe)
+
         # Construire GateResult
         gate_result = GateResult(
             mask=mask,
@@ -374,11 +410,216 @@ class AutoGating:
                 "n_components": int(n_comp),
                 "bic": float(best_bic),
                 "cluster_fsc_means": cluster_fsc_means.tolist(),
+                "covariance_type": covariance_type,
             },
         )
         gating_reports.append(gate_result)
 
         return mask
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Méthodes internes
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _auto_gate_debris_kde(
+        fsc: np.ndarray,
+        ssc: np.ndarray,
+        valid: np.ndarray,
+        n_cells: int,
+        min_cluster_fraction: float = 0.02,
+    ) -> np.ndarray:
+        """
+        Gating débris par KDE (Kernel Density Estimation).
+
+        Estime la densité conjointe FSC-A / SSC-A, puis identifie la région
+        de haute densité comme étant les cellules viables.
+        Méthode non paramétrique — plus fidèle mais non configurable.
+        """
+        try:
+            from scipy.stats import gaussian_kde
+        except ImportError:
+            _logger.warning("[KDE] scipy non disponible — fallback GMM")
+            return np.ones(n_cells, dtype=bool)
+
+        fsc_v = fsc[valid]
+        ssc_v = ssc[valid]
+
+        # Sous-échantillonner pour performance KDE
+        n_kde = min(len(fsc_v), GMM_MAX_SAMPLES)
+        if len(fsc_v) > n_kde:
+            idx = _rng.choice(len(fsc_v), size=n_kde, replace=False)
+            fsc_kde = fsc_v[idx]
+            ssc_kde = ssc_v[idx]
+        else:
+            fsc_kde = fsc_v
+            ssc_kde = ssc_v
+
+        # Estimer la densité
+        kde = gaussian_kde(np.vstack([fsc_kde, ssc_kde]))
+        density = kde(np.vstack([fsc_v, ssc_v]))
+
+        # Seuil = médiane de la densité (conserver les cellules au-dessus)
+        threshold = np.median(density) * 0.3
+        mask_valid_kde = density >= threshold
+
+        # Sécurité: si trop peu de cellules conservées, garder tout
+        if mask_valid_kde.sum() < int(len(fsc_v) * min_cluster_fraction):
+            mask_valid_kde = np.ones(len(fsc_v), dtype=bool)
+
+        mask = np.zeros(n_cells, dtype=bool)
+        mask[valid] = mask_valid_kde
+
+        n_kept = mask.sum()
+        _logger.info(
+            "   [Auto-KDE] Conservés: %d / %d événements (%.1f%%)",
+            n_kept, n_cells, n_kept / n_cells * 100,
+        )
+        log_gating_event(
+            "debris", "auto_kde", "success",
+            {"n_kept": int(n_kept), "n_total": int(n_cells)},
+        )
+
+        gate_result = GateResult(
+            mask=mask,
+            n_kept=int(n_kept),
+            n_total=int(n_cells),
+            method="auto_kde_debris",
+            gate_name="G1_debris",
+            details={"method": "KDE", "threshold": float(threshold)},
+        )
+        gating_reports.append(gate_result)
+
+        return mask
+
+    @staticmethod
+    def _export_gmm_density_plot(
+        data_2d: np.ndarray,
+        labels: np.ndarray,
+        mask_valid: np.ndarray,
+        cluster_fsc_means: np.ndarray,
+        cluster_sizes: np.ndarray,
+        n_comp: int,
+        covariance_type: str,
+        output_path: Optional[str] = None,
+    ) -> None:
+        """
+        Exporte un graphique de densité GMM montrant les populations identifiées.
+
+        Chaque composante gaussienne est représentée par :
+          - Un nuage de points coloré (cellules appartenant au cluster)
+          - Une courbe de densité 1D (KDE sur FSC-A) par cluster
+          - Un indicateur [CONSERVÉ] / [EXCLU] selon la logique de gating
+
+        Args:
+            data_2d: Données brutes FSC-A / SSC-A (n_valid, 2)
+            labels: Assignation cluster GMM (n_valid,)
+            mask_valid: Masque des clusters conservés (n_comp,)
+            cluster_fsc_means: Moyenne FSC-A par cluster
+            cluster_sizes: Taille de chaque cluster
+            n_comp: Nombre de composantes
+            covariance_type: Type de covariance utilisé
+            output_path: Chemin de sauvegarde (PNG). Si None, génère un nom auto.
+        """
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from scipy.stats import gaussian_kde as scipy_kde
+        import os
+
+        colors = ["#4cc9f0", "#f72585", "#7209b7", "#3a0ca3", "#4361ee"]
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        fig.patch.set_facecolor("#1e1e2e")
+        for ax in axes:
+            ax.set_facecolor("#1e1e2e")
+            ax.tick_params(colors="#e2e8f0")
+            ax.xaxis.label.set_color("#e2e8f0")
+            ax.yaxis.label.set_color("#e2e8f0")
+            ax.title.set_color("#e2e8f0")
+            for spine in ax.spines.values():
+                spine.set_edgecolor("#45475a")
+
+        fsc_all = data_2d[:, 0]
+        ssc_all = data_2d[:, 1]
+
+        # Panneau gauche : scatter FSC-A vs SSC-A coloré par cluster
+        ax_scatter = axes[0]
+        n_display = min(len(fsc_all), 30_000)
+        idx_disp = _rng.choice(len(fsc_all), size=n_display, replace=False)
+
+        for i in range(n_comp):
+            cluster_idx = np.where(labels == i)[0]
+            cluster_disp = np.intersect1d(cluster_idx, idx_disp)
+            kept = bool(mask_valid[labels == i].any())
+            alpha = 0.6 if kept else 0.2
+            label_txt = f"Pop {i} ({'CONSERVÉE' if kept else 'EXCLUE'}) n={cluster_sizes[i]:,}"
+            ax_scatter.scatter(
+                fsc_all[cluster_disp],
+                ssc_all[cluster_disp],
+                s=2,
+                alpha=alpha,
+                color=colors[i % len(colors)],
+                label=label_txt,
+                rasterized=True,
+            )
+
+        ax_scatter.set_xlabel("FSC-A")
+        ax_scatter.set_ylabel("SSC-A")
+        ax_scatter.set_title(f"Populations GMM — covariance: {covariance_type}")
+        ax_scatter.legend(fontsize=7, facecolor="#313244", labelcolor="#e2e8f0",
+                          markerscale=4, framealpha=0.8)
+
+        # Panneau droit : densités 1D FSC-A par cluster
+        ax_density = axes[1]
+        fsc_range = np.linspace(fsc_all.min(), fsc_all.max(), 500)
+
+        for i in range(n_comp):
+            cluster_mask = labels == i
+            fsc_cluster = fsc_all[cluster_mask]
+            if len(fsc_cluster) < 10:
+                continue
+            kept = bool(mask_valid[cluster_mask].any())
+            linestyle = "-" if kept else "--"
+            alpha = 0.9 if kept else 0.4
+            label_txt = f"Pop {i} ({'CONSERVÉE' if kept else 'EXCLUE'})"
+            try:
+                kde_fn = scipy_kde(fsc_cluster)
+                density_vals = kde_fn(fsc_range)
+                # Normaliser par taille relative du cluster
+                weight = cluster_sizes[i] / cluster_sizes.sum()
+                ax_density.fill_between(
+                    fsc_range, density_vals * weight,
+                    alpha=0.2 if kept else 0.08,
+                    color=colors[i % len(colors)],
+                )
+                ax_density.plot(
+                    fsc_range, density_vals * weight,
+                    color=colors[i % len(colors)],
+                    linewidth=2 if kept else 1,
+                    linestyle=linestyle,
+                    alpha=alpha,
+                    label=label_txt,
+                )
+            except Exception:
+                pass
+
+        ax_density.set_xlabel("FSC-A")
+        ax_density.set_ylabel("Densité (pondérée par taille du cluster)")
+        ax_density.set_title("Densités GMM par population")
+        ax_density.legend(fontsize=8, facecolor="#313244", labelcolor="#e2e8f0", framealpha=0.8)
+
+        plt.suptitle(
+            f"Gating débris — GMM ({n_comp} composantes, covariance={covariance_type})",
+            color="#e2e8f0", fontsize=11, fontweight="bold",
+        )
+        plt.tight_layout()
+
+        if output_path is None:
+            output_path = "gmm_debris_density.png"
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        fig.savefig(output_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+        plt.close(fig)
+        _logger.info("[GMM] Graphique densités exporté: %s", output_path)
 
     @staticmethod
     def auto_gate_singlets(

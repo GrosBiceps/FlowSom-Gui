@@ -227,15 +227,18 @@ def extract_date_from_filename(filename: str) -> Optional[datetime]:
     """
     Extrait une date depuis un nom de fichier FCS.
 
-    Supporte les formats : YYYY-MM-DD, DD-MM-YYYY, DD-MM-YY, YYYYMMDD.
-    Les séparateurs acceptés sont `-`, `.`, `_`.
+    Ordre de priorité :
+      1. Date dans le nom du fichier (YYYY-MM-DD, DD-MM-YYYY, DD-MM-YY, YYYYMMDD).
+      2. Champ $DATE dans les métadonnées internes du fichier FCS.
+      3. Date de modification du fichier (st_mtime).
 
     Args:
-        filename: Nom de fichier (avec ou sans extension).
+        filename: Chemin complet ou nom de fichier FCS.
 
     Returns:
         datetime si une date valide est trouvée, None sinon.
     """
+    # ── 1. Date dans le nom du fichier ────────────────────────────────────────
     stem = Path(filename).stem
     for pattern, fmt in _DATE_PATTERNS:
         match = pattern.search(stem)
@@ -249,6 +252,49 @@ def extract_date_from_filename(filename: str) -> Optional[datetime]:
                 )
             except ValueError:
                 continue
+
+    # ── 2. Champ $DATE dans les métadonnées FCS internes ─────────────────────
+    fpath = Path(filename)
+    if fpath.exists() and fpath.suffix.lower() == ".fcs":
+        try:
+            import struct
+
+            with open(fpath, "rb") as _f:
+                # En-tête FCS : bytes 10-17 = offset début TEXT, 18-25 = offset fin TEXT
+                _f.seek(10)
+                _header = _f.read(16).decode("ascii", errors="replace").strip()
+                _text_start = int(_header[:8])
+                _text_end = int(_header[8:])
+                _f.seek(_text_start)
+                _text = _f.read(_text_end - _text_start + 1).decode(
+                    "latin-1", errors="replace"
+                )
+            # Le délimiteur est le premier caractère du segment TEXT
+            _delim = _text[0]
+            _pairs = _text.split(_delim)
+            _meta = {}
+            for i in range(1, len(_pairs) - 1, 2):
+                _meta[_pairs[i].strip().upper()] = _pairs[i + 1].strip()
+            _fcs_date = _meta.get("$DATE", "")
+            if _fcs_date:
+                # Formats FCS courants : DD-Mon-YYYY, DD-MMM-YYYY, YYYY-MM-DD
+                for _fmt in ("%d-%b-%Y", "%d-%b-%y", "%Y-%m-%d", "%d/%m/%Y"):
+                    try:
+                        return datetime.strptime(_fcs_date, _fmt)
+                    except ValueError:
+                        continue
+        except Exception:
+            pass
+
+    # ── 3. Date de modification du fichier ───────────────────────────────────
+    if fpath.exists():
+        try:
+            import os
+            _mtime = os.path.getmtime(fpath)
+            return datetime.fromtimestamp(_mtime)
+        except Exception:
+            pass
+
     return None
 
 

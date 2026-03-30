@@ -88,9 +88,15 @@ if getattr(sys, "frozen", False):
     _DEFAULT_CONFIG_PATH = (
         Path(sys.executable).parent / "config" / "default_config.yaml"
     )
+    _MRD_CONFIG_PATH = (
+        Path(sys.executable).parent / "config" / "mrd_config.yaml"
+    )
 else:
     _DEFAULT_CONFIG_PATH = (
         Path(__file__).resolve().parent.parent / "config" / "default_config.yaml"
+    )
+    _MRD_CONFIG_PATH = (
+        Path(__file__).resolve().parent.parent / "config" / "mrd_config.yaml"
     )
 
 
@@ -183,6 +189,7 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         # État interne
         self._config: Optional["PipelineConfig"] = None
+        self._mrd_raw: Dict[str, Any] = {}  # Contenu brut de mrd_config.yaml
         self._result: Optional["PipelineResult"] = None
         self._worker: Optional[PipelineWorker] = None
         self._spider_worker: Optional[SpiderPlotWorker] = None
@@ -231,6 +238,8 @@ class FlowSomAnalyzerPro(QMainWindow):
         self._build_transform_group(left_layout)
         self._build_gating_group(left_layout)
         self._build_options_group(left_layout)
+        self._build_mrd_group(left_layout)
+        self._build_stratified_ds_group(left_layout)
         self._build_run_section(left_layout)
         self._build_export_section(left_layout)
 
@@ -449,6 +458,14 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.chk_cd34 = QCheckBox("CD34+ blastes")
         grid.addWidget(self.chk_cd34, 2, 1)
 
+        self.chk_mode_blastes = QCheckBox("Gating CD45 asymétrique (patho seulement)")
+        self.chk_mode_blastes.setChecked(True)
+        self.chk_mode_blastes.setToolTip(
+            "Applique le gating CD45 uniquement sur les fichiers pathologiques.\n"
+            "Recommandé pour les blastes CD45- à faible expressivité."
+        )
+        grid.addWidget(self.chk_mode_blastes, 3, 0, 1, 2)
+
         vbox.addLayout(grid)
         layout.addWidget(group)
 
@@ -493,6 +510,136 @@ class FlowSomAnalyzerPro(QMainWindow):
             "Génère un dossier résultats_<nom> par fichier + un Excel de synthèse."
         )
         grid.addWidget(self.chk_batch, 4, 0, 1, 2)
+
+        grid.addWidget(QLabel("Mode export :"), 5, 0)
+        self.combo_export_mode = DarkComboBox()
+        self.combo_export_mode.addItems(["standard", "compact"])
+        self.combo_export_mode.setToolTip(
+            "standard : tous les fichiers (FCS, CSV, JSON, plots, rapports)\n"
+            "compact  : essentiels uniquement (PDF, HTML, MRD JSON, FCS Is_MRD)\n"
+            "           → réduit le temps d'exécution (~100s économisés)"
+        )
+        grid.addWidget(self.combo_export_mode, 5, 1)
+
+        layout.addWidget(group)
+
+    # ── Paramètres MRD ─────────────────────────────────────────────────
+
+    def _build_mrd_group(self, layout: QVBoxLayout) -> None:
+        group = QGroupBox("Paramètres MRD")
+        grid = QGridLayout(group)
+        grid.setSpacing(8)
+
+        # Méthode MRD
+        grid.addWidget(QLabel("Méthode MRD :"), 0, 0)
+        self.combo_mrd_method = DarkComboBox()
+        self.combo_mrd_method.addItems(["all", "flo", "jf", "eln"])
+        self.combo_mrd_method.setToolTip(
+            "all = JF + Flo + ELN en parallèle\n"
+            "flo = méthode Flo (ratio patho/normal)\n"
+            "jf  = méthode JF (exclusion normale + seuil patho)\n"
+            "eln = critères ELN 2025"
+        )
+        grid.addWidget(self.combo_mrd_method, 0, 1)
+
+        # Méthode MRD pour export FCS
+        grid.addWidget(QLabel("Méthode FCS export :"), 1, 0)
+        self.combo_mrd_fcs_method = DarkComboBox()
+        self.combo_mrd_fcs_method.addItems(["flo", "jf"])
+        self.combo_mrd_fcs_method.setToolTip(
+            "Méthode utilisée pour la colonne Is_MRD dans le FCS pathologique exporté"
+        )
+        grid.addWidget(self.combo_mrd_fcs_method, 1, 1)
+
+        # ── ELN standards ──
+        eln_lbl = QLabel("── ELN ──")
+        eln_lbl.setObjectName("subtitleLabel")
+        grid.addWidget(eln_lbl, 2, 0, 1, 2)
+
+        grid.addWidget(QLabel("Min events/nœud (LOQ) :"), 3, 0)
+        self.spin_eln_min_events = QSpinBox()
+        self.spin_eln_min_events.setRange(1, 500)
+        self.spin_eln_min_events.setValue(50)
+        self.spin_eln_min_events.setToolTip("Nombre minimum d'événements dans un nœud SOM pour être quantifiable (ELN LOQ)")
+        grid.addWidget(self.spin_eln_min_events, 3, 1)
+
+        grid.addWidget(QLabel("Seuil positivité ELN (%) :"), 4, 0)
+        self.spin_eln_positivity = QDoubleSpinBox()
+        self.spin_eln_positivity.setRange(0.01, 10.0)
+        self.spin_eln_positivity.setSingleStep(0.05)
+        self.spin_eln_positivity.setValue(0.1)
+        self.spin_eln_positivity.setDecimals(2)
+        self.spin_eln_positivity.setToolTip("Seuil global ELN pour déclarer la MRD cliniquement positive (%)")
+        grid.addWidget(self.spin_eln_positivity, 4, 1)
+
+        # ── Méthode Flo ──
+        flo_lbl = QLabel("── Méthode Flo ──")
+        flo_lbl.setObjectName("subtitleLabel")
+        grid.addWidget(flo_lbl, 5, 0, 1, 2)
+
+        grid.addWidget(QLabel("Multiplicateur normal :"), 6, 0)
+        self.spin_flo_multiplier = QDoubleSpinBox()
+        self.spin_flo_multiplier.setRange(0.5, 20.0)
+        self.spin_flo_multiplier.setSingleStep(0.5)
+        self.spin_flo_multiplier.setValue(2.0)
+        self.spin_flo_multiplier.setDecimals(1)
+        self.spin_flo_multiplier.setToolTip("% patho doit dépasser N × % moelle normale pour qualifier un nœud MRD")
+        grid.addWidget(self.spin_flo_multiplier, 6, 1)
+
+        # ── Méthode JF ──
+        jf_lbl = QLabel("── Méthode JF ──")
+        jf_lbl.setObjectName("subtitleLabel")
+        grid.addWidget(jf_lbl, 7, 0, 1, 2)
+
+        grid.addWidget(QLabel("Max % moelle normale :"), 8, 0)
+        self.spin_jf_max_normal = QDoubleSpinBox()
+        self.spin_jf_max_normal.setRange(0.01, 10.0)
+        self.spin_jf_max_normal.setSingleStep(0.05)
+        self.spin_jf_max_normal.setValue(0.1)
+        self.spin_jf_max_normal.setDecimals(2)
+        self.spin_jf_max_normal.setToolTip("% maximum de moelle normale toléré dans un nœud MRD (méthode JF)")
+        grid.addWidget(self.spin_jf_max_normal, 8, 1)
+
+        grid.addWidget(QLabel("Min % cellules patho :"), 9, 0)
+        self.spin_jf_min_patho = QDoubleSpinBox()
+        self.spin_jf_min_patho.setRange(0.1, 100.0)
+        self.spin_jf_min_patho.setSingleStep(1.0)
+        self.spin_jf_min_patho.setValue(10.0)
+        self.spin_jf_min_patho.setDecimals(1)
+        self.spin_jf_min_patho.setToolTip("% minimum de cellules pathologiques requis dans un nœud MRD (méthode JF)")
+        grid.addWidget(self.spin_jf_min_patho, 9, 1)
+
+        layout.addWidget(group)
+
+    # ── Stratified Downsampling ─────────────────────────────────────────
+
+    def _build_stratified_ds_group(self, layout: QVBoxLayout) -> None:
+        group = QGroupBox("Déséquilibre Maîtrisé (Stratified Downsampling)")
+        group.setToolTip(
+            "Rééquilibre le ratio sain/patho AVANT le SOM pour rendre les blastes rares visibles.\n"
+            "Sans cela, 14M cellules saines écrasent 100k blastes (< 1% LAIP)."
+        )
+        grid = QGridLayout(group)
+        grid.setSpacing(8)
+
+        self.chk_balance_conditions = QCheckBox("Activer le rééquilibrage sain/patho")
+        self.chk_balance_conditions.setChecked(True)
+        self.chk_balance_conditions.setToolTip(
+            "Impose un rapport n_sain/n_patho contrôlé avant le SOM.\n"
+            "Indispensable pour les LAIP < 1% (blastes rares)."
+        )
+        grid.addWidget(self.chk_balance_conditions, 0, 0, 1, 2)
+
+        grid.addWidget(QLabel("Ratio sain / patho :"), 1, 0)
+        self.spin_imbalance_ratio = QDoubleSpinBox()
+        self.spin_imbalance_ratio.setRange(0.5, 10.0)
+        self.spin_imbalance_ratio.setSingleStep(0.5)
+        self.spin_imbalance_ratio.setValue(2.0)
+        self.spin_imbalance_ratio.setDecimals(1)
+        self.spin_imbalance_ratio.setToolTip(
+            "1.0 = 50/50 · 2.0 = 2 sains pour 1 blaste · 3.0 = 3 sains pour 1 blaste"
+        )
+        grid.addWidget(self.spin_imbalance_ratio, 1, 1)
 
         layout.addWidget(group)
 
@@ -982,6 +1129,18 @@ class FlowSomAnalyzerPro(QMainWindow):
         except Exception as e:
             self._log(f" Erreur chargement config : {e}")
 
+        # Charge le mrd_config.yaml séparément
+        try:
+            import yaml
+
+            if _MRD_CONFIG_PATH.exists():
+                with open(_MRD_CONFIG_PATH, "r", encoding="utf-8") as f:
+                    self._mrd_raw = yaml.safe_load(f) or {}
+                self._sync_mrd_config_to_ui()
+                self._log(f" MRD config chargée : {_MRD_CONFIG_PATH.name}")
+        except Exception as e:
+            self._log(f" Avertissement MRD config : {e}")
+
     def _sync_config_to_ui(self) -> None:
         """
         Pousse les valeurs de PipelineConfig vers les widgets."""
@@ -1030,6 +1189,8 @@ class FlowSomAnalyzerPro(QMainWindow):
             self.chk_singlets.setChecked(c.pregate.singlets)
             self.chk_cd45.setChecked(c.pregate.cd45)
             self.chk_cd34.setChecked(c.pregate.cd34)
+            if hasattr(c.pregate, "mode_blastes_vs_normal"):
+                self.chk_mode_blastes.setChecked(c.pregate.mode_blastes_vs_normal)
 
         # Options
         if hasattr(c, "visualization"):
@@ -1047,6 +1208,21 @@ class FlowSomAnalyzerPro(QMainWindow):
         if hasattr(c, "downsampling"):
             self.chk_downsampling.setChecked(c.downsampling.enabled)
             self.spin_max_cells.setValue(c.downsampling.max_cells_per_file)
+        if hasattr(c, "export_mode"):
+            idx = self.combo_export_mode.findText(getattr(c.export_mode, "mode", "standard"))
+            if idx >= 0:
+                self.combo_export_mode.setCurrentIndex(idx)
+        if hasattr(c, "patho_fcs_export"):
+            idx = self.combo_mrd_fcs_method.findText(getattr(c.patho_fcs_export, "mrd_method", "flo"))
+            if idx >= 0:
+                self.combo_mrd_fcs_method.setCurrentIndex(idx)
+        if hasattr(c, "stratified_downsampling"):
+            self.chk_balance_conditions.setChecked(
+                getattr(c.stratified_downsampling, "balance_conditions", True)
+            )
+            self.spin_imbalance_ratio.setValue(
+                getattr(c.stratified_downsampling, "imbalance_ratio", 2.0)
+            )
 
     def _sync_ui_to_config(self) -> None:
         """
@@ -1088,6 +1264,8 @@ class FlowSomAnalyzerPro(QMainWindow):
         c.pregate.singlets = self.chk_singlets.isChecked()
         c.pregate.cd45 = self.chk_cd45.isChecked()
         c.pregate.cd34 = self.chk_cd34.isChecked()
+        if hasattr(c.pregate, "mode_blastes_vs_normal"):
+            c.pregate.mode_blastes_vs_normal = self.chk_mode_blastes.isChecked()
 
         # Options
         c.visualization.umap_enabled = self.chk_umap.isChecked()
@@ -1098,6 +1276,63 @@ class FlowSomAnalyzerPro(QMainWindow):
         c.population_mapping.enabled = self.chk_pop_mapping.isChecked()
         c.downsampling.enabled = self.chk_downsampling.isChecked()
         c.downsampling.max_cells_per_file = self.spin_max_cells.value()
+        if hasattr(c, "export_mode"):
+            c.export_mode.mode = self.combo_export_mode.currentText()
+        if hasattr(c, "patho_fcs_export"):
+            c.patho_fcs_export.mrd_method = self.combo_mrd_fcs_method.currentText()
+        if hasattr(c, "stratified_downsampling"):
+            c.stratified_downsampling.balance_conditions = self.chk_balance_conditions.isChecked()
+            c.stratified_downsampling.imbalance_ratio = self.spin_imbalance_ratio.value()
+
+        # Sync MRD config via _mrd_raw dict (sauvegardé séparément)
+        self._sync_ui_to_mrd_config()
+
+    def _sync_mrd_config_to_ui(self) -> None:
+        """Pousse les valeurs de mrd_config.yaml vers les widgets MRD."""
+        mrd = getattr(self, "_mrd_raw", {}) or {}
+        params = mrd.get("mrd_parameters", {})
+        if not params:
+            return
+
+        # Méthode MRD
+        method = params.get("method", "all")
+        idx = self.combo_mrd_method.findText(method)
+        if idx >= 0:
+            self.combo_mrd_method.setCurrentIndex(idx)
+
+        # ELN
+        eln = params.get("eln_standards", {})
+        self.spin_eln_min_events.setValue(int(eln.get("min_cluster_events", 50)))
+        self.spin_eln_positivity.setValue(float(eln.get("clinical_positivity_pct", 0.1)))
+
+        # Flo
+        flo = params.get("method_flo", {})
+        self.spin_flo_multiplier.setValue(float(flo.get("normal_marrow_multiplier", 2.0)))
+
+        # JF
+        jf = params.get("method_jf", {})
+        self.spin_jf_max_normal.setValue(float(jf.get("max_normal_marrow_pct", 0.1)))
+        self.spin_jf_min_patho.setValue(float(jf.get("min_patho_cells_pct", 10.0)))
+
+    def _sync_ui_to_mrd_config(self) -> None:
+        """Pousse les valeurs des widgets MRD vers _mrd_raw (puis sauvegarde si nécessaire)."""
+        if not hasattr(self, "_mrd_raw"):
+            self._mrd_raw = {}
+        params = self._mrd_raw.setdefault("mrd_parameters", {})
+        params["method"] = self.combo_mrd_method.currentText()
+        params.setdefault("eln_standards", {})["min_cluster_events"] = self.spin_eln_min_events.value()
+        params["eln_standards"]["clinical_positivity_pct"] = self.spin_eln_positivity.value()
+        params.setdefault("method_flo", {})["normal_marrow_multiplier"] = self.spin_flo_multiplier.value()
+        params.setdefault("method_jf", {})["max_normal_marrow_pct"] = self.spin_jf_max_normal.value()
+        params["method_jf"]["min_patho_cells_pct"] = self.spin_jf_min_patho.value()
+
+        # Sauvegarde dans mrd_config.yaml
+        try:
+            import yaml
+            with open(_MRD_CONFIG_PATH, "w", encoding="utf-8") as f:
+                yaml.dump(self._mrd_raw, f, allow_unicode=True, default_flow_style=False)
+        except Exception as e:
+            self._log(f" Avertissement sauvegarde MRD config : {e}")
 
     # ==================================================================
     # LOGIQUE : Sélection dossiers

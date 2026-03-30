@@ -5,9 +5,9 @@
 pipeline_version: "2.0"
 
 paths:
-  healthy_folder: "C:\\Users\\Florian Travail\\Documents\\FlowSom\\Data\\Moelle normale" 
-  patho_folder: "C:\\Users\\Florian Travail\\Documents\\FlowSom\\Data\\Patho" 
-  output_dir: "C:\\Users\\Florian Travail\\Documents\\FlowSom\\Perplexity\\Results"
+  healthy_folder: "C:\\Users\\Florian Travail\\Downloads\\BLAST110\\BLAST110\\FCS\\NBM\\LittleNBM" 
+  patho_folder: "C:\\Users\\Florian Travail\\Downloads\\BLAST110\\BLAST110\\FCS\\AML_Dx\\T1" 
+  output_dir: "C:\\Users\\Florian Travail\\Downloads\\BLAST110\\Résults"
 
 analysis:
   compare_mode: true         # true = comparer Sain vs Pathologique (doit être true pour les analyses différentielles)
@@ -24,7 +24,7 @@ pregate:
 pregate_advanced:
   debris_min_percentile: 1.0   # Percentile inférieur pour exclure les débris (FSC/SSC)
   debris_max_percentile: 99.0  # Percentile supérieur pour exclure les débris (FSC/SSC)
-  doublets_ratio_min: 0.6    # Ratio min FSC-H/FSC-A pour considérer comme singlet 
+  doublets_ratio_min: 0.6    # Ratio min FSC-H/FSC-A pour considérer comme singlet
   doublets_ratio_max: 1.4   # Ratio max FSC-H/FSC-A pour considérer comme singlet
   cd45_threshold_percentile: 5.0 # Percentile de coupure CD45 pour inclure plus ou moins de cellules (bas = plus inclusif)
   cd34_threshold_percentile: 85.0 # Percentile de coupure CD34 pour inclure plus ou moins de blastes (haut = blastes plus purs)
@@ -34,6 +34,20 @@ pregate_advanced:
   gmm_max_samples: 200000     # Nombre max de cellules pour l'ajustement GMM (sous-échantillonnage si dépassé)
   ransac_r2_threshold: 0.85   # Seuil R² minimum pour valider la droite RANSAC singlets
   ransac_mad_factor: 3.0      # Facteur MAD pour détecter les outliers RANSAC
+  # ── Méthode d'estimation de densité pour le gating viable (débris) ────────────────
+  # "GMM" = Gaussian Mixture Model (défaut) | "KDE" = Kernel Density Estimation
+  # Le KDE est plus fidèle aux données mais plus lent et moins paramétrable.
+  # Le GMM est recommandé car ses paramètres sont entièrement contrôlables ci-dessous.
+  density_method: "GMM"
+  # ── Paramètres avancés du GMM ──────────────────────────────────────────────────────
+  # covariance_type contrôle la forme des clusters GMM :
+  #   "full"     : chaque cluster a sa propre matrice de covariance (défaut) — risque de sur-exclusion
+  #   "tied"     : tous les clusters partagent la même matrice (formes identiques) — plus robuste
+  #   "diag"     : covariance diagonale → gaussiennes restent compactes (recommandé si sur-exclusion des viables)
+  #   "spherical": chaque cluster est sphérique (forme la plus contrainte)
+  gmm_covariance_type: "full"   # Recommandé: "diag" ou "tied" si sur-exclusion des cellules viables
+  gmm_n_components_debris: 3    # Nombre de composantes GMM pour le gating débris (2 ou 3)
+  gmm_export_plot: true         # true = exporter un graphique des densités GMM (populations par cluster)
 
 flowsom:
   xdim: 10             # Dimension X de la grille SOM (ex: 10, 15, 20, 25)
@@ -85,6 +99,16 @@ visualization:
   umap_enabled: false        # true = calculer UMAP après clustering
   plot_format: "png"        # png | pdf | svg
   dpi: 500                 # Résolution des figures enregistrées (ex: 300, 500, 600)
+  # Exports statiques Plotly → image (kaleido/Chromium) — désactiver pour accélérer (~40s/patient)
+  export_jpg_barcharts: false  # true = exporter les bar charts (patho%, cellules%) en JPG via kaleido
+  export_png_mrd: true        # true = exporter le résumé MRD en PNG via kaleido
+  # Rapport PDF — désactiver pour accélérer (~60s/patient)
+  export_pdf: false             # true = générer le rapport PDF (nécessite reportlab + kaleido)
+  pdf_scale: 1.0               # Facteur d'échelle pour les figures Plotly dans le PDF (ex: 1.0, 1.5)
+  pdf_dpi_mpl: 100             # Résolution DPI pour les figures Matplotlib dans le PDF (ex: 100, 150)
+  # Grille SOM statique
+  som_grid_max_display_cells: 100000  # Nb max de cellules affichées dans la grille SOM (downsampling, ex: 50000, 100000)
+  som_grid_dpi: 100                   # DPI de la grille SOM statique (ex: 100, 150)
   # Thème sombre (identique aux constantes PLOT_*)
   dark_bg: "#1e1e2e"
   accent_color: "#6366f1"
@@ -181,3 +205,38 @@ patho_fcs_export:
 
 batch:
   enabled: true            # true = traiter chaque FCS du dossier patho individuellement (mode lot)
+
+export_mode:
+  # "standard" : tous les fichiers de sortie (FCS complet, CSV, JSON métadonnées, plots individuels, rapports, MRD)
+  # "compact"  : sorties essentielles uniquement — rapport PDF, rapport HTML,
+  #              MRD JSON (mrd_results_*.json) et FCS pathologique avec colonne Is_MRD.
+  #              Les CSV, FCS complet, distributions TXT/CSV et JSON de métadonnées sont ignorés.
+  #              Les figures sont toujours générées car nécessaires à l'assemblage des rapports.
+  mode: "standard"
+  # Export CSV global — désactiver pour ne produire aucun fichier CSV (complet, stats, MFI, per_file)
+  export_csv: false           # true = exporter tous les CSV dans le dossier csv, false = aucun CSV
+  # Export CSV par fichier FCS source (dossier csv/per_file) — activé/désactivé indépendamment du mode
+  export_per_file_csv: false  # true = exporter un CSV séparé par fichier FCS source, false = ignorer
+
+# ── Déséquilibre Maîtrisé (Stratified Downsampling) ─────────────────────────
+# Résout l'invisibilité des clusters rares (blastes LAIP < 1%) en imposant
+# un rapport sain/patho contrôlé AVANT le SOM.
+#
+# Problème sans ce paramètre :
+#   14,5M cellules saines + 100k blastes → FlowSOM ignore les blastes
+#   car la densité est dominée par les cellules normales.
+#
+# Avec balance_conditions: true et imbalance_ratio: 2.0 :
+#   → 200k cellules saines tirées équitablement entre les fichiers NBM
+#   → 100k blastes (tous conservés)
+#   → Pool final 300k cellules, blastes visibles à ~33%
+stratified_downsampling:
+  balance_conditions: true   # true = activer le rééquilibrage, false = comportement original
+  imbalance_ratio: 2.0        # Rapport cible n_sain / n_patho (1.0 = 50/50, 2.0 = 2 sains/1 blaste)
+  seed: 42                    # Graine pour reproductibilité du tirage aléatoire
+  nbm_ids: []                 # Liste des noms de fichiers NBM (FlowSample.name).
+                              # Si vide, auto-détection depuis les échantillons "Healthy".
+                              # Exemple :
+                              #   nbm_ids:
+                              #     - "NBM_Patient01_230115.fcs"
+                              #     - "NBM_Patient02_230115.fcs"
