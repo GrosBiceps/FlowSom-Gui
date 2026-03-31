@@ -427,7 +427,7 @@ def preprocess_all_samples(
 # =============================================================================
 # Dans le monolithe, le gating est appliqué sur la CONCATÉNATION de tous les
 # fichiers avant toute autre opération. Cela est crucial car :
-#  - Le GMM CD45 est calibré sur la distribution combinée sain+patho :
+#  - Le KDE CD45 (pied du pic) est calibré sur la distribution combinée sain+patho :
 #    les cellules NBM (CD45-high) servent d'étalon pour le seuil CD45+/CD45-
 #    → les blastes AML (CD45-dim) ne sont pas éliminés par erreur.
 #  - Le RANSAC singlets est exécuté par fichier sur l'ensemble combiné.
@@ -452,7 +452,7 @@ def preprocess_combined(
     3. Applique le gating sur les données **combinées** :
        - Gate débris (GMM 2D FSC-A/SSC-A) sur toutes les cellules.
        - Gate singlets (RANSAC) par fichier sur les données combinées.
-       - Gate CD45 (si activé) : GMM calibré par les cellules NBM → seuil
+       - Gate CD45 (si activé) : KDE pied du pic calibré par les cellules NBM → seuil
          correct pour CD45-dim (blastes AML). Appliqué **uniquement aux patho**
          si ``mode_blastes_vs_normal=True``.
        - Gate CD34 (si activé) : même logique asymétrique.
@@ -643,8 +643,38 @@ def preprocess_combined(
     X_raw = _apply_transforms(X_raw, var_names, config)
 
     # Mise à jour X_for_plot avec les données transformées (logicle/arcsinh)
-    # pour que le comptage CD45+ brut soit dans le même espace que le gating.
+    # pour que le comptage CD45+ brut et le plot KDE CD45 soient dans le bon espace.
     X_for_plot = X_raw.copy()
+
+    # ── Plot KDE CD45 sur données transformées (logicle/arcsinh) ─────────────
+    # Ce plot doit être généré APRÈS la transformation pour afficher le CD45
+    # dans l'espace logicle (comme dans le notebook .ipynb), et non en linéaire.
+    if gating_plot_dir is not None and gate_masks:
+        try:
+            from flowsom_pipeline_pro.src.visualization.gating_plots import (
+                plot_cd45_kde_qc as _plot_cd45_kde,
+            )
+            from flowsom_pipeline_pro.src.core.gating import PreGating as _PG
+            _cd45_idx = _PG.find_marker_index(
+                var_names, ["CD45", "CD45-PECY5", "CD45-PC5"]
+            )
+            _mask_g3 = gate_masks.get("G3_cd45", gate_masks.get("G3", gate_masks.get("cd45")))
+            if _cd45_idx is not None and _mask_g3 is not None:
+                _fig_kde_cd45, _, _, _ = _plot_cd45_kde(
+                    cd45_data=X_for_plot[:, _cd45_idx],
+                    mask_cd45=_mask_g3,
+                    output_path=Path(gating_plot_dir) / "gating" / "combined_07_kde_cd45.png",
+                    conditions=conditions_for_plot,
+                    kde_seuil_relatif=getattr(pregate_cfg, "kde_cd45_seuil_relatif", 0.05),
+                    kde_finesse=getattr(pregate_cfg, "kde_cd45_finesse", 0.6),
+                    kde_sigma_smooth=getattr(pregate_cfg, "kde_cd45_sigma_smooth", 10),
+                    kde_n_grid=getattr(pregate_cfg, "kde_cd45_n_grid", 4000),
+                )
+                if _fig_kde_cd45 is not None:
+                    gating_figures["fig_kde_cd45"] = _fig_kde_cd45
+                    _logger.info("Plot KDE CD45 (logicle) généré avec succès")
+        except Exception as _e:
+            _logger.warning("Plot KDE CD45 post-transform échoué (non bloquant): %s", _e)
 
     # ── 7. Split par fichier — AUCUN sous-échantillonnage avant FlowSOM ────────
     # Identique au monolithe flowsom_pipeline.py : FlowSOM s'entraîne sur
@@ -1154,7 +1184,7 @@ def _apply_gating_combined(
         n_after_g1g2 = int(combined_mask.sum())
         if mode_blastes_vs_normal:
             _logger.info(
-                "Gate 3 — CD45 [%s] ASYMÉTRIQUE (GMM combiné, patho uniquement)", mode
+                "Gate 3 — CD45 [%s] ASYMÉTRIQUE (KDE pied du pic, patho uniquement)", mode
             )
             if mode == "auto":
                 mask_cd45_full = AutoGating.auto_gate_cd45(

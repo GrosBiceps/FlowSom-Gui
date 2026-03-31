@@ -1190,14 +1190,26 @@ class AutoGating:
 
         cd45_valid = cd45[valid]
 
+        # ── Transformation log pour le KDE ────────────────────────────────
+        # Les données X sont en unités linéaires brutes (0–262144).
+        # La méthode KDE pied du pic a été calibrée sur des données logicle.
+        # On applique une transformation log10(1 + x) * (M / log10(1 + T))
+        # identique au fallback logicle du notebook, puis on reconvertit
+        # le seuil vers l'espace linéaire pour le masque.
+        T, M = 262144.0, 4.5
+        _scale = M / np.log10(1 + T)
+        cd45_log = np.log10(1.0 + np.clip(cd45_valid, 0, None)) * _scale
+
         try:
-            threshold, method_used = AutoGating._kde1d_seuil_pied_pic(
-                cd45_valid,
+            threshold_log, method_used = AutoGating._kde1d_seuil_pied_pic(
+                cd45_log,
                 seuil_relatif=kde_seuil_relatif,
                 finesse=kde_finesse,
                 sigma_smooth=kde_sigma_smooth,
                 n_grid=kde_n_grid,
             )
+            # Reconvertir le seuil de l'espace log vers l'espace linéaire
+            threshold = 10.0 ** (threshold_log / _scale) - 1.0
         except Exception as e:
             warn_msg = f"KDE CD45 échoué: {e} — fallback percentile"
             _logger.warning("   [!] %s", warn_msg)
@@ -1209,6 +1221,7 @@ class AutoGating:
                 warn_msg,
             )
             threshold = np.nanpercentile(cd45_valid, threshold_percentile)
+            threshold_log = np.log10(1.0 + max(threshold, 0)) * _scale
             method_used = "percentile_fallback"
             mask = np.zeros(n_cells, dtype=bool)
             mask[valid] = cd45_valid > threshold
@@ -1219,7 +1232,11 @@ class AutoGating:
                 n_total=int(valid.sum()),
                 method="kde_cd45_fallback_percentile",
                 gate_name="G3_cd45",
-                details={"threshold": float(threshold), "fallback": True},
+                details={
+                    "threshold_linear": float(threshold),
+                    "threshold_log": float(threshold_log),
+                    "fallback": True,
+                },
                 warnings=[warn_msg],
             )
             gating_reports.append(gate_result)
@@ -1234,8 +1251,8 @@ class AutoGating:
             method_used, kde_seuil_relatif, kde_finesse,
         )
         _logger.info(
-            "   [KDE-CD45] Seuil adaptatif = %.4f  →  CD45+ : %d (%.1f%%)",
-            threshold, n_pos, n_pos / valid.sum() * 100,
+            "   [KDE-CD45] Seuil logicle=%.4f → linéaire=%.0f  →  CD45+ : %d (%.1f%%)",
+            threshold_log, threshold, n_pos, n_pos / valid.sum() * 100,
         )
 
         gate_result = GateResult(
@@ -1245,7 +1262,8 @@ class AutoGating:
             method=f"kde_cd45_{method_used}",
             gate_name="G3_cd45",
             details={
-                "threshold": float(threshold),
+                "threshold_linear": float(threshold),
+                "threshold_log": float(threshold_log),
                 "method_used": method_used,
                 "kde_seuil_relatif": kde_seuil_relatif,
                 "kde_finesse": kde_finesse,
@@ -1259,7 +1277,8 @@ class AutoGating:
             f"kde_{method_used}",
             "success",
             {
-                "threshold": float(threshold),
+                "threshold_linear": float(threshold),
+                "threshold_log": float(threshold_log),
                 "method_used": method_used,
                 "n_pos": int(n_pos),
             },

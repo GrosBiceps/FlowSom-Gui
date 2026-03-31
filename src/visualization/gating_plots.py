@@ -427,21 +427,9 @@ def generate_all_gating_plots(
         except Exception as _e:
             _logger.warning("KDE Gate 1 échoué (non bloquant): %s", _e)
 
-    # Gate 3 KDE : densité CD45 avec seuil GMM + vallée KDE + encadré patho
-    cd45_idx = _find_idx(var_names, ["CD45", "CD45-PECY5", "CD45-PC5"])
-    mask_g3 = _get_mask(["G3", "cd45", "G3_cd45"])
-    if mask_g3 is not None and cd45_idx is not None:
-        try:
-            fig_kde_cd45, _, _, _ = plot_cd45_kde_qc(
-                cd45_data=X_raw[:, cd45_idx],
-                mask_cd45=mask_g3,
-                random_seed=seed,
-                output_path=output_dir / f"{name}_07_kde_cd45.png",
-                conditions=conditions,
-            )
-            results["07_kde_cd45"] = fig_kde_cd45
-        except Exception as _e:
-            _logger.warning("KDE Gate 3 CD45 échoué (non bloquant): %s", _e)
+    # Gate 3 KDE CD45 : généré séparément dans preprocessing_service.py
+    # (après la transformation logicle/arcsinh) pour afficher en espace transformé.
+    # Ne PAS générer ici (données encore en linéaire brut).
 
     return results
 
@@ -975,44 +963,53 @@ def plot_gmm_vs_kde_qc(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  QC Gate 3 — GMM vs KDE (Auto-gating CD45)
+#  QC Gate 3 — KDE pied du pic (Auto-gating CD45)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def plot_cd45_kde_qc(
     cd45_data: np.ndarray,
     mask_cd45: np.ndarray,
-    n_subsample: int = 10_000,
-    n_grid: int = 1_000,
+    n_subsample: int = 100_000,
     random_seed: int = 42,
     ax: Optional[Any] = None,
     title: Optional[str] = None,
     output_path: Optional[Path] = None,
     conditions: Optional[np.ndarray] = None,
     condition_patho: str = "Pathologique",
+    kde_seuil_relatif: float = 0.05,
+    kde_finesse: float = 0.6,
+    kde_sigma_smooth: int = 10,
+    kde_n_grid: int = 4000,
+    # kept for backwards compat — ignored
+    n_grid: int = 1_000,
 ) -> Tuple[Any, Any, float, Optional[float]]:
     """
-    Trace la densité KDE de CD45 avec le seuil GMM et la vallée KDE.
+    QC Gate 3 — Densité KDE CD45 avec seuil pied du pic.
 
-    Interface identique à plot_gmm_vs_kde_qc mais adaptée au marqueur CD45.
-    Le seuil GMM est dérivé du masque : max CD45 parmi les exclus (CD45−).
-    Si tout est True (pas de CD45−), un GMM interne 2-composantes est ajusté.
+    Visualise la densité KDE 1D sur CD45 (espace logicle/arcsinh) et le seuil
+    calculé par la méthode pied du pic (même algorithme que auto_gate_cd45).
+    Le seuil est recalculé localement pour la visualisation afin de montrer
+    exactement la courbe KDE, le seuil relatif (5% du max), et la ligne de
+    coupure.
 
     Args:
-        cd45_data: Vecteur CD45 brut (n_events,).
+        cd45_data: Vecteur CD45 transformé (logicle/arcsinh).
         mask_cd45: Masque booléen Gate G3 (True = CD45+).
-        n_subsample: Points pour estimer la KDE.
+        n_subsample: Points pour estimer la KDE visuelle.
         random_seed: Reproductibilité.
         ax: Axes matplotlib existants (optionnel).
         title: Titre du graphique (auto-généré si None).
         output_path: Chemin de sauvegarde PNG (optionnel).
-        conditions: Tableau de conditions par cellule (ex. "Pathologique" / "Sain").
-                    Si fourni, un encadré supplémentaire affiche les comptages
-                    CD45+/CD45− restreints à la moelle pathologique.
-        condition_patho: Valeur de la condition pathologique (défaut: "Pathologique").
+        conditions: Conditions par cellule (pour encadré patho).
+        condition_patho: Label de la condition pathologique.
+        kde_seuil_relatif: Fraction du max densité pour le pied du pic.
+        kde_finesse: Facteur bandwidth Silverman.
+        kde_sigma_smooth: Sigma du lissage gaussien.
+        kde_n_grid: Résolution de la grille KDE.
 
     Returns:
-        Tuple (fig, ax, gmm_threshold, kde_valley).
+        Tuple (fig, ax, threshold, None).
     """
     if not _MPL_AVAILABLE:
         _logger.warning("matplotlib requis pour plot_cd45_kde_qc")
@@ -1020,7 +1017,7 @@ def plot_cd45_kde_qc(
 
     try:
         from scipy.stats import gaussian_kde
-        from scipy.signal import find_peaks
+        from scipy.ndimage import gaussian_filter1d
     except ImportError:
         _logger.warning("scipy requis pour plot_cd45_kde_qc")
         return None, None, 0.0, None
@@ -1034,87 +1031,49 @@ def plot_cd45_kde_qc(
             "doivent avoir la même longueur."
         )
 
-    # Filtrer les valeurs non finies
     valid = np.isfinite(cd45_data)
     n_total = len(cd45_data)
-    n_exclu = int((~mask_cd45).sum())
-    all_positive = n_exclu == 0
+    cd45_valid = cd45_data[valid]
 
-    # ── 1. Seuil GMM ──────────────────────────────────────────────────────────
-    if not all_positive:
-        # Cas nominal : seuil = max CD45 parmi les événements exclus (CD45−)
-        excluded_vals = cd45_data[~mask_cd45 & valid]
-        if len(excluded_vals) > 0:
-            gmm_threshold = float(np.max(excluded_vals))
-        else:
-            gmm_threshold = float(np.percentile(cd45_data[valid], 10))
-        neg_label = "CD45− exclus G3"
-    else:
-        # Tout CD45+ : GMM interne pour visualisation QC
-        _logger.debug("mask_cd45 intégral — simulation GMM interne pour QC")
-        try:
-            from sklearn.mixture import GaussianMixture as _GMM
-        except ImportError:
-            gmm_threshold = float(np.percentile(cd45_data[valid], 10))
-            neg_label = "Seuil estimé (sklearn absent)"
-            all_positive = False
-        else:
-            _rng = np.random.default_rng(random_seed)
-            _n_fit = min(50_000, int(valid.sum()))
-            _idx = _rng.choice(np.where(valid)[0], size=_n_fit, replace=False)
-            _gmm = _GMM(n_components=2, random_state=random_seed, n_init=5)
-            _gmm.fit(cd45_data[_idx].reshape(-1, 1))
-            _means = _gmm.means_.flatten()
-            _all_labels = np.full(n_total, -1, dtype=int)
-            _all_labels[valid] = _gmm.predict(cd45_data[valid].reshape(-1, 1))
-            _low_cluster = int(np.argmin(_means))
-            _low_vals = cd45_data[_all_labels == _low_cluster]
-            gmm_threshold = (
-                float(np.percentile(_low_vals, 95))
-                if len(_low_vals) > 0
-                else float(np.percentile(cd45_data[valid], 10))
-            )
-            neg_label = f"Cluster bas CD45 (simul., μ={_means[_low_cluster]:.0f})"
-            mask_cd45 = _all_labels != _low_cluster
-            if title is None:
-                title = "QC Gate 3 — Simulation CD45 bas [GMM interne]"
+    if len(cd45_valid) < 5:
+        _logger.warning("plot_cd45_kde_qc: trop peu de valeurs finies.")
+        return None, None, 0.0, None
+
+    # ── 1. Sous-échantillonnage pour KDE visuelle ─────────────────────────────
+    rng = np.random.default_rng(random_seed)
+    n_sub = min(n_subsample, len(cd45_valid))
+    sub = cd45_valid[rng.choice(len(cd45_valid), size=n_sub, replace=False)]
+
+    # ── 2. KDE Silverman adaptatif (identique à _kde1d_seuil_pied_pic) ────────
+    n = len(sub)
+    std = np.std(sub)
+    iqr = np.percentile(sub, 75) - np.percentile(sub, 25)
+    bw = 0.9 * min(std, iqr / 1.34) * n ** (-1 / 5) * kde_finesse
+    if std < 1e-12:
+        bw = 0.1
+    kde = gaussian_kde(sub, bw_method=bw / (std if std > 1e-12 else 1.0))
+    x_grid = np.linspace(cd45_valid.min(), cd45_valid.max(), kde_n_grid)
+    density = gaussian_filter1d(kde(x_grid), sigma=kde_sigma_smooth)
+
+    # ── 3. Seuil pied du pic ─────────────────────────────────────────────────
+    seuil_abs = density.max() * kde_seuil_relatif
+    idx_max = int(np.argmax(density))
+    threshold = x_grid[0]
+    method_tag = "Otsu fallback"
+    for i in range(idx_max, 0, -1):
+        if density[i] < seuil_abs:
+            threshold = float(x_grid[i])
+            method_tag = "pied du pic"
+            break
 
     if title is None:
-        title = "QC Gate 3 — Auto-gating CD45 (GMM vs KDE)"
+        title = "QC Gate 3 — Auto-gating CD45 (KDE pied du pic)"
 
-    # ── 2. Sous-échantillonnage pour KDE ──────────────────────────────────────
-    rng = np.random.default_rng(random_seed)
-    if n_total > n_subsample:
-        cd45_sub = cd45_data[rng.choice(n_total, size=n_subsample, replace=False)]
-    else:
-        cd45_sub = cd45_data.copy()
-
-    # ── 3. KDE ────────────────────────────────────────────────────────────────
-    finite_sub = cd45_sub[np.isfinite(cd45_sub)]
-    if len(finite_sub) < 5:
-        _logger.warning("plot_cd45_kde_qc: trop peu de valeurs finies pour KDE.")
-        return None, None, gmm_threshold, None
-
-    kde = gaussian_kde(finite_sub, bw_method="scott")
-    data_min = float(np.nanmin(cd45_sub))
-    data_max = float(np.nanpercentile(cd45_sub, 99.9))
-    margin = max(abs(data_max - data_min) * 0.15, 1.0)
-    x_min = data_min - margin
-    x_grid = np.linspace(x_min, data_max, n_grid)
-    density = kde(x_grid)
-
-    # ── 4. Détection de la vallée ─────────────────────────────────────────────
-    kde_valley: Optional[float] = None
-    peaks_idx, _ = find_peaks(
-        -density, prominence=(density.max() - density.min()) * 0.005
-    )
-    if len(peaks_idx) > 0:
-        kde_valley = float(x_grid[peaks_idx[0]])
-    else:
-        # Fallback : minimum local autour du seuil GMM
-        fb = (x_grid >= gmm_threshold - margin) & (x_grid <= gmm_threshold + margin)
-        if fb.any():
-            kde_valley = float(x_grid[fb][np.argmin(density[fb])])
+    # ── 4. Stats du masque réel (pipeline) ────────────────────────────────────
+    n_cd45_neg = int((~mask_cd45).sum())
+    n_cd45_pos = n_total - n_cd45_neg
+    pct_neg = 100.0 * n_cd45_neg / n_total
+    pct_pos = 100.0 - pct_neg
 
     # ── 5. Visualisation ──────────────────────────────────────────────────────
     BG = "#1e1e2f"
@@ -1123,99 +1082,80 @@ def plot_cd45_kde_qc(
     GRID = "#2d2d4e"
     RED_F = "#ef4444"
     GRN_F = "#22c55e"
-    RED_L = "#ff6b6b"
-    BLU_L = "#60a5fa"
-    PURPLE = "#a78bfa"
+    AMBER = "#f9e2af"
 
     if ax is None:
-        fig, ax = plt.subplots(figsize=(12, 5), facecolor=BG)
+        fig, ax = plt.subplots(figsize=(13, 5.5), facecolor=BG)
     else:
         fig = ax.get_figure()
         fig.patch.set_facecolor(BG)
 
     ax.set_facecolor(PANEL)
+
+    # Histogramme en arrière-plan
+    ax.hist(
+        cd45_valid, bins=200, density=True, alpha=0.20, color="#89b4fa",
+        edgecolor="none", label="_nolegend_",
+    )
+
+    # Zones colorées CD45− / CD45+
     ax.fill_between(
-        x_grid,
-        density,
-        where=(x_grid <= gmm_threshold),
-        color=RED_F,
-        alpha=0.35,
-        label=neg_label,
+        x_grid, density, where=(x_grid < threshold),
+        color=RED_F, alpha=0.30, label=f"CD45− ({n_cd45_neg:,} | {pct_neg:.1f}%)",
     )
     ax.fill_between(
-        x_grid,
-        density,
-        where=(x_grid > gmm_threshold),
-        color=GRN_F,
-        alpha=0.30,
-        label="CD45+ conservés",
+        x_grid, density, where=(x_grid >= threshold),
+        color=GRN_F, alpha=0.30, label=f"CD45+ ({n_cd45_pos:,} | {pct_pos:.1f}%)",
     )
-    ax.plot(x_grid, density, color=TXT, linewidth=1.8, label="KDE CD45")
+
+    # Courbe KDE
+    ax.plot(x_grid, density, color=TXT, linewidth=2.0, label="KDE CD45", zorder=3)
+
+    # Ligne de seuil
     ax.axvline(
-        gmm_threshold,
-        color=PURPLE,
-        linestyle="--",
-        linewidth=2.5,
-        label=f"Seuil G3 : {gmm_threshold:,.0f}",
+        threshold, color=AMBER, linestyle="--", linewidth=2.5, zorder=4,
+        label=f"Seuil KDE ({method_tag}) : {threshold:.3f}",
     )
 
-    if kde_valley is not None:
-        ax.axvline(
-            kde_valley,
-            color=BLU_L,
-            linestyle="--",
-            linewidth=2.0,
-            label=f"Vallée KDE : {kde_valley:,.0f}",
-        )
-        delta = abs(gmm_threshold - kde_valley)
-        ax.annotate(
-            f"Δ = {delta:,.0f}",
-            xy=((gmm_threshold + kde_valley) / 2, 0.88),
-            xycoords=("data", "axes fraction"),
-            ha="center",
-            va="top",
-            color=TXT,
-            fontsize=9,
-        )
+    # Ligne horizontale seuil_abs (5% du max)
+    ax.axhline(
+        seuil_abs, color=AMBER, linestyle=":", linewidth=1.0, alpha=0.5,
+        label=f"Seuil relatif ({100*kde_seuil_relatif:.0f}% du max)",
+    )
 
-    n_cd45_neg = int((~mask_cd45).sum())
-    pct_neg = 100.0 * n_cd45_neg / n_total
+    # Annotation fléchée sur le seuil
+    y_ann = density.max() * 0.50
+    ax.annotate(
+        f"  {threshold:.3f}",
+        xy=(threshold, y_ann),
+        xytext=(threshold + (x_grid[-1] - x_grid[0]) * 0.05, y_ann),
+        color=AMBER, fontsize=10, fontweight="bold",
+        arrowprops=dict(arrowstyle="->", color=AMBER, lw=1.5),
+        zorder=5,
+    )
+
+    # Point du pic max
+    ax.plot(
+        x_grid[idx_max], density[idx_max], "o",
+        color=TXT, markersize=6, zorder=5, label=f"Pic max : {x_grid[idx_max]:.3f}",
+    )
+
+    # ── Encadré stats ─────────────────────────────────────────────────────────
     stats_text = (
-        f"Total   : {n_total:,}\n"
-        f"CD45−   : {n_cd45_neg:,} ({pct_neg:.1f}%)\n"
-        f"CD45+   : {n_total - n_cd45_neg:,} ({100 - pct_neg:.1f}%)\n"
-        f"KDE sur : {len(finite_sub):,} pts"
+        f"Total     : {n_total:,}\n"
+        f"CD45−     : {n_cd45_neg:,} ({pct_neg:.1f}%)\n"
+        f"CD45+     : {n_cd45_pos:,} ({pct_pos:.1f}%)\n"
+        f"Finesse   : {kde_finesse}\n"
+        f"Seuil rel.: {kde_seuil_relatif}"
     )
     ax.text(
-        0.98,
-        0.97,
-        stats_text,
-        transform=ax.transAxes,
-        ha="right",
-        va="top",
-        fontsize=8.5,
-        color=TXT,
-        family="monospace",
+        0.98, 0.97, stats_text,
+        transform=ax.transAxes, ha="right", va="top",
+        fontsize=8.5, color=TXT, family="monospace",
         bbox=dict(facecolor=BG, edgecolor=GRID, alpha=0.85, pad=6),
     )
 
-    ax.set_xlabel("CD45 (unités linéaires)", color=TXT, fontsize=11)
-    ax.set_ylabel("Densité KDE", color=TXT, fontsize=11)
-    ax.set_title(title, color=TXT, fontsize=13, pad=12)
-    ax.tick_params(colors=TXT, labelsize=9)
-    ax.xaxis.set_major_formatter(
-        plt.FuncFormatter(lambda v, _: f"{int(v):,}".replace(",", " "))
-    )
-    for spine in ax.spines.values():
-        spine.set_edgecolor(GRID)
-    ax.grid(True, color=GRID, linewidth=0.7, linestyle="--", alpha=0.6)
-    ax.set_xlim(x_min, data_max)
-    ax.set_ylim(bottom=0, top=np.max(density) * 1.05)
-    ax.legend(
-        loc="upper left", fontsize=9, facecolor=BG, edgecolor=GRID, labelcolor=TXT
-    )
-
-    # ── Encadré : CD45+/CD45− dans la moelle pathologique ─────────────────────
+    # ── Encadré pathologique ──────────────────────────────────────────────────
     if conditions is not None:
         cond_arr = np.asarray(conditions).ravel()
         if len(cond_arr) == len(mask_cd45):
@@ -1224,37 +1164,51 @@ def plot_cd45_kde_qc(
             if n_patho_total > 0:
                 n_patho_pos = int((patho_mask & mask_cd45).sum())
                 n_patho_neg = int((patho_mask & ~mask_cd45).sum())
-                pct_pos = 100.0 * n_patho_pos / n_patho_total
-                pct_neg = 100.0 * n_patho_neg / n_patho_total
+                p_pos = 100.0 * n_patho_pos / n_patho_total
+                p_neg = 100.0 * n_patho_neg / n_patho_total
                 patho_text = (
                     "─ Moelle pathologique ─\n"
-                    f"CD45+  : {n_patho_pos:,} ({pct_pos:.1f}%)\n"
-                    f"CD45−  : {n_patho_neg:,} ({pct_neg:.1f}%)\n"
+                    f"CD45+  : {n_patho_pos:,} ({p_pos:.1f}%)\n"
+                    f"CD45−  : {n_patho_neg:,} ({p_neg:.1f}%)\n"
                     f"Total  : {n_patho_total:,}"
                 )
                 ax.text(
-                    0.98, 0.60,
-                    patho_text,
-                    transform=ax.transAxes,
-                    ha="right", va="top",
+                    0.98, 0.58, patho_text,
+                    transform=ax.transAxes, ha="right", va="top",
                     fontsize=8.5, color=TXT, family="monospace",
                     bbox=dict(
-                        facecolor=BG,
-                        edgecolor="#f38ba8",   # bordure rouge doux (≠ encadré stats)
-                        linewidth=1.4,
-                        alpha=0.90,
-                        pad=6,
+                        facecolor=BG, edgecolor="#f38ba8",
+                        linewidth=1.4, alpha=0.90, pad=6,
                     ),
                 )
+
+    # ── Axes ──────────────────────────────────────────────────────────────────
+    ax.set_xlabel("CD45 (espace logicle / arcsinh)", color=TXT, fontsize=11)
+    ax.set_ylabel("Densité KDE", color=TXT, fontsize=11)
+    ax.set_title(title, color=TXT, fontsize=13, pad=12)
+    ax.tick_params(colors=TXT, labelsize=9)
+    for spine in ax.spines.values():
+        spine.set_edgecolor(GRID)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(True, color=GRID, linewidth=0.5, linestyle="--", alpha=0.4)
+    ax.set_xlim(x_grid[0], x_grid[-1])
+    ax.set_ylim(bottom=0, top=density.max() * 1.08)
+    ax.legend(
+        loc="upper left", fontsize=8.5, facecolor=BG, edgecolor=GRID,
+        labelcolor=TXT, framealpha=0.9,
+    )
 
     plt.tight_layout()
 
     if output_path is not None:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(str(output_path), dpi=150, bbox_inches="tight")
+        fig.savefig(
+            str(output_path), dpi=150, bbox_inches="tight", facecolor=BG,
+        )
         _logger.info("QC CD45-KDE sauvegardé: %s", output_path)
 
-    return fig, ax, gmm_threshold, kde_valley
+    return fig, ax, threshold, None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
