@@ -1253,9 +1253,12 @@ def _apply_gating_combined(
             _logger.info(
                 "Gate 3 — CD45 [%s] ASYMÉTRIQUE (KDE pied du pic, patho uniquement)", mode
             )
+            # Gating CD45 sur les cellules patho uniquement (X[is_patho_vec])
+            # → évite le bug de broadcasting quand X.shape[0] != n_before
+            X_patho = X[is_patho_vec]
             if mode == "auto":
-                mask_cd45_full = AutoGating.auto_gate_cd45(
-                    X, var_names,
+                mask_cd45_patho = AutoGating.auto_gate_cd45(
+                    X_patho, var_names,
                     kde_seuil_relatif=getattr(pregate_cfg, "kde_cd45_seuil_relatif", 0.05),
                     kde_finesse=getattr(pregate_cfg, "kde_cd45_finesse", 0.6),
                     kde_sigma_smooth=getattr(pregate_cfg, "kde_cd45_sigma_smooth", 10),
@@ -1263,8 +1266,8 @@ def _apply_gating_combined(
                     threshold_percentile=getattr(pregate_cfg, "cd45_threshold_percentile", 5.0),
                 )
             else:
-                mask_cd45_full = PreGating.gate_cd45_positive(
-                    X,
+                mask_cd45_patho = PreGating.gate_cd45_positive(
+                    X_patho,
                     var_names,
                     threshold_percentile=getattr(
                         pregate_cfg, "cd45_min_percentile", 5.0
@@ -1272,7 +1275,7 @@ def _apply_gating_combined(
                 )
             # Appliquer CD45 UNIQUEMENT aux patho (identique au monolithe)
             mask_cd45 = np.ones(n_before, dtype=bool)
-            mask_cd45[is_patho_vec] = mask_cd45_full[is_patho_vec]
+            mask_cd45[is_patho_vec] = mask_cd45_patho
         else:
             _logger.info("Gate 3 — CD45 [%s] sur toutes les cellules", mode)
             if mode == "auto":

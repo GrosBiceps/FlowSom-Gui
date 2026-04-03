@@ -970,7 +970,7 @@ def plot_gmm_vs_kde_qc(
 def plot_cd45_kde_qc(
     cd45_data: np.ndarray,
     mask_cd45: np.ndarray,
-    n_subsample: int = 100_000,
+    n_subsample: int = 15_000,
     random_seed: int = 42,
     ax: Optional[Any] = None,
     title: Optional[str] = None,

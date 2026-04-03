@@ -583,7 +583,13 @@ class AutoGating:
             alpha = 0.9 if kept else 0.4
             label_txt = f"Pop {i} ({'CONSERVÉE' if kept else 'EXCLUE'})"
             try:
-                kde_fn = scipy_kde(fsc_cluster)
+                # Sous-échantillonnage strict : scipy_kde sur 3.8M pts → 68s
+                _GMM_KDE_MAX = 10_000
+                if len(fsc_cluster) > _GMM_KDE_MAX:
+                    fsc_cluster_sub = _rng.choice(fsc_cluster, size=_GMM_KDE_MAX, replace=False)
+                else:
+                    fsc_cluster_sub = fsc_cluster
+                kde_fn = scipy_kde(fsc_cluster_sub)
                 density_vals = kde_fn(fsc_range)
                 # Normaliser par taille relative du cluster
                 weight = cluster_sizes[i] / cluster_sizes.sum()
@@ -1097,14 +1103,21 @@ class AutoGating:
         from scipy.stats import gaussian_kde
         from scipy.ndimage import gaussian_filter1d
 
-        n = len(x_data)
-        std = np.std(x_data)
-        iqr = np.percentile(x_data, 75) - np.percentile(x_data, 25)
+        # Sous-échantillonnage strict : gaussian_kde est O(N²) — 3M pts → 3m33s
+        _KDE_MAX = 10_000
+        if len(x_data) > _KDE_MAX:
+            x_sub = np.random.default_rng(42).choice(x_data, size=_KDE_MAX, replace=False)
+        else:
+            x_sub = x_data
+
+        n = len(x_sub)
+        std = np.std(x_sub)
+        iqr = np.percentile(x_sub, 75) - np.percentile(x_sub, 25)
         bw = 0.9 * min(std, iqr / 1.34) * n ** (-1 / 5) * finesse
         if std < 1e-12:
             # Distribution dégénérée → fallback Otsu
             bw = 0.1
-        kde = gaussian_kde(x_data, bw_method=bw / (std if std > 1e-12 else 1.0))
+        kde = gaussian_kde(x_sub, bw_method=bw / (std if std > 1e-12 else 1.0))
         x_grid = np.linspace(x_data.min(), x_data.max(), n_grid)
         densite = gaussian_filter1d(kde(x_grid), sigma=sigma_smooth)
 
