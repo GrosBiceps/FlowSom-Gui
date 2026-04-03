@@ -257,6 +257,7 @@ def _apply_gating(
                 X,
                 var_names,
                 n_components=getattr(pregate_cfg, "gmm_n_components_debris", 3),
+                gmm_max_samples=getattr(pregate_cfg, "gmm_max_samples", 50000),
                 covariance_type=getattr(pregate_cfg, "gmm_covariance_type", "full"),
                 density_method=getattr(pregate_cfg, "density_method", "GMM"),
             )
@@ -323,6 +324,7 @@ def _apply_gating(
                     kde_finesse=getattr(pregate_cfg, "kde_cd45_finesse", 0.6),
                     kde_sigma_smooth=getattr(pregate_cfg, "kde_cd45_sigma_smooth", 10),
                     kde_n_grid=getattr(pregate_cfg, "kde_cd45_n_grid", 1000),
+                    kde_max_samples=getattr(pregate_cfg, "kde_cd45_max_samples", 10000),
                     threshold_percentile=getattr(
                         pregate_cfg, "cd45_threshold_percentile", 5.0
                     ),
@@ -470,7 +472,7 @@ def preprocess_combined(
     config: "PipelineConfig",
     gating_logger: Optional[GatingLogger] = None,
     gating_plot_dir: "Optional[Path]" = None,
-) -> List[FlowSample]:
+) -> Tuple[List[FlowSample], Dict[str, Any], Dict[str, Any]]:
     """
     Reproduit fidèlement flowsom_pipeline.py.
 
@@ -499,7 +501,11 @@ def preprocess_combined(
         gating_logger: Logger de gating partagé (optionnel).
 
     Returns:
-        Tuple (liste FlowSample prétraités, dict figures matplotlib gating).
+        Tuple (
+            liste FlowSample prétraités,
+            dict figures matplotlib gating,
+            dict de checkpoint gating (masques + métadonnées),
+        ).
     """
     import pandas as _pd
 
@@ -507,7 +513,7 @@ def preprocess_combined(
         gating_logger = GatingLogger()
 
     if not samples:
-        return [], {}
+        return [], {}, {}
 
     # ── 1. Intersection des marqueurs communs ─────────────────────────────────
     common_markers: List[str] = list(samples[0].var_names)
@@ -517,7 +523,7 @@ def preprocess_combined(
 
     if not common_markers:
         _logger.error("Aucun marqueur commun entre tous les fichiers !")
-        return [], {}
+        return [], {}, {}
 
     _logger.info("Panel commun (intersection): %d marqueurs", len(common_markers))
     missing_summary: dict = {}
@@ -701,44 +707,64 @@ def preprocess_combined(
                 var_names, ["CD45", "CD45-PECY5", "CD45-PC5"]
             )
             if _cd45_idx is not None:
-                # Projeter le masque G3 (n_total_raw) dans l'espace post-gating (n_gated)
-                # via _combined_mask retourné par _apply_gating_combined.
+                # Utiliser la population qui ENTRE dans Gate 3 (après G1+G2), pas
+                # la population finale post-gating, sinon les CD45- exclus par G3
+                # disparaissent artificiellement du QC KDE.
                 _raw_g3 = gate_masks.get(
                     "G3_cd45", gate_masks.get("G3", gate_masks.get("cd45"))
                 )
-                if _raw_g3 is not None and _combined_mask is not None:
-                    _mask_g3_local = _raw_g3[_combined_mask]
-                else:
-                    # Gate CD45 désactivée ou combined_mask indisponible → toutes les cellules
-                    _mask_g3_local = np.ones(X_transformed_for_kde.shape[0], dtype=bool)
+                _raw_g1 = gate_masks.get("G1_debris", gate_masks.get("G1"))
+                _raw_g2 = gate_masks.get("G2_singlets", gate_masks.get("G2"))
 
-                # Restreindre le KDE CD45 aux cellules pathologiques uniquement.
-                # Le seuil KDE est plus pertinent sur les blastes (CD45-dim) que
-                # sur les cellules NBM (CD45-high) qui décaleraient le pic principal.
-                # Fast path: conditions sont généralement normalisées en "Sain"/"Pathologique".
-                _is_patho_local = conditions == "Pathologique"
-                if not bool(_is_patho_local.any()):
-                    _patho_labels = {"pathologique", "patho", "aml", "disease"}
-                    _unique_cond = np.unique(conditions)
-                    _patho_values = [
-                        c for c in _unique_cond if str(c).lower() in _patho_labels
-                    ]
-                    _is_patho_local = np.isin(conditions, _patho_values)
-                _n_patho = int(_is_patho_local.sum())
-                if _n_patho >= 5:
-                    _cd45_data_plot = X_transformed_for_kde[_is_patho_local, _cd45_idx]
-                    _mask_g3_plot = _mask_g3_local[_is_patho_local]
-                    _logger.info(
-                        "Plot KDE CD45 : %d cellules pathologiques utilisées (sain exclu)",
-                        _n_patho,
-                    )
+                if _raw_g3 is not None:
+                    _pre_g3_mask = np.ones(len(X_for_plot), dtype=bool)
+                    if _raw_g1 is not None:
+                        _pre_g3_mask &= _raw_g1
+                    if _raw_g2 is not None:
+                        _pre_g3_mask &= _raw_g2
+
+                    _is_patho_global = conditions_for_plot == "Pathologique"
+                    if not bool(_is_patho_global.any()):
+                        _patho_labels = {"pathologique", "patho", "aml", "disease"}
+                        _unique_cond = np.unique(conditions_for_plot)
+                        _patho_values = [
+                            c for c in _unique_cond if str(c).lower() in _patho_labels
+                        ]
+                        _is_patho_global = np.isin(conditions_for_plot, _patho_values)
+
+                    _plot_mask_global = _pre_g3_mask & _is_patho_global
+                    _n_plot = int(_plot_mask_global.sum())
+
+                    if _n_plot >= 5:
+                        _cd45_name = var_for_plot[_cd45_idx]
+                        _cd45_raw_col = X_for_plot[
+                            _plot_mask_global, _cd45_idx
+                        ].reshape(-1, 1)
+                        _cd45_data_plot = _apply_transforms(
+                            _cd45_raw_col,
+                            [_cd45_name],
+                            config,
+                        ).ravel()
+                        _mask_g3_plot = _raw_g3[_plot_mask_global]
+                        _logger.info(
+                            "Plot KDE CD45 : %d cellules pathologiques (pré-G3) utilisées",
+                            _n_plot,
+                        )
+                    else:
+                        # Fallback défensif: conserver l'ancien comportement
+                        _cd45_data_plot = X_transformed_for_kde[:, _cd45_idx]
+                        _mask_g3_plot = np.ones(
+                            X_transformed_for_kde.shape[0], dtype=bool
+                        )
+                        _logger.info(
+                            "Plot KDE CD45 : fallback post-gating (pré-G3 indisponible)"
+                        )
                 else:
-                    # Pas de cellules patho identifiées → utiliser tout
+                    # Gate CD45 désactivée ou masque indisponible
                     _cd45_data_plot = X_transformed_for_kde[:, _cd45_idx]
-                    _mask_g3_plot = _mask_g3_local
+                    _mask_g3_plot = np.ones(X_transformed_for_kde.shape[0], dtype=bool)
                     _logger.info(
-                        "Plot KDE CD45 : aucune cellule pathologique identifiée — "
-                        "toutes les cellules utilisées"
+                        "Plot KDE CD45 : masque G3 indisponible — fallback post-gating"
                     )
 
                 _fig_kde_cd45, _, _, _ = _plot_cd45_kde(
@@ -844,7 +870,14 @@ def preprocess_combined(
         len(processed),
         len(samples),
     )
-    return processed, gating_figures
+    gating_checkpoint = {
+        "gate_masks": gate_masks,
+        "combined_mask": _combined_mask,
+        "var_names_before_gating": var_for_plot,
+        "n_total_raw": int(n_total_raw),
+        "n_after_gating": int(n_after_gate),
+    }
+    return processed, gating_figures, gating_checkpoint
 
 
 def _count_cd45_raw(
@@ -993,6 +1026,7 @@ def _apply_gating_combined(
                 X,
                 var_names,
                 n_components=getattr(pregate_cfg, "gmm_n_components_debris", 3),
+                gmm_max_samples=getattr(pregate_cfg, "gmm_max_samples", 50000),
                 covariance_type=getattr(pregate_cfg, "gmm_covariance_type", "full"),
                 density_method=getattr(pregate_cfg, "density_method", "GMM"),
                 export_plot=_do_gmm_plot,
@@ -1090,6 +1124,7 @@ def _apply_gating_combined(
                     kde_finesse=getattr(pregate_cfg, "kde_cd45_finesse", 0.6),
                     kde_sigma_smooth=getattr(pregate_cfg, "kde_cd45_sigma_smooth", 10),
                     kde_n_grid=getattr(pregate_cfg, "kde_cd45_n_grid", 1000),
+                    kde_max_samples=getattr(pregate_cfg, "kde_cd45_max_samples", 10000),
                     threshold_percentile=getattr(
                         pregate_cfg, "cd45_threshold_percentile", 5.0
                     ),
@@ -1117,6 +1152,7 @@ def _apply_gating_combined(
                     kde_finesse=getattr(pregate_cfg, "kde_cd45_finesse", 0.6),
                     kde_sigma_smooth=getattr(pregate_cfg, "kde_cd45_sigma_smooth", 10),
                     kde_n_grid=getattr(pregate_cfg, "kde_cd45_n_grid", 1000),
+                    kde_max_samples=getattr(pregate_cfg, "kde_cd45_max_samples", 10000),
                     threshold_percentile=getattr(
                         pregate_cfg, "cd45_threshold_percentile", 5.0
                     ),

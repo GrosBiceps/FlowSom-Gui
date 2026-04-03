@@ -96,14 +96,15 @@ class PregateConfig:
     # Méthode d'estimation de densité : "GMM" | "KDE"
     density_method: str = "GMM"
     # Paramètres avancés GMM
-    gmm_covariance_type: str = "full"   # "full" | "tied" | "diag" | "spherical"
-    gmm_n_components_debris: int = 3    # Nombre de composantes pour le gating débris
-    gmm_export_plot: bool = True        # Exporter le graphique des densités GMM
+    gmm_covariance_type: str = "full"  # "full" | "tied" | "diag" | "spherical"
+    gmm_n_components_debris: int = 3  # Nombre de composantes pour le gating débris
+    gmm_export_plot: bool = True  # Exporter le graphique des densités GMM
     # Paramètres KDE 1D pour le gating CD45 (méthode pied du pic)
-    kde_cd45_seuil_relatif: float = 0.05   # Fraction du max densité pour le pied du pic
-    kde_cd45_finesse: float = 0.6          # Facteur bandwidth Silverman
-    kde_cd45_sigma_smooth: int = 10        # Lissage gaussien sur la courbe KDE (sigma)
-    kde_cd45_n_grid: int = 1000            # Résolution de la grille KDE
+    kde_cd45_seuil_relatif: float = 0.05  # Fraction du max densité pour le pied du pic
+    kde_cd45_finesse: float = 0.6  # Facteur bandwidth Silverman
+    kde_cd45_sigma_smooth: int = 10  # Lissage gaussien sur la courbe KDE (sigma)
+    kde_cd45_n_grid: int = 1000  # Résolution de la grille KDE
+    kde_cd45_max_samples: int = 10000  # Sous-échantillonnage max pour KDE CD45
 
 
 @dataclass
@@ -176,6 +177,7 @@ class StratifiedDownsamplingConfig:
             utilisés (réparti équitablement).
         seed: Graine aléatoire pour la reproductibilité.
     """
+
     balance_conditions: bool = False
     imbalance_ratio: float = 2.0
     nbm_ids: List[str] = field(default_factory=list)
@@ -254,24 +256,24 @@ class PopulationMappingConfig:
 class PerformanceMonitoringConfig:
     """Configuration du monitoring de performance système."""
 
-    enabled: bool = False           # true = activer la collecte pendant la pipeline
-    interval_seconds: float = 1.0   # intervalle de collecte en secondes
-    include_gpu: bool = True        # true = collecter les métriques GPU (nécessite gputil)
+    enabled: bool = False  # true = activer la collecte pendant la pipeline
+    interval_seconds: float = 1.0  # intervalle de collecte en secondes
+    include_gpu: bool = True  # true = collecter les métriques GPU (nécessite gputil)
 
 
 @dataclass
 class PathoFcsExportConfig:
     """Configuration de l'export FCS restreint à la moelle pathologique + Is_MRD."""
 
-    enabled: bool = False           # true = générer le FCS pathologique avec Is_MRD
-    mrd_method: str = "flo"         # méthode Is_MRD : "jf" ou "flo"
+    enabled: bool = False  # true = générer le FCS pathologique avec Is_MRD
+    mrd_method: str = "flo"  # méthode Is_MRD : "jf" ou "flo"
 
 
 @dataclass
 class BatchConfig:
     """Configuration du mode traitement par lots (batch)."""
 
-    enabled: bool = False           # true = traiter tous les FCS du dossier patho un par un
+    enabled: bool = False  # true = traiter tous les FCS du dossier patho un par un
 
 
 @dataclass
@@ -286,8 +288,8 @@ class ExportModeConfig:
                    Les figures sont toujours générées car nécessaires aux rapports.
     """
 
-    mode: str = "standard"          # "standard" | "compact"
-    export_csv: bool = True           # false = ne pas exporter les CSV dans le dossier csv (complet, stats, MFI)
+    mode: str = "standard"  # "standard" | "compact"
+    export_csv: bool = True  # false = ne pas exporter les CSV dans le dossier csv (complet, stats, MFI)
     export_per_file_csv: bool = True  # true = exporter un CSV par fichier FCS source
 
 
@@ -315,9 +317,7 @@ class PipelineConfig:
     performance_monitoring: PerformanceMonitoringConfig = field(
         default_factory=PerformanceMonitoringConfig
     )
-    patho_fcs_export: PathoFcsExportConfig = field(
-        default_factory=PathoFcsExportConfig
-    )
+    patho_fcs_export: PathoFcsExportConfig = field(default_factory=PathoFcsExportConfig)
     batch: BatchConfig = field(default_factory=BatchConfig)
     export_mode: ExportModeConfig = field(default_factory=ExportModeConfig)
     stratified_downsampling: StratifiedDownsamplingConfig = field(
@@ -434,6 +434,7 @@ class PipelineConfig:
             "kde_cd45_finesse": "kde_cd45_finesse",
             "kde_cd45_sigma_smooth": "kde_cd45_sigma_smooth",
             "kde_cd45_n_grid": "kde_cd45_n_grid",
+            "kde_cd45_max_samples": "kde_cd45_max_samples",
         }
         for yaml_key, attr in mapping_pregate.items():
             if yaml_key in pg_adv:
@@ -565,9 +566,13 @@ class PipelineConfig:
         sd = raw.get("stratified_downsampling", {})
         if sd:
             if "balance_conditions" in sd:
-                cfg.stratified_downsampling.balance_conditions = bool(sd["balance_conditions"])
+                cfg.stratified_downsampling.balance_conditions = bool(
+                    sd["balance_conditions"]
+                )
             if "imbalance_ratio" in sd:
-                cfg.stratified_downsampling.imbalance_ratio = float(sd["imbalance_ratio"])
+                cfg.stratified_downsampling.imbalance_ratio = float(
+                    sd["imbalance_ratio"]
+                )
             if "nbm_ids" in sd:
                 cfg.stratified_downsampling.nbm_ids = list(sd["nbm_ids"] or [])
             if "seed" in sd:

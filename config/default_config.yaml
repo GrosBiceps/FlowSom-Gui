@@ -31,7 +31,7 @@ pregate_advanced:
   cd34_use_ssc_filter: true   # true = utiliser un filtre supplémentaire sur SSC-A pour les blastes (exclure les CD34+ à SSC élevé qui sont souvent des cellules matures)
   cd34_ssc_max_percentile: 60.0 # Percentile max de SSC-A pour les blastes (bas = blastes à faible granularité, plus typiques)
   # GMM / AutoGating
-  gmm_max_samples: 200000     # Nombre max de cellules pour l'ajustement GMM (sous-échantillonnage si dépassé)
+  gmm_max_samples: 200000     # Gate 1 (débris): nombre max de cellules pour fit/BIC GMM
   ransac_r2_threshold: 0.85   # Seuil R² minimum pour valider la droite RANSAC singlets
   ransac_mad_factor: 3.0      # Facteur MAD pour détecter les outliers RANSAC
   # ── Méthode d'estimation de densité pour le gating viable (débris) ────────────────
@@ -72,6 +72,12 @@ pregate_advanced:
   #   - 4000 → valeur recommandée (précision suffisante pour la cytométrie)
   #   - 8000 → très haute résolution (plus lent, utile pour des données très fines)
   kde_cd45_n_grid: 4000
+
+  # kde_cd45_max_samples : Nombre max d'événements utilisés pour estimer la KDE CD45
+  #   - 10000 → rapide (défaut robuste sur gros jeux)
+  #   - 30000 → plus stable si distributions multimodales fines
+  #   - 80000 → très précis mais plus coûteux CPU/RAM
+  kde_cd45_max_samples: 10000
   # ── Paramètres avancés du GMM ──────────────────────────────────────────────────────
   # covariance_type contrôle la forme des clusters GMM :
   #   "full"     : chaque cluster a sa propre matrice de covariance (défaut) — risque de sur-exclusion

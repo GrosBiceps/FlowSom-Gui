@@ -5,7 +5,7 @@ mrd_parameters:
     clinical_positivity_pct: 0.1
     min_cluster_events: 50
   enabled: true
-  method: all
+  method: jf
   method_flo:
     normal_marrow_multiplier: 2.0
   method_jf:

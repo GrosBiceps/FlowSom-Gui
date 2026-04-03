@@ -48,6 +48,7 @@ def _get_plotlyjs_cached() -> str:
         _PLOTLYJS_CACHE = plotly.offline.get_plotlyjs()
     return _PLOTLYJS_CACHE
 
+
 try:
     import matplotlib.figure
 
@@ -58,14 +59,36 @@ except ImportError:
 
 def _fig_to_base64(fig_mpl: Any, dpi: int = 100) -> str:
     """Convertit une figure matplotlib en string base64 PNG."""
+    text_color = "#e2e8f0"
+    spine_color = "#45475a"
+
+    # Harmonise le contraste pour le rapport HTML (axes/titres toujours lisibles).
+    for ax in getattr(fig_mpl, "axes", []):
+        try:
+            ax.title.set_color(text_color)
+            ax.xaxis.label.set_color(text_color)
+            ax.yaxis.label.set_color(text_color)
+            ax.tick_params(colors=text_color)
+            for spine in ax.spines.values():
+                spine.set_color(spine_color)
+        except Exception:
+            continue
+
     buf = BytesIO()
+    fig_face = (
+        fig_mpl.get_facecolor() if hasattr(fig_mpl, "get_facecolor") else "#1e1e2e"
+    )
+    # Si figure transparente, forcer un fond sombre pour préserver le contraste
+    if isinstance(fig_face, tuple) and len(fig_face) == 4 and fig_face[3] == 0:
+        fig_face = "#1e1e2e"
     fig_mpl.savefig(
         buf,
         format="png",
         dpi=dpi,
         bbox_inches="tight",
-        facecolor="white",
+        facecolor=fig_face,
         edgecolor="none",
+        transparent=False,
     )
     buf.seek(0)
     return base64.b64encode(buf.read()).decode("utf-8")
@@ -291,12 +314,12 @@ def generate_html_report(
         _patho_banner = (
             f'<div class="patho-banner">'
             f'  <div class="patho-icon">&#9888;</div>'
-            f'  <div>'
+            f"  <div>"
             f'    <div class="patho-title">Moelle pathologique analysée</div>'
             f'    <div class="patho-name">{_pname}</div>'
             f'    <div class="patho-date">Date du prélèvement : <strong>{_pdate}</strong></div>'
-            f'  </div>'
-            f'</div>'
+            f"  </div>"
+            f"</div>"
         )
 
     # ── Script Plotly.js ──────────────────────────────────────────────────
@@ -421,9 +444,9 @@ def generate_html_report(
                 mpl_sections += (
                     f'<div class="section">\n'
                     f"  <h2>{label}</h2>\n"
-                    f'  <div style="text-align:center;">\n'
+                    f'  <div style="text-align:center; background:#1e1e2e; padding:12px; border-radius:8px;">\n'
                     f'    <img src="data:image/png;base64,{b64}" '
-                    f'style="max-width:100%; border-radius:8px; '
+                    f'style="max-width:100%; border-radius:6px; '
                     f'box-shadow:0 2px 8px rgba(0,0,0,0.1);" />\n'
                     f"  </div>\n"
                     f"</div>\n"
@@ -477,9 +500,21 @@ def generate_html_report(
             slope_val = rdata.get("slope", float("nan"))
             intercept_val = rdata.get("intercept", float("nan"))
             pct_val = rdata.get("pct_singlets", rdata.get("pct", None))
-            r2_str = f"{r2_val:.4f}" if isinstance(r2_val, float) and r2_val == r2_val else "N/A"
-            slope_str = f"{slope_val:.4f}" if isinstance(slope_val, float) and slope_val == slope_val else "N/A"
-            intercept_str = f"{intercept_val:.4f}" if isinstance(intercept_val, float) and intercept_val == intercept_val else "N/A"
+            r2_str = (
+                f"{r2_val:.4f}"
+                if isinstance(r2_val, float) and r2_val == r2_val
+                else "N/A"
+            )
+            slope_str = (
+                f"{slope_val:.4f}"
+                if isinstance(slope_val, float) and slope_val == slope_val
+                else "N/A"
+            )
+            intercept_str = (
+                f"{intercept_val:.4f}"
+                if isinstance(intercept_val, float) and intercept_val == intercept_val
+                else "N/A"
+            )
             pct_str = f"{pct_val:.1f}%" if pct_val is not None else "N/A"
             ransac_rows += (
                 f"<tr>"
@@ -508,7 +543,9 @@ def generate_html_report(
         {ransac_rows}
     </table>
 </div>"""
-        _toc_ransac = '\n        <li><a href="#ransac">8. Résumé RANSAC (Singlets)</a></li>'
+        _toc_ransac = (
+            '\n        <li><a href="#ransac">8. Résumé RANSAC (Singlets)</a></li>'
+        )
 
     html = f"""<!DOCTYPE html>
 <html lang="fr">

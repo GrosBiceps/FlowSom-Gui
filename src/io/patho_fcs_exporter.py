@@ -68,15 +68,11 @@ def export_patho_mrd_fcs(
         True si succès, False sinon.
     """
     if mrd_result is None:
-        _logger.warning(
-            "export_patho_mrd_fcs: mrd_result est None — export annulé."
-        )
+        _logger.warning("export_patho_mrd_fcs: mrd_result est None — export annulé.")
         return False
 
     if df_fcs is None or df_fcs.empty:
-        _logger.warning(
-            "export_patho_mrd_fcs: df_fcs vide ou None — export annulé."
-        )
+        _logger.warning("export_patho_mrd_fcs: df_fcs vide ou None — export annulé.")
         return False
 
     mrd_method = mrd_method.lower().strip()
@@ -121,15 +117,38 @@ def export_patho_mrd_fcs(
         )
         df_patho["Is_MRD"] = np.float32(0.0)
     else:
-        # Choisir le flag selon la méthode
-        flag_attr = "is_mrd_flo" if mrd_method == "flo" else "is_mrd_jf"
+        # Choisir le flag selon la méthode demandée, avec fallback robuste:
+        # si la méthode choisie ne détecte aucun nœud mais l'autre oui,
+        # on bascule automatiquement pour éviter un Is_MRD tout à 0 incohérent.
+        n_nodes_jf = int(
+            sum(bool(getattr(node, "is_mrd_jf", False)) for node in per_node)
+        )
+        n_nodes_flo = int(
+            sum(bool(getattr(node, "is_mrd_flo", False)) for node in per_node)
+        )
+
+        effective_method = mrd_method
+        if mrd_method == "flo" and n_nodes_flo == 0 and n_nodes_jf > 0:
+            _logger.warning(
+                "Is_MRD: méthode FLO vide (0 nœud MRD) mais JF détecte %d nœud(s) — bascule automatique vers JF.",
+                n_nodes_jf,
+            )
+            effective_method = "jf"
+        elif mrd_method == "jf" and n_nodes_jf == 0 and n_nodes_flo > 0:
+            _logger.warning(
+                "Is_MRD: méthode JF vide (0 nœud MRD) mais FLO détecte %d nœud(s) — bascule automatique vers FLO.",
+                n_nodes_flo,
+            )
+            effective_method = "flo"
+
+        flag_attr = "is_mrd_flo" if effective_method == "flo" else "is_mrd_jf"
         node_to_mrd: dict = {
-            node.cluster_id: float(getattr(node, flag_attr, False))
-            for node in per_node
+            node.cluster_id: float(getattr(node, flag_attr, False)) for node in per_node
         }
 
         # FlowSOM_cluster est 1-based → node_id 0-based = cluster - 1
-        cluster_col = df_patho["FlowSOM_cluster"].values.astype(np.int32) - 1
+        cluster_col = np.rint(df_patho["FlowSOM_cluster"].values).astype(np.int32) - 1
+        cluster_col = np.clip(cluster_col, 0, None)
         n_nodes = int(cluster_col.max()) + 1 if len(cluster_col) > 0 else 0
         lookup = np.array(
             [node_to_mrd.get(nid, 0.0) for nid in range(n_nodes)],
@@ -142,7 +161,7 @@ def export_patho_mrd_fcs(
         pct_mrd = 100.0 * n_mrd_cells / n_patho if n_patho > 0 else 0.0
         _logger.info(
             "  Is_MRD (%s) : %d cellules MRD / %d patho (%.2f%%)",
-            mrd_method.upper(),
+            effective_method.upper(),
             n_mrd_cells,
             n_patho,
             pct_mrd,

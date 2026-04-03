@@ -94,6 +94,7 @@ class AutoGating:
         """
         if max_samples is None:
             max_samples = GMM_MAX_SAMPLES
+        max_samples = max(1, int(max_samples))
         if data.shape[0] > max_samples:
             idx = _rng.choice(data.shape[0], size=max_samples, replace=False)
             _logger.debug(
@@ -218,6 +219,7 @@ class AutoGating:
         var_names: List[str],
         n_components: int = 3,
         min_cluster_fraction: float = 0.02,
+        gmm_max_samples: int = GMM_MAX_SAMPLES,
         covariance_type: str = "full",
         density_method: str = "GMM",
         export_plot: bool = False,
@@ -241,6 +243,7 @@ class AutoGating:
             var_names: Noms des marqueurs
             n_components: Nombre max de composantes GMM à tester (2 ou 3)
             min_cluster_fraction: Fraction min d'événements pour inclure un cluster
+            gmm_max_samples: Nombre max de cellules utilisées pour le fit/BIC GMM
             covariance_type: Type de covariance GMM ('full', 'tied', 'diag', 'spherical')
             density_method: 'GMM' ou 'KDE'
             export_plot: Si True, exporte un graphique des densités GMM
@@ -300,8 +303,10 @@ class AutoGating:
                 )
                 bic = gmm_test.bic(
                     data_scaled
-                    if data_scaled.shape[0] <= GMM_MAX_SAMPLES
-                    else AutoGating._subsample_for_gmm(data_scaled)
+                    if data_scaled.shape[0] <= int(gmm_max_samples)
+                    else AutoGating._subsample_for_gmm(
+                        data_scaled, max_samples=int(gmm_max_samples)
+                    )
                 )
                 if bic < best_bic:
                     best_bic = bic
@@ -1090,6 +1095,7 @@ class AutoGating:
         finesse: float = 0.6,
         sigma_smooth: int = 10,
         n_grid: int = 1000,
+        max_samples: int = 10000,
     ):
         """
         Détection du seuil CD45 par KDE 1D + pied du pic (méthode vallée robuste).
@@ -1116,7 +1122,7 @@ class AutoGating:
         from scipy.ndimage import gaussian_filter1d
 
         # Sous-échantillonnage strict : gaussian_kde est O(N²) — 3M pts → 3m33s
-        _KDE_MAX = 10_000
+        _KDE_MAX = max(1000, int(max_samples))
         if len(x_data) > _KDE_MAX:
             x_sub = np.random.default_rng(42).choice(
                 x_data, size=_KDE_MAX, replace=False
@@ -1174,6 +1180,7 @@ class AutoGating:
         kde_finesse: float = 0.6,
         kde_sigma_smooth: int = 10,
         kde_n_grid: int = 1000,
+        kde_max_samples: int = 10000,
         threshold_percentile: float = 5.0,
     ) -> np.ndarray:
         """
@@ -1194,6 +1201,7 @@ class AutoGating:
             kde_finesse: Facteur bandwidth Silverman (0.3=très fin → 1.0=très lissé)
             kde_sigma_smooth: Lissage gaussien supplémentaire sur la courbe KDE (sigma)
             kde_n_grid: Résolution de la grille KDE
+            kde_max_samples: Nombre max d'événements utilisés pour estimer la KDE
             threshold_percentile: Percentile fallback ultime si KDE/Otsu échouent
 
         Returns:
@@ -1234,6 +1242,7 @@ class AutoGating:
                 finesse=kde_finesse,
                 sigma_smooth=kde_sigma_smooth,
                 n_grid=kde_n_grid,
+                max_samples=kde_max_samples,
             )
             # Reconvertir le seuil de l'espace log vers l'espace linéaire
             threshold = 10.0 ** (threshold_log / _scale) - 1.0
