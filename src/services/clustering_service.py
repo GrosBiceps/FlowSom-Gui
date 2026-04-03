@@ -250,17 +250,21 @@ def stack_raw_markers(
             all_origins.append(np.full(n, s.name, dtype=object))
 
     X = np.vstack(all_X)
-    obs = pd.DataFrame({
-        "condition": np.concatenate(all_conditions),
-        "file_origin": np.concatenate(all_origins),
-    })
+    obs = pd.DataFrame(
+        {
+            "condition": np.concatenate(all_conditions),
+            "file_origin": np.concatenate(all_origins),
+        }
+    )
     return X, raw_var_names, obs
 
 
 def run_clustering(
     samples: List[FlowSample],
     config: PipelineConfig,
-) -> Tuple[np.ndarray, np.ndarray, FlowSOMClusterer, List[str], np.ndarray, pd.DataFrame, List]:
+) -> Tuple[
+    np.ndarray, np.ndarray, FlowSOMClusterer, List[str], np.ndarray, pd.DataFrame, List
+]:
     """
     Exécute le clustering FlowSOM complet sur la liste d'échantillons.
 
@@ -294,12 +298,22 @@ def run_clustering(
         # depuis les échantillons dont la condition est "Healthy".
         nbm_ids = list(sd_cfg.nbm_ids)
         if not nbm_ids:
-            _HEALTHY_CONDITIONS = {"Healthy", "Sain", "sain", "healthy", "Normal", "normal", "NBM"}
+            _HEALTHY_CONDITIONS = {
+                "Healthy",
+                "Sain",
+                "sain",
+                "healthy",
+                "Normal",
+                "normal",
+                "NBM",
+            }
             nbm_ids = [s.name for s in samples if s.condition in _HEALTHY_CONDITIONS]
             _logger.info(
                 "nbm_ids non spécifiés → auto-détection: %d fichiers NBM (conditions: %s)",
                 len(nbm_ids),
-                sorted({s.condition for s in samples if s.condition in _HEALTHY_CONDITIONS}),
+                sorted(
+                    {s.condition for s in samples if s.condition in _HEALTHY_CONDITIONS}
+                ),
             )
 
         # Ajouter un index local par fichier pour pouvoir retrouver les lignes
@@ -327,20 +341,29 @@ def run_clustering(
         # Reconstruire des FlowSample synthétiques à partir du DataFrame équilibré,
         # un par fichier source, pour conserver condition/file_origin par cellule.
         from flowsom_pipeline_pro.src.models.sample import FlowSample as _FlowSample
+
         _meta_cols = {"condition", "file_origin", "class", _IDX_COL}
         _marker_cols = [c for c in df_balanced.columns if c not in _meta_cols]
         _balanced_samples: List[_FlowSample] = []
         for _fname, _grp in df_balanced.groupby("file_origin", sort=False):
-            _cond = _grp["condition"].iloc[0] if "condition" in _grp.columns else "Unknown"
+            _cond = (
+                _grp["condition"].iloc[0] if "condition" in _grp.columns else "Unknown"
+            )
             # Sample original pour récupérer le raw_data si disponible
             _orig = next((s for s in samples if s.name == _fname), None)
             _df_markers = _grp[_marker_cols].reset_index(drop=True)
 
             # Propager raw_data en sélectionnant les lignes correspondantes
             _raw_data_balanced: Optional[pd.DataFrame] = None
-            if _orig is not None and _orig.raw_data is not None and _IDX_COL in _grp.columns:
+            if (
+                _orig is not None
+                and _orig.raw_data is not None
+                and _IDX_COL in _grp.columns
+            ):
                 _cell_indices = _grp[_IDX_COL].values.astype(int)
-                _raw_data_balanced = _orig.raw_data.iloc[_cell_indices].reset_index(drop=True)
+                _raw_data_balanced = _orig.raw_data.iloc[_cell_indices].reset_index(
+                    drop=True
+                )
 
             _s = _FlowSample(
                 name=str(_fname),
@@ -518,30 +541,36 @@ def build_cells_dataframe(
         DataFrame complet.
     """
     df = pd.DataFrame(X_raw, columns=var_names)
-    df["condition"] = (
-        obs["condition"].values if "condition" in obs.columns else "Unknown"
+    condition_values = (
+        obs["condition"].to_numpy(copy=False)
+        if "condition" in obs.columns
+        else np.full(X_raw.shape[0], "Unknown", dtype=object)
     )
-    df["file_origin"] = (
-        obs["file_origin"].values if "file_origin" in obs.columns else ""
+    file_origin_values = (
+        obs["file_origin"].to_numpy(copy=False)
+        if "file_origin" in obs.columns
+        else np.full(X_raw.shape[0], "", dtype=object)
     )
+    df["condition"] = condition_values
+    df["file_origin"] = file_origin_values
     df["FlowSOM_metacluster"] = metaclustering.astype(np.int32)
     df["FlowSOM_cluster"] = clustering.astype(np.int32)
 
-    # Encodage numérique de la condition pour export FCS
-    conditions_unique = sorted(df["condition"].unique())
-    cond_to_int = {c: i + 1 for i, c in enumerate(conditions_unique)}
-    df["Condition_Num"] = df["condition"].map(cond_to_int).astype(np.float32)
+    # Encodage numérique vectorisé (évite .map sur des millions de lignes)
+    conditions_unique, cond_inverse = np.unique(condition_values, return_inverse=True)
+    df["Condition_Num"] = (cond_inverse + 1).astype(np.float32)
     df["Condition"] = df["condition"]
 
-    # Extraction du timepoint depuis le nom de fichier (suivi longitudinal MRD)
-    if "file_origin" in df.columns:
-        tp_str_list = []
-        tp_num_list = []
-        for fname in df["file_origin"]:
+    # Extraction timepoint par fichier unique (vectorisé via indices inverses)
+    if file_origin_values.size > 0:
+        unique_files, file_inverse = np.unique(file_origin_values, return_inverse=True)
+        tp_str_unique = np.empty(unique_files.shape[0], dtype=object)
+        tp_num_unique = np.empty(unique_files.shape[0], dtype=np.int64)
+        for i, fname in enumerate(unique_files):
             tp_str, tp_num = extract_date_from_filename(str(fname))
-            tp_str_list.append(tp_str)
-            tp_num_list.append(tp_num)
-        df["Timepoint"] = tp_str_list
-        df["Timepoint_Num"] = np.array(tp_num_list, dtype=np.int64)
+            tp_str_unique[i] = tp_str
+            tp_num_unique[i] = tp_num
+        df["Timepoint"] = tp_str_unique[file_inverse]
+        df["Timepoint_Num"] = tp_num_unique[file_inverse]
 
     return df

@@ -756,11 +756,12 @@ def plot_gmm_vs_kde_qc(
         return None, None, 0.0, None
 
     try:
-        from scipy.stats import gaussian_kde
+        from scipy.ndimage import gaussian_filter1d
         from scipy.signal import find_peaks
+        from scipy.stats import gaussian_kde
     except ImportError:
         _logger.warning(
-            "scipy requis pour plot_gmm_vs_kde_qc (gaussian_kde, find_peaks)"
+            "scipy requis pour plot_gmm_vs_kde_qc (gaussian_kde, find_peaks, gaussian_filter1d)"
         )
         return None, None, 0.0, None
 
@@ -830,14 +831,28 @@ def plot_gmm_vs_kde_qc(
         _logger.warning("plot_gmm_vs_kde_qc: trop peu de valeurs finies pour KDE.")
         return None, None, gmm_threshold, None
 
-    kde = gaussian_kde(finite_sub, bw_method="scott")
     data_min = float(np.nanmin(fsc_sub))
     data_max = float(np.nanpercentile(fsc_sub, 99.9))
     x_min = min(
         valley_range[0], data_min - max(150_000.0, (data_max - data_min) * 0.15)
     )
-    x_grid = np.linspace(x_min, data_max, n_grid)
-    density = kde(x_grid)
+    n_grid = int(np.clip(n_grid, 300, 700))
+    use_fast_density = len(finite_sub) > 5_000
+
+    if use_fast_density:
+        # Histogramme lissé: beaucoup plus rapide que gaussian_kde sur gros volumes.
+        hist_counts, hist_edges = np.histogram(
+            finite_sub,
+            bins=max(120, n_grid // 2),
+            range=(x_min, data_max),
+            density=True,
+        )
+        x_grid = 0.5 * (hist_edges[:-1] + hist_edges[1:])
+        density = gaussian_filter1d(hist_counts.astype(np.float64), sigma=2.0)
+    else:
+        kde = gaussian_kde(finite_sub, bw_method="scott")
+        x_grid = np.linspace(x_min, data_max, n_grid)
+        density = kde(x_grid)
 
     # ── 4. Détection de la vallée ─────────────────────────────────────────────
     vm = (x_grid >= valley_range[0]) & (x_grid <= valley_range[1])
@@ -879,6 +894,7 @@ def plot_gmm_vs_kde_qc(
         color=RED_F,
         alpha=0.35,
         label=debris_label,
+        rasterized=True,
     )
     ax.fill_between(
         x_grid,
@@ -887,8 +903,17 @@ def plot_gmm_vs_kde_qc(
         color=GRN_F,
         alpha=0.30,
         label="Cellules conservées",
+        rasterized=True,
     )
-    ax.plot(x_grid, density, color=TXT, linewidth=1.8, label="KDE FSC-A")
+    density_label = "Densité FSC-A (hist lissé)" if use_fast_density else "KDE FSC-A"
+    ax.plot(
+        x_grid,
+        density,
+        color=TXT,
+        linewidth=1.8,
+        label=density_label,
+        rasterized=True,
+    )
     ax.axvline(
         gmm_threshold,
         color=RED_L,
@@ -1016,8 +1041,8 @@ def plot_cd45_kde_qc(
         return None, None, 0.0, None
 
     try:
-        from scipy.stats import gaussian_kde
         from scipy.ndimage import gaussian_filter1d
+        from scipy.stats import gaussian_kde
     except ImportError:
         _logger.warning("scipy requis pour plot_cd45_kde_qc")
         return None, None, 0.0, None
@@ -1044,33 +1069,54 @@ def plot_cd45_kde_qc(
     n_sub = min(n_subsample, len(cd45_valid))
     sub = cd45_valid[rng.choice(len(cd45_valid), size=n_sub, replace=False)]
 
-    # ── 2. KDE Silverman adaptatif (identique à _kde1d_seuil_pied_pic) ────────
-    n = len(sub)
-    std = np.std(sub)
-    iqr = np.percentile(sub, 75) - np.percentile(sub, 25)
-    bw = 0.9 * min(std, iqr / 1.34) * n ** (-1 / 5) * kde_finesse
-    if std < 1e-12:
-        bw = 0.1
-    kde = gaussian_kde(sub, bw_method=bw / (std if std > 1e-12 else 1.0))
-    x_grid = np.linspace(cd45_valid.min(), cd45_valid.max(), kde_n_grid)
-    density = gaussian_filter1d(kde(x_grid), sigma=kde_sigma_smooth)
+    # ── 2. Densité visuelle: KDE exact (petits jeux) ou histogramme lissé ─────
+    kde_n_grid = int(np.clip(kde_n_grid, 250, 700))
+    use_fast_density = len(sub) > 5_000
+    if use_fast_density:
+        hist_counts, hist_edges = np.histogram(
+            sub,
+            bins=max(100, kde_n_grid // 2),
+            range=(float(cd45_valid.min()), float(cd45_valid.max())),
+            density=True,
+        )
+        x_grid = 0.5 * (hist_edges[:-1] + hist_edges[1:])
+        density = gaussian_filter1d(
+            hist_counts.astype(np.float64), sigma=max(1.0, kde_sigma_smooth / 4)
+        )
+    else:
+        n = len(sub)
+        std = np.std(sub)
+        iqr = np.percentile(sub, 75) - np.percentile(sub, 25)
+        bw = 0.9 * min(std, iqr / 1.34) * n ** (-1 / 5) * kde_finesse
+        if std < 1e-12:
+            bw = 0.1
+        kde = gaussian_kde(sub, bw_method=bw / (std if std > 1e-12 else 1.0))
+        x_grid = np.linspace(cd45_valid.min(), cd45_valid.max(), kde_n_grid)
+        density = gaussian_filter1d(kde(x_grid), sigma=kde_sigma_smooth)
 
     # ── 3. Seuil pied du pic ─────────────────────────────────────────────────
     seuil_abs = density.max() * kde_seuil_relatif
     idx_max = int(np.argmax(density))
     threshold = x_grid[0]
-    method_tag = "Otsu fallback"
+    method_tag = "pied non trouvé (borne gauche)"
     for i in range(idx_max, 0, -1):
         if density[i] < seuil_abs:
             threshold = float(x_grid[i])
             method_tag = "pied du pic"
             break
 
+    # Si le masque venant du pipeline est trivial, on recalcule un masque
+    # d'affichage depuis le seuil local pour une QC plus lisible.
+    mask_cd45_vis = mask_cd45.copy()
+    if bool(mask_cd45_vis.all()) or (not bool(mask_cd45_vis.any())):
+        mask_cd45_vis = np.zeros_like(mask_cd45_vis, dtype=bool)
+        mask_cd45_vis[valid] = cd45_data[valid] >= threshold
+
     if title is None:
         title = "QC Gate 3 — Auto-gating CD45 (KDE pied du pic)"
 
     # ── 4. Stats du masque réel (pipeline) ────────────────────────────────────
-    n_cd45_neg = int((~mask_cd45).sum())
+    n_cd45_neg = int((~mask_cd45_vis).sum())
     n_cd45_pos = n_total - n_cd45_neg
     pct_neg = 100.0 * n_cd45_neg / n_total
     pct_pos = 100.0 - pct_neg
@@ -1094,33 +1140,66 @@ def plot_cd45_kde_qc(
 
     # Histogramme en arrière-plan
     ax.hist(
-        cd45_valid, bins=200, density=True, alpha=0.20, color="#89b4fa",
-        edgecolor="none", label="_nolegend_",
+        cd45_valid,
+        bins=200,
+        density=True,
+        alpha=0.20,
+        color="#89b4fa",
+        edgecolor="none",
+        label="_nolegend_",
+        rasterized=True,
     )
 
     # Zones colorées CD45− / CD45+
     ax.fill_between(
-        x_grid, density, where=(x_grid < threshold),
-        color=RED_F, alpha=0.30, label=f"CD45− ({n_cd45_neg:,} | {pct_neg:.1f}%)",
+        x_grid,
+        density,
+        where=(x_grid < threshold),
+        color=RED_F,
+        alpha=0.30,
+        label=f"CD45− ({n_cd45_neg:,} | {pct_neg:.1f}%)",
+        rasterized=True,
     )
     ax.fill_between(
-        x_grid, density, where=(x_grid >= threshold),
-        color=GRN_F, alpha=0.30, label=f"CD45+ ({n_cd45_pos:,} | {pct_pos:.1f}%)",
+        x_grid,
+        density,
+        where=(x_grid >= threshold),
+        color=GRN_F,
+        alpha=0.30,
+        label=f"CD45+ ({n_cd45_pos:,} | {pct_pos:.1f}%)",
+        rasterized=True,
     )
 
     # Courbe KDE
-    ax.plot(x_grid, density, color=TXT, linewidth=2.0, label="KDE CD45", zorder=3)
+    density_label = "Densité CD45 (hist lissé)" if use_fast_density else "KDE CD45"
+    ax.plot(
+        x_grid,
+        density,
+        color=TXT,
+        linewidth=2.0,
+        label=density_label,
+        zorder=3,
+        rasterized=True,
+    )
 
     # Ligne de seuil
     ax.axvline(
-        threshold, color=AMBER, linestyle="--", linewidth=2.5, zorder=4,
+        threshold,
+        color=AMBER,
+        linestyle="--",
+        linewidth=2.5,
+        zorder=4,
         label=f"Seuil KDE ({method_tag}) : {threshold:.3f}",
     )
 
     # Ligne horizontale seuil_abs (5% du max)
     ax.axhline(
-        seuil_abs, color=AMBER, linestyle=":", linewidth=1.0, alpha=0.5,
-        label=f"Seuil relatif ({100*kde_seuil_relatif:.0f}% du max)",
+        seuil_abs,
+        color=AMBER,
+        linestyle=":",
+        linewidth=1.0,
+        alpha=0.5,
+        label=f"Seuil relatif ({100 * kde_seuil_relatif:.0f}% du max)",
     )
 
     # Annotation fléchée sur le seuil
@@ -1129,15 +1208,22 @@ def plot_cd45_kde_qc(
         f"  {threshold:.3f}",
         xy=(threshold, y_ann),
         xytext=(threshold + (x_grid[-1] - x_grid[0]) * 0.05, y_ann),
-        color=AMBER, fontsize=10, fontweight="bold",
+        color=AMBER,
+        fontsize=10,
+        fontweight="bold",
         arrowprops=dict(arrowstyle="->", color=AMBER, lw=1.5),
         zorder=5,
     )
 
     # Point du pic max
     ax.plot(
-        x_grid[idx_max], density[idx_max], "o",
-        color=TXT, markersize=6, zorder=5, label=f"Pic max : {x_grid[idx_max]:.3f}",
+        x_grid[idx_max],
+        density[idx_max],
+        "o",
+        color=TXT,
+        markersize=6,
+        zorder=5,
+        label=f"Pic max : {x_grid[idx_max]:.3f}",
     )
 
     # ── Encadré stats ─────────────────────────────────────────────────────────
@@ -1149,21 +1235,27 @@ def plot_cd45_kde_qc(
         f"Seuil rel.: {kde_seuil_relatif}"
     )
     ax.text(
-        0.98, 0.97, stats_text,
-        transform=ax.transAxes, ha="right", va="top",
-        fontsize=8.5, color=TXT, family="monospace",
+        0.98,
+        0.97,
+        stats_text,
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=8.5,
+        color=TXT,
+        family="monospace",
         bbox=dict(facecolor=BG, edgecolor=GRID, alpha=0.85, pad=6),
     )
 
     # ── Encadré pathologique ──────────────────────────────────────────────────
     if conditions is not None:
         cond_arr = np.asarray(conditions).ravel()
-        if len(cond_arr) == len(mask_cd45):
+        if len(cond_arr) == len(mask_cd45_vis):
             patho_mask = cond_arr == condition_patho
             n_patho_total = int(patho_mask.sum())
             if n_patho_total > 0:
-                n_patho_pos = int((patho_mask & mask_cd45).sum())
-                n_patho_neg = int((patho_mask & ~mask_cd45).sum())
+                n_patho_pos = int((patho_mask & mask_cd45_vis).sum())
+                n_patho_neg = int((patho_mask & ~mask_cd45_vis).sum())
                 p_pos = 100.0 * n_patho_pos / n_patho_total
                 p_neg = 100.0 * n_patho_neg / n_patho_total
                 patho_text = (
@@ -1173,12 +1265,21 @@ def plot_cd45_kde_qc(
                     f"Total  : {n_patho_total:,}"
                 )
                 ax.text(
-                    0.98, 0.58, patho_text,
-                    transform=ax.transAxes, ha="right", va="top",
-                    fontsize=8.5, color=TXT, family="monospace",
+                    0.98,
+                    0.58,
+                    patho_text,
+                    transform=ax.transAxes,
+                    ha="right",
+                    va="top",
+                    fontsize=8.5,
+                    color=TXT,
+                    family="monospace",
                     bbox=dict(
-                        facecolor=BG, edgecolor="#f38ba8",
-                        linewidth=1.4, alpha=0.90, pad=6,
+                        facecolor=BG,
+                        edgecolor="#f38ba8",
+                        linewidth=1.4,
+                        alpha=0.90,
+                        pad=6,
                     ),
                 )
 
@@ -1192,19 +1293,41 @@ def plot_cd45_kde_qc(
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.grid(True, color=GRID, linewidth=0.5, linestyle="--", alpha=0.4)
-    ax.set_xlim(x_grid[0], x_grid[-1])
+    x_span = max(float(x_grid[-1] - x_grid[0]), 1e-9)
+    x_margin = 0.02 * x_span
+    ax.set_xlim(float(x_grid[0] - x_margin), float(x_grid[-1] + x_margin))
     ax.set_ylim(bottom=0, top=density.max() * 1.08)
     ax.legend(
-        loc="upper left", fontsize=8.5, facecolor=BG, edgecolor=GRID,
-        labelcolor=TXT, framealpha=0.9,
+        loc="upper left",
+        fontsize=8.5,
+        facecolor=BG,
+        edgecolor=GRID,
+        labelcolor=TXT,
+        framealpha=0.9,
     )
+
+    if threshold <= x_grid[1]:
+        ax.text(
+            0.02,
+            0.06,
+            "Seuil au bord gauche: population CD45- quasi absente",
+            transform=ax.transAxes,
+            ha="left",
+            va="bottom",
+            fontsize=8,
+            color=AMBER,
+            bbox=dict(facecolor=BG, edgecolor=GRID, alpha=0.7, pad=4),
+        )
 
     plt.tight_layout()
 
     if output_path is not None:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(
-            str(output_path), dpi=100, bbox_inches="tight", facecolor=BG,
+            str(output_path),
+            dpi=100,
+            bbox_inches="tight",
+            facecolor=BG,
         )
         _logger.info("QC CD45-KDE sauvegardé: %s", output_path)
 

@@ -311,7 +311,9 @@ class AutoGating:
                 continue
 
         if best_gmm is None:
-            _logger.warning("[!] Aucun GMM n'a convergé, conservation de tous les événements")
+            _logger.warning(
+                "[!] Aucun GMM n'a convergé, conservation de tous les événements"
+            )
             log_gating_event(
                 "debris",
                 "auto_gmm",
@@ -473,10 +475,14 @@ class AutoGating:
         n_kept = mask.sum()
         _logger.info(
             "   [Auto-KDE] Conservés: %d / %d événements (%.1f%%)",
-            n_kept, n_cells, n_kept / n_cells * 100,
+            n_kept,
+            n_cells,
+            n_kept / n_cells * 100,
         )
         log_gating_event(
-            "debris", "auto_kde", "success",
+            "debris",
+            "auto_kde",
+            "success",
             {"n_kept": int(n_kept), "n_total": int(n_cells)},
         )
 
@@ -522,6 +528,7 @@ class AutoGating:
             output_path: Chemin de sauvegarde (PNG). Si None, génère un nom auto.
         """
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from scipy.stats import gaussian_kde as scipy_kde
@@ -552,7 +559,9 @@ class AutoGating:
             cluster_disp = np.intersect1d(cluster_idx, idx_disp)
             kept = bool(mask_valid[labels == i].any())
             alpha = 0.6 if kept else 0.2
-            label_txt = f"Pop {i} ({'CONSERVÉE' if kept else 'EXCLUE'}) n={cluster_sizes[i]:,}"
+            label_txt = (
+                f"Pop {i} ({'CONSERVÉE' if kept else 'EXCLUE'}) n={cluster_sizes[i]:,}"
+            )
             ax_scatter.scatter(
                 fsc_all[cluster_disp],
                 ssc_all[cluster_disp],
@@ -566,8 +575,13 @@ class AutoGating:
         ax_scatter.set_xlabel("FSC-A")
         ax_scatter.set_ylabel("SSC-A")
         ax_scatter.set_title(f"Populations GMM — covariance: {covariance_type}")
-        ax_scatter.legend(fontsize=7, facecolor="#313244", labelcolor="#e2e8f0",
-                          markerscale=4, framealpha=0.8)
+        ax_scatter.legend(
+            fontsize=7,
+            facecolor="#313244",
+            labelcolor="#e2e8f0",
+            markerscale=4,
+            framealpha=0.8,
+        )
 
         # Panneau droit : densités 1D FSC-A par cluster
         ax_density = axes[1]
@@ -586,7 +600,9 @@ class AutoGating:
                 # Sous-échantillonnage strict : scipy_kde sur 3.8M pts → 68s
                 _GMM_KDE_MAX = 10_000
                 if len(fsc_cluster) > _GMM_KDE_MAX:
-                    fsc_cluster_sub = _rng.choice(fsc_cluster, size=_GMM_KDE_MAX, replace=False)
+                    fsc_cluster_sub = _rng.choice(
+                        fsc_cluster, size=_GMM_KDE_MAX, replace=False
+                    )
                 else:
                     fsc_cluster_sub = fsc_cluster
                 kde_fn = scipy_kde(fsc_cluster_sub)
@@ -594,12 +610,14 @@ class AutoGating:
                 # Normaliser par taille relative du cluster
                 weight = cluster_sizes[i] / cluster_sizes.sum()
                 ax_density.fill_between(
-                    fsc_range, density_vals * weight,
+                    fsc_range,
+                    density_vals * weight,
                     alpha=0.2 if kept else 0.08,
                     color=colors[i % len(colors)],
                 )
                 ax_density.plot(
-                    fsc_range, density_vals * weight,
+                    fsc_range,
+                    density_vals * weight,
                     color=colors[i % len(colors)],
                     linewidth=2 if kept else 1,
                     linestyle=linestyle,
@@ -612,18 +630,24 @@ class AutoGating:
         ax_density.set_xlabel("FSC-A")
         ax_density.set_ylabel("Densité (pondérée par taille du cluster)")
         ax_density.set_title("Densités GMM par population")
-        ax_density.legend(fontsize=8, facecolor="#313244", labelcolor="#e2e8f0", framealpha=0.8)
+        ax_density.legend(
+            fontsize=8, facecolor="#313244", labelcolor="#e2e8f0", framealpha=0.8
+        )
 
         plt.suptitle(
             f"Gating débris — GMM ({n_comp} composantes, covariance={covariance_type})",
-            color="#e2e8f0", fontsize=11, fontweight="bold",
+            color="#e2e8f0",
+            fontsize=11,
+            fontweight="bold",
         )
         plt.tight_layout()
 
         if output_path is None:
             output_path = "gmm_debris_density.png"
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-        fig.savefig(output_path, dpi=100, bbox_inches="tight", facecolor=fig.get_facecolor())
+        fig.savefig(
+            output_path, dpi=100, bbox_inches="tight", facecolor=fig.get_facecolor()
+        )
         plt.close(fig)
         _logger.info("[GMM] Graphique densités exporté: %s", output_path)
 
@@ -705,232 +729,218 @@ class AutoGating:
 
         # Gating par fichier si demandé et si file_origin fourni
         if per_file and file_origin is not None:
-            unique_files = np.unique(file_origin)
-            _logger.info("   [Auto-RANSAC] Gating par fichier (%d fichiers)", len(unique_files))
+            unique_files = np.unique(file_origin[valid])
+            _logger.info(
+                "   [Auto-RANSAC] Gating par fichier (%d fichiers)", len(unique_files)
+            )
 
             total_singlets = 0
             total_doublets = 0
+            file_payloads: List[Dict[str, Any]] = []
 
-            for file_name in unique_files:
-                # Sélectionner les cellules de ce fichier
-                file_mask = (file_origin == file_name) & valid
+            def _process_one_file(
+                file_name: Any, file_indices: np.ndarray
+            ) -> Dict[str, Any]:
+                n_file = int(file_indices.size)
+                payload: Dict[str, Any] = {
+                    "file": str(file_name),
+                    "indices": file_indices,
+                    "method": "skip_too_few",
+                    "r2": None,
+                    "slope": None,
+                    "intercept": None,
+                    "event_name": None,
+                    "event_status": None,
+                    "event_details": None,
+                    "event_warning": None,
+                    "scatter": None,
+                    "error": None,
+                    "singlets": np.ones(n_file, dtype=bool),
+                }
 
-                if file_mask.sum() < 50:
-                    # Trop peu de cellules, garder toutes
-                    mask[file_mask] = True
-                    singlets_summary_per_file.append(
-                        {
-                            "file": str(file_name),
-                            "n_total": int(file_mask.sum()),
-                            "n_singlets": int(file_mask.sum()),
-                            "pct_singlets": 100.0,
-                            "method": "skip_too_few",
-                            "r2": None,
-                        }
-                    )
-                    continue
+                if n_file < 50:
+                    return payload
 
-                fsc_a_file = fsc_a[file_mask].reshape(-1, 1)
-                fsc_h_file = fsc_h[file_mask].reshape(-1, 1)
+                fsc_a_file = fsc_a[file_indices].reshape(-1, 1)
+                fsc_h_file = fsc_h[file_indices].reshape(-1, 1)
 
-                # Régression RANSAC pour trouver la diagonale des singlets
                 try:
                     ransac = RANSACRegressor(
                         estimator=LinearRegression(),
                         min_samples=50,
-                        residual_threshold=None,  # Auto (MAD)
+                        residual_threshold=None,
                         random_state=42,
                         max_trials=100,
                     )
                     ransac.fit(fsc_h_file, fsc_a_file.ravel())
 
-                    # ─── CONTRÔLE QUALITÉ R² SUR INLIERS RANSAC ───
                     inlier_mask = ransac.inlier_mask_
                     r2_val = None
-                    used_method = "ransac"
-
                     if inlier_mask is not None and inlier_mask.sum() > 50:
                         r2_val = r2_score(
                             fsc_a_file[inlier_mask].ravel(),
                             ransac.predict(fsc_h_file[inlier_mask]),
                         )
 
-                        if r2_val < r2_threshold:
-                            # ─── FALLBACK: gating ratio simple ───
-                            warn_msg = f"R² faible pour {file_name} (R²={r2_val:.2f} < {r2_threshold}), fallback gating ratio"
-                            _logger.warning("      [!] %s", warn_msg)
-                            log_gating_event(
-                                "singlets",
-                                "ransac_fallback_ratio",
-                                "fallback",
-                                {"file": str(file_name), "r2": float(r2_val)},
-                                warn_msg,
-                            )
+                    slope = float(ransac.estimator_.coef_[0])
+                    intercept = float(ransac.estimator_.intercept_)
+                    payload["r2"] = float(r2_val) if r2_val is not None else None
+                    payload["slope"] = slope
+                    payload["intercept"] = intercept
 
-                            singlets_file = _fallback_ratio_gating(
-                                fsc_a_file, fsc_h_file
-                            )
-                            used_method = "ratio_fallback"
+                    if r2_val is not None and r2_val < r2_threshold:
+                        singlets_file = _fallback_ratio_gating(fsc_a_file, fsc_h_file)
+                        payload["singlets"] = singlets_file
+                        payload["method"] = "ratio_fallback"
+                        payload["event_name"] = "ransac_fallback_ratio"
+                        payload["event_status"] = "fallback"
+                        payload["event_details"] = {
+                            "file": str(file_name),
+                            "r2": float(r2_val),
+                        }
+                        payload["event_warning"] = (
+                            f"R² faible pour {file_name} (R²={r2_val:.2f} < {r2_threshold}), "
+                            "fallback gating ratio"
+                        )
+                    else:
+                        fsc_a_pred = ransac.predict(fsc_h_file)
+                        residuals = fsc_a_file.ravel() - fsc_a_pred
+                        median_residual = np.median(residuals)
+                        mad = np.median(np.abs(residuals - median_residual))
+                        threshold_upper = median_residual + mad_factor * mad
+                        payload["singlets"] = residuals <= threshold_upper
+                        payload["method"] = "ransac"
+                        payload["event_name"] = "ransac"
+                        payload["event_status"] = "success"
 
-                            # Appliquer
-                            file_indices = np.where(file_mask)[0]
-                            mask[file_indices] = singlets_file
-
-                            n_sing = int(singlets_file.sum())
-                            n_doub = len(singlets_file) - n_sing
-                            total_singlets += n_sing
-                            total_doublets += n_doub
-
-                            file_short = (
-                                file_name
-                                if len(file_name) <= 25
-                                else file_name[:22] + "..."
-                            )
-                            _logger.info(
-                                "      • %s: %d singlets / %d (%.1f%%) - RATIO FALLBACK (R²=%.2f)",
-                                file_short,
-                                n_sing,
-                                n_sing + n_doub,
-                                n_sing / (n_sing + n_doub) * 100,
-                                r2_val,
-                            )
-
-                            # Stocker les scatter data (même si fallback, pour diagnostic)
-                            n_sample_pts = min(2000, len(fsc_a_file))
-                            sample_idx = np.random.choice(
-                                len(fsc_a_file), n_sample_pts, replace=False
-                            )
-                            ransac_scatter_data[str(file_name)] = {
-                                "fsc_h": fsc_h_file[sample_idx].ravel().tolist(),
-                                "fsc_a": fsc_a_file[sample_idx].ravel().tolist(),
-                                "pred": ransac.predict(fsc_h_file[sample_idx]).tolist(),
-                                "r2": float(r2_val),
-                                "method": "ratio_fallback",
-                                "slope": float(ransac.estimator_.coef_[0]),
-                                "intercept": float(ransac.estimator_.intercept_),
-                            }
-                            singlets_summary_per_file.append(
-                                {
-                                    "file": str(file_name),
-                                    "n_total": int(len(singlets_file)),
-                                    "n_singlets": n_sing,
-                                    "pct_singlets": round(
-                                        n_sing / (n_sing + n_doub) * 100, 1
-                                    ),
-                                    "method": "ratio_fallback",
-                                    "r2": round(float(r2_val), 3),
-                                }
-                            )
-                            continue
-
-                    # ─── R² OK (ou pas de inlier_mask): utiliser RANSAC normal ───
-                    # Prédiction sur la droite
-                    fsc_a_pred = ransac.predict(fsc_h_file)
-
-                    # Distance verticale (résidus) - doublets au-dessus de la ligne
-                    residuals = fsc_a_file.ravel() - fsc_a_pred
-
-                    # Seuil adaptatif basé sur MAD (Median Absolute Deviation)
-                    median_residual = np.median(residuals)
-                    mad = np.median(np.abs(residuals - median_residual))
-
-                    # Seuil: médiane + mad_factor * MAD
-                    threshold_upper = median_residual + mad_factor * mad
-
-                    # Singlets: points près de la diagonale (pas trop au-dessus)
-                    singlets_file = residuals <= threshold_upper
-
-                    # Appliquer le masque local
-                    file_indices = np.where(file_mask)[0]
-                    mask[file_indices] = singlets_file
-
-                    n_sing = int(singlets_file.sum())
-                    n_doub = len(singlets_file) - n_sing
-                    total_singlets += n_sing
-                    total_doublets += n_doub
-
-                    # Affichage compact par fichier
-                    slope = ransac.estimator_.coef_[0]
-                    intercept = ransac.estimator_.intercept_
-                    file_short = (
-                        file_name if len(file_name) <= 25 else file_name[:22] + "..."
+                    n_sample_pts = min(2000, n_file)
+                    local_rng = np.random.default_rng(
+                        (abs(hash(str(file_name))) + 42) % (2**32 - 1)
                     )
+                    sample_idx = local_rng.choice(n_file, n_sample_pts, replace=False)
+                    payload["scatter"] = {
+                        "fsc_h": fsc_h_file[sample_idx].ravel().tolist(),
+                        "fsc_a": fsc_a_file[sample_idx].ravel().tolist(),
+                        "pred": ransac.predict(fsc_h_file[sample_idx]).tolist(),
+                        "r2": payload["r2"],
+                        "method": payload["method"],
+                        "slope": slope,
+                        "intercept": intercept,
+                    }
+                    return payload
+                except Exception as e:
+                    payload["method"] = "error_keep_all"
+                    payload["error"] = str(e)
+                    payload["event_name"] = "ransac"
+                    payload["event_status"] = "error"
+                    payload["event_details"] = {"file": str(file_name), "error": str(e)}
+                    payload["event_warning"] = f"Échec RANSAC pour {file_name}: {e}"
+                    return payload
+
+            file_tasks = []
+            for file_name in unique_files:
+                file_indices = np.where((file_origin == file_name) & valid)[0]
+                if file_indices.size > 0:
+                    file_tasks.append((file_name, file_indices))
+
+            try:
+                from joblib import Parallel, delayed
+
+                if len(file_tasks) > 1:
+                    file_payloads = Parallel(n_jobs=-1, prefer="threads")(
+                        delayed(_process_one_file)(fname, findices)
+                        for fname, findices in file_tasks
+                    )
+                else:
+                    file_payloads = [
+                        _process_one_file(fname, findices)
+                        for fname, findices in file_tasks
+                    ]
+            except Exception as _par_e:
+                _logger.debug("Joblib indisponible pour RANSAC parallèle: %s", _par_e)
+                file_payloads = [
+                    _process_one_file(fname, findices) for fname, findices in file_tasks
+                ]
+
+            for payload in file_payloads:
+                file_name = payload["file"]
+                file_indices = payload["indices"]
+                singlets_file = payload["singlets"]
+                method = payload["method"]
+                r2_val = payload["r2"]
+
+                mask[file_indices] = singlets_file
+                n_sing = int(singlets_file.sum())
+                n_tot = int(len(singlets_file))
+                n_doub = n_tot - n_sing
+                total_singlets += n_sing
+                total_doublets += n_doub
+
+                if payload["event_name"] is not None:
+                    log_gating_event(
+                        "singlets",
+                        payload["event_name"],
+                        payload["event_status"],
+                        payload["event_details"],
+                        payload["event_warning"],
+                    )
+
+                if payload["scatter"] is not None:
+                    ransac_scatter_data[file_name] = payload["scatter"]
+
+                if payload["error"] is not None:
+                    _logger.warning(
+                        "      [!] Échec RANSAC pour %s: %s",
+                        file_name,
+                        payload["error"],
+                    )
+                elif method == "ratio_fallback":
+                    _logger.warning("      [!] %s", payload["event_warning"])
+
+                file_short = (
+                    file_name if len(file_name) <= 25 else file_name[:22] + "..."
+                )
+                if method == "ratio_fallback":
+                    _logger.info(
+                        "      • %s: %d singlets / %d (%.1f%%) - RATIO FALLBACK (R²=%.2f)",
+                        file_short,
+                        n_sing,
+                        n_tot,
+                        n_sing / max(n_tot, 1) * 100,
+                        r2_val if r2_val is not None else float("nan"),
+                    )
+                elif method == "ransac":
                     r2_str = f", R²={r2_val:.3f}" if r2_val is not None else ""
                     _logger.info(
                         "      • %s: %d singlets / %d (%.1f%%) - y=%.3fx+%.0f%s",
                         file_short,
                         n_sing,
-                        n_sing + n_doub,
-                        n_sing / (n_sing + n_doub) * 100,
-                        slope,
-                        intercept,
+                        n_tot,
+                        n_sing / max(n_tot, 1) * 100,
+                        payload["slope"],
+                        payload["intercept"],
                         r2_str,
                     )
-
-                    # Stocker scatter data pour le rapport HTML (échantillonné)
-                    n_sample_pts = min(2000, len(fsc_a_file))
-                    sample_idx = _rng.choice(
-                        len(fsc_a_file), n_sample_pts, replace=False
+                else:
+                    _logger.info(
+                        "      • %s: %d singlets / %d (%.1f%%) - %s",
+                        file_short,
+                        n_sing,
+                        n_tot,
+                        n_sing / max(n_tot, 1) * 100,
+                        method,
                     )
-                    ransac_scatter_data[str(file_name)] = {
-                        "fsc_h": fsc_h_file[sample_idx].ravel().tolist(),
-                        "fsc_a": fsc_a_file[sample_idx].ravel().tolist(),
-                        "pred": ransac.predict(fsc_h_file[sample_idx]).tolist(),
-                        "r2": float(r2_val) if r2_val is not None else None,
-                        "method": "ransac",
-                        "slope": float(slope),
-                        "intercept": float(intercept),
+
+                singlets_summary_per_file.append(
+                    {
+                        "file": str(file_name),
+                        "n_total": n_tot,
+                        "n_singlets": n_sing,
+                        "pct_singlets": round(n_sing / max(n_tot, 1) * 100, 1),
+                        "method": method,
+                        "r2": round(float(r2_val), 3) if r2_val is not None else None,
                     }
-                    singlets_summary_per_file.append(
-                        {
-                            "file": str(file_name),
-                            "n_total": int(len(singlets_file)),
-                            "n_singlets": n_sing,
-                            "pct_singlets": round(n_sing / (n_sing + n_doub) * 100, 1),
-                            "method": "ransac",
-                            "r2": round(float(r2_val), 3)
-                            if r2_val is not None
-                            else None,
-                        }
-                    )
-
-                    # Log structuré
-                    log_gating_event(
-                        "singlets",
-                        "ransac",
-                        "success",
-                        {
-                            "file": str(file_name),
-                            "r2": float(r2_val) if r2_val else None,
-                            "slope": float(slope),
-                            "intercept": float(intercept),
-                            "n_singlets": n_sing,
-                            "n_doublets": n_doub,
-                        },
-                    )
-
-                except Exception as e:
-                    _logger.warning("      [!] Échec RANSAC pour %s: %s", file_name, e)
-                    log_gating_event(
-                        "singlets",
-                        "ransac",
-                        "error",
-                        {"file": str(file_name), "error": str(e)},
-                        f"Échec RANSAC pour {file_name}: {e}",
-                    )
-                    # En cas d'échec, garder toutes les cellules du fichier
-                    mask[file_mask] = True
-                    total_singlets += file_mask.sum()
-                    singlets_summary_per_file.append(
-                        {
-                            "file": str(file_name),
-                            "n_total": int(file_mask.sum()),
-                            "n_singlets": int(file_mask.sum()),
-                            "pct_singlets": 100.0,
-                            "method": "error_keep_all",
-                            "r2": None,
-                        }
-                    )
+                )
 
             _logger.info(
                 "   [Auto-RANSAC] Total: %d singlets, %d doublets exclus",
@@ -940,7 +950,9 @@ class AutoGating:
 
             # Résumé tableau % singlets par fichier
             if singlets_summary_per_file:
-                header = f"\n   {'Fichier':<30} {'Méthode':<18} {'R²':>6} {'% Singlets':>12}"
+                header = (
+                    f"\n   {'Fichier':<30} {'Méthode':<18} {'R²':>6} {'% Singlets':>12}"
+                )
                 _logger.info(header)
                 for row in singlets_summary_per_file:
                     r2_disp = f"{row['r2']:.3f}" if row["r2"] is not None else "N/A"
@@ -1106,7 +1118,9 @@ class AutoGating:
         # Sous-échantillonnage strict : gaussian_kde est O(N²) — 3M pts → 3m33s
         _KDE_MAX = 10_000
         if len(x_data) > _KDE_MAX:
-            x_sub = np.random.default_rng(42).choice(x_data, size=_KDE_MAX, replace=False)
+            x_sub = np.random.default_rng(42).choice(
+                x_data, size=_KDE_MAX, replace=False
+            )
         else:
             x_sub = x_data
 
@@ -1261,11 +1275,16 @@ class AutoGating:
 
         _logger.info(
             "   [KDE-CD45] Méthode: %s | seuil_relatif=%.3f | finesse=%.2f",
-            method_used, kde_seuil_relatif, kde_finesse,
+            method_used,
+            kde_seuil_relatif,
+            kde_finesse,
         )
         _logger.info(
             "   [KDE-CD45] Seuil logicle=%.4f → linéaire=%.0f  →  CD45+ : %d (%.1f%%)",
-            threshold_log, threshold, n_pos, n_pos / valid.sum() * 100,
+            threshold_log,
+            threshold,
+            n_pos,
+            n_pos / valid.sum() * 100,
         )
 
         gate_result = GateResult(
@@ -1375,7 +1394,9 @@ class AutoGating:
                             ssc[valid_ssc].reshape(-1, 1), n_components=2, n_init=3
                         )
                     except RuntimeError as e:
-                        _logger.warning("   [!] GMM SSC échoué: %s — filtre SSC ignoré", e)
+                        _logger.warning(
+                            "   [!] GMM SSC échoué: %s — filtre SSC ignoré", e
+                        )
                         _logger.info("   [Auto-GMM] CD34+ blastes: %d", n_cd34_pos)
                         gate_result = GateResult(
                             mask=mask_cd34,

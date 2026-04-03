@@ -33,6 +33,7 @@ try:
     from matplotlib.colors import LinearSegmentedColormap
     from matplotlib.ticker import FuncFormatter
     from matplotlib.patches import Rectangle
+    from matplotlib.patches import Patch
 
     _MPL_AVAILABLE = True
 except ImportError:
@@ -58,6 +59,13 @@ DENSITY_CMAP_COLORS = [
 ]
 COLOR_KEPT = "#a6e3a1"  # Vert pastel
 COLOR_EXCLUDED = "#f38ba8"  # Rouge pastel
+
+HEXBIN_CMAP_EXCLUDED = LinearSegmentedColormap.from_list(
+    "hex_excluded", ["#2a111b", "#7b1e3b", COLOR_EXCLUDED]
+)
+HEXBIN_CMAP_KEPT = LinearSegmentedColormap.from_list(
+    "hex_kept", ["#0f2118", "#2f7a4f", COLOR_KEPT]
+)
 
 
 def _require_matplotlib() -> None:
@@ -197,7 +205,7 @@ def plot_gating(
     max_pts: int = 100_000,
 ) -> None:
     """
-    Scatter plot avec overlay gating (vert=conservés, rouge=exclus).
+    Density plot avec overlay gating en hexbin (vert=conservés, rouge=exclus).
 
     Args:
         ax: Axe matplotlib cible.
@@ -234,26 +242,33 @@ def plot_gating(
         idx = np.random.choice(len(x), max_pts, replace=False)
         x, y, mask = x[idx], y[idx], mask[idx]
 
-    ax.scatter(
-        x[~mask],
-        y[~mask],
-        s=4,
-        c=COLOR_EXCLUDED,
-        alpha=0.3,
-        label=label_out,
-        edgecolors="none",
-        rasterized=True,
-    )
-    ax.scatter(
-        x[mask],
-        y[mask],
-        s=5,
-        c=COLOR_KEPT,
-        alpha=0.5,
-        label=label_in,
-        edgecolors="none",
-        rasterized=True,
-    )
+    excluded = ~mask
+    kept = mask
+
+    if excluded.any():
+        ax.hexbin(
+            x[excluded],
+            y[excluded],
+            gridsize=70,
+            mincnt=1,
+            cmap=HEXBIN_CMAP_EXCLUDED,
+            linewidths=0,
+            alpha=0.75,
+            rasterized=True,
+            zorder=1,
+        )
+    if kept.any():
+        ax.hexbin(
+            x[kept],
+            y[kept],
+            gridsize=70,
+            mincnt=1,
+            cmap=HEXBIN_CMAP_KEPT,
+            linewidths=0,
+            alpha=0.80,
+            rasterized=True,
+            zorder=2,
+        )
 
     n_tot = len(x)
     n_in = int(mask.sum())
@@ -270,10 +285,14 @@ def plot_gating(
     )
     apply_dark_style(ax)
 
+    legend_handles = [
+        Patch(facecolor=COLOR_KEPT, edgecolor="none", label=label_in),
+        Patch(facecolor=COLOR_EXCLUDED, edgecolor="none", label=label_out),
+    ]
     ax.legend(
+        handles=legend_handles,
         loc="upper right",
         fontsize=10,
-        markerscale=3,
         facecolor=LEGEND_BG,
         labelcolor=TEXT_COLOR,
         edgecolor=SPINE_COLOR,
