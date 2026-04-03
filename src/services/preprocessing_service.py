@@ -552,6 +552,7 @@ def preprocess_combined(
     # ── 3. Gating sur données combinées ───────────────────────────────────────
     pregate_cfg = config.pregate
     gate_masks: Dict[str, np.ndarray] = {}
+    _combined_mask: Optional[np.ndarray] = None  # masque final gating (n_total_raw)
     X_for_plot = X_raw.copy()  # Matrix brute avant gating (pour plots QC)
     var_for_plot: List[str] = list(var_names)
     conditions_for_plot = (
@@ -569,7 +570,7 @@ def preprocess_combined(
             _gmm_plot_path = str(
                 _Path(gating_plot_dir) / "gating" / "gmm_debris_density.png"
             )
-        X_raw, var_names, conditions, file_origins, gate_masks = _apply_gating_combined(
+        X_raw, var_names, conditions, file_origins, gate_masks, _combined_mask = _apply_gating_combined(
             X_raw,
             var_names,
             conditions,
@@ -650,7 +651,11 @@ def preprocess_combined(
     # Ce plot doit être généré APRÈS la transformation pour afficher le CD45
     # dans l'espace logicle (comme dans le notebook .ipynb), et non en linéaire.
     # EXPORT SYSTÉMATIQUE : le KDE CD45 est toujours exporté, même si CD45 n'est
-    # pas sélectionné pour le tri cellulaire (gate_masks peut ne pas contenir G3_cd45).
+    # pas sélectionné pour le tri cellulaire.
+    #
+    # Les masques dans gate_masks ont n_total_raw lignes. X_for_plot en a n_gated.
+    # On projette G3_cd45[_combined_mask] pour obtenir le masque dans l'espace
+    # post-gating sans recalculer le KDE (rapide, pas de double-calcul).
     if gating_plot_dir is not None:
         try:
             from flowsom_pipeline_pro.src.visualization.gating_plots import (
@@ -661,24 +666,48 @@ def preprocess_combined(
                 var_names, ["CD45", "CD45-PECY5", "CD45-PC5"]
             )
             if _cd45_idx is not None:
-                # Récupérer le masque G3 depuis gate_masks si disponible,
-                # sinon construire un masque universel (toutes les cellules = CD45+)
-                # pour garantir l'export du KDE même sans gate CD45 active.
-                _mask_g3 = gate_masks.get(
+                # Projeter le masque G3 (n_total_raw) dans l'espace post-gating (n_gated)
+                # via _combined_mask retourné par _apply_gating_combined.
+                _raw_g3 = gate_masks.get(
                     "G3_cd45", gate_masks.get("G3", gate_masks.get("cd45"))
                 )
-                if _mask_g3 is None:
-                    import numpy as _np
-                    _mask_g3 = _np.ones(X_for_plot.shape[0], dtype=bool)
+                if _raw_g3 is not None and _combined_mask is not None:
+                    _mask_g3_local = _raw_g3[_combined_mask]
+                else:
+                    # Gate CD45 désactivée ou combined_mask indisponible → toutes les cellules
+                    _mask_g3_local = np.ones(X_for_plot.shape[0], dtype=bool)
+
+                # Restreindre le KDE CD45 aux cellules pathologiques uniquement.
+                # Le seuil KDE est plus pertinent sur les blastes (CD45-dim) que
+                # sur les cellules NBM (CD45-high) qui décaleraient le pic principal.
+                _sain_set = {"sain", "normal", "healthy", "nbm", "moelle normale"}
+                _is_patho_local = np.array(
+                    [c.lower() not in _sain_set for c in conditions], dtype=bool
+                )
+                _n_patho = int(_is_patho_local.sum())
+                if _n_patho >= 5:
+                    _cd45_data_plot = X_for_plot[_is_patho_local, _cd45_idx]
+                    _mask_g3_plot = _mask_g3_local[_is_patho_local]
+                    _cond_plot = conditions[_is_patho_local]
                     _logger.info(
-                        "Plot KDE CD45 : G3_cd45 absent de gate_masks — "
-                        "export forcé avec masque universel (toutes cellules)"
+                        "Plot KDE CD45 : %d cellules pathologiques utilisées (sain exclu)",
+                        _n_patho,
                     )
+                else:
+                    # Pas de cellules patho identifiées → utiliser tout
+                    _cd45_data_plot = X_for_plot[:, _cd45_idx]
+                    _mask_g3_plot = _mask_g3_local
+                    _cond_plot = conditions
+                    _logger.info(
+                        "Plot KDE CD45 : aucune cellule pathologique identifiée — "
+                        "toutes les cellules utilisées"
+                    )
+
                 _fig_kde_cd45, _, _, _ = _plot_cd45_kde(
-                    cd45_data=X_for_plot[:, _cd45_idx],
-                    mask_cd45=_mask_g3,
+                    cd45_data=_cd45_data_plot,
+                    mask_cd45=_mask_g3_plot,
                     output_path=Path(gating_plot_dir) / "gating" / "combined_07_kde_cd45.png",
-                    conditions=conditions_for_plot,
+                    conditions=_cond_plot,
                     kde_seuil_relatif=getattr(pregate_cfg, "kde_cd45_seuil_relatif", 0.05),
                     kde_finesse=getattr(pregate_cfg, "kde_cd45_finesse", 0.6),
                     kde_sigma_smooth=getattr(pregate_cfg, "kde_cd45_sigma_smooth", 10),
@@ -1075,7 +1104,7 @@ def _apply_gating_combined(
     pregate_cfg,
     gating_logger: GatingLogger,
     gmm_plot_path: Optional[str] = None,
-) -> Tuple[np.ndarray, List[str], np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, List[str], np.ndarray, np.ndarray, dict, np.ndarray]:
     """
     Gating sur les données combinées — reproduit exactement flowsom_pipeline.py.
 
@@ -1348,4 +1377,4 @@ def _apply_gating_combined(
     conditions_filtered = conditions[combined_mask]
     file_origins_filtered = file_origins[combined_mask]
 
-    return X_filtered, var_names, conditions_filtered, file_origins_filtered, gate_masks
+    return X_filtered, var_names, conditions_filtered, file_origins_filtered, gate_masks, combined_mask
