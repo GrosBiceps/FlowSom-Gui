@@ -10,13 +10,21 @@ Affiche après analyse :
 
 Avant analyse : écran d'attente avec état des données chargées.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QScrollArea, QSizePolicy, QGridLayout, QStackedWidget,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QFrame,
+    QScrollArea,
+    QSizePolicy,
+    QGridLayout,
+    QStackedWidget,
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
@@ -24,6 +32,7 @@ from PyQt5.QtGui import QFont, QColor
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib
+
 matplotlib.use("Qt5Agg")
 
 from flowsom_pipeline_pro.gui.widgets.mrd_gauge import MRDGauge
@@ -69,6 +78,7 @@ class HomeTab(QWidget):
 
         # Stack : page 0 = attente, page 1 = résultats
         from PyQt5.QtWidgets import QStackedWidget
+
         self._stack = QStackedWidget()
         self._stack.addWidget(self._build_waiting_page())
         self._stack.addWidget(self._build_results_page())
@@ -79,57 +89,167 @@ class HomeTab(QWidget):
     def _build_waiting_page(self) -> QWidget:
         """Écran placeholder avant analyse."""
         page = QWidget()
-        page.setStyleSheet("background: #0d0d17;")
+        page.setObjectName("waitingPage")
+        page.setStyleSheet("""
+            QWidget#waitingPage {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #0d0d17, stop:1 #0a0a14);
+            }
+        """)
         layout = QVBoxLayout(page)
         layout.setAlignment(Qt.AlignCenter)
+        layout.setContentsMargins(24, 24, 24, 32)
         layout.setSpacing(20)
 
-        # Conteneur centré avec fond subtil
+        # Conteneur principal
         container = QWidget()
-        container.setFixedWidth(520)
+        container.setObjectName("waitingContainer")
+        container.setMinimumWidth(820)
+        container.setMaximumWidth(980)
         container.setStyleSheet("""
-            QWidget {
+            QWidget#waitingContainer {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(30, 32, 52, 0.7), stop:1 rgba(20, 22, 38, 0.6));
-                border-radius: 16px;
-                border: 1px solid rgba(137, 180, 250, 0.12);
-                border-top: 2px solid rgba(137, 180, 250, 0.2);
+                    stop:0 rgba(36, 38, 60, 0.82), stop:1 rgba(20, 22, 36, 0.78));
+                border-radius: 18px;
+                border: 1px solid rgba(137, 180, 250, 0.13);
+                border-top: 1px solid rgba(137, 180, 250, 0.20);
             }
         """)
         c_layout = QVBoxLayout(container)
-        c_layout.setContentsMargins(40, 36, 40, 36)
-        c_layout.setSpacing(16)
+        c_layout.setContentsMargins(36, 32, 36, 28)
+        c_layout.setSpacing(20)
+
+        badge = QLabel("PRÊT POUR L'ANALYSE")
+        badge.setAlignment(Qt.AlignCenter)
+        badge.setStyleSheet(
+            "background: rgba(137, 180, 250, 0.16); color: #cfe0ff; "
+            "border: 1px solid rgba(137, 180, 250, 0.25); "
+            "border-radius: 11px; padding: 6px 14px; font-size: 10px; "
+            "font-weight: 700; letter-spacing: 0.08em;"
+        )
+        c_layout.addWidget(badge, alignment=Qt.AlignHCenter)
 
         title = QLabel("FlowSOM MRD Analyzer")
-        title.setFont(QFont("Segoe UI", 22, QFont.Bold))
+        title.setFont(QFont("Segoe UI", 27, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet(
-            f"color: #c8d8fd; background: transparent; letter-spacing: -0.02em;"
-        )
+        title.setStyleSheet("color: #dbe7ff; background: transparent;")
         c_layout.addWidget(title)
 
         sub = QLabel(
-            "Configurez les dossiers FCS et les paramètres,\n"
-            "puis cliquez sur  Lancer le Pipeline  pour démarrer l'analyse."
+            "Configurez vos dossiers FCS et paramètres, puis lancez le pipeline.\n"
+            "L'accueil affichera automatiquement les résultats MRD dès la fin du calcul."
         )
         sub.setAlignment(Qt.AlignCenter)
-        sub.setStyleSheet(f"color: #4a4c70; background: transparent; font-size: 12px; line-height: 1.6;")
+        sub.setStyleSheet("color: #b5c0e3; background: transparent; font-size: 14px;")
         sub.setWordWrap(True)
         c_layout.addWidget(sub)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("color: rgba(137,180,250,0.08); max-height: 1px;")
+        sep.setStyleSheet("color: rgba(137,180,250,0.14); max-height: 1px;")
         c_layout.addWidget(sep)
 
-        hint = QLabel(
-            "Les résultats MRD (% résiduel, nœuds SOM positifs)\n"
-            "s'afficheront ici dès que le pipeline sera terminé."
+        body = QWidget()
+        body.setObjectName("waitingBody")
+        body.setStyleSheet("QWidget#waitingBody { background: transparent; }")
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(18)
+
+        left = QWidget()
+        left.setObjectName("waitingLeftCard")
+        left.setStyleSheet(
+            "QWidget#waitingLeftCard {"
+            "background: rgba(24, 26, 42, 0.72);"
+            "border-radius: 12px;"
+            "border: 1px solid rgba(137, 180, 250, 0.11);"
+            "}"
         )
-        hint.setAlignment(Qt.AlignCenter)
-        hint.setStyleSheet(f"color: #2e3050; background: transparent; font-size: 11px;")
-        hint.setWordWrap(True)
-        c_layout.addWidget(hint)
+        left_v = QVBoxLayout(left)
+        left_v.setContentsMargins(20, 18, 20, 18)
+        left_v.setSpacing(12)
+
+        left_title = QLabel("Étapes avant lancement")
+        left_title.setStyleSheet(
+            "color: #d5e2ff; font-size: 13px; font-weight: 700; background: transparent;"
+        )
+        left_v.addWidget(left_title)
+
+        def _step_line(num: str, text: str) -> QLabel:
+            lbl = QLabel(f"{num}. {text}")
+            lbl.setWordWrap(True)
+            lbl.setStyleSheet(
+                "color: #c3ceef; font-size: 13px; background: transparent;"
+            )
+            return lbl
+
+        left_v.addWidget(
+            _step_line("1", "Importer les dossiers FCS (sain et pathologique).")
+        )
+        left_v.addWidget(
+            _step_line("2", "Vérifier les paramètres SOM, MRD et pré-gating.")
+        )
+        left_v.addWidget(
+            _step_line("3", "Cliquer sur Lancer le Pipeline dans l'étape Exécution.")
+        )
+
+        tip = QLabel(
+            "Conseil: si vous relancez une analyse, les checkpoints accélèrent les recalculs."
+        )
+        tip.setWordWrap(True)
+        tip.setStyleSheet(
+            "color: #9eaadb; font-size: 12px; background: rgba(137, 180, 250, 0.06);"
+            "border: 1px solid rgba(137, 180, 250, 0.12); border-radius: 10px; padding: 10px;"
+        )
+        left_v.addWidget(tip)
+        left_v.addStretch()
+
+        right = QWidget()
+        right.setObjectName("waitingRightCard")
+        right.setStyleSheet(
+            "QWidget#waitingRightCard {"
+            "background: rgba(20, 22, 36, 0.72);"
+            "border-radius: 12px;"
+            "border: 1px solid rgba(166, 227, 161, 0.10);"
+            "}"
+        )
+        right_v = QVBoxLayout(right)
+        right_v.setContentsMargins(20, 18, 20, 18)
+        right_v.setSpacing(12)
+
+        right_title = QLabel("Ce qui apparaîtra ici après calcul")
+        right_title.setStyleSheet(
+            "color: #cff5cd; font-size: 13px; font-weight: 700; background: transparent;"
+        )
+        right_v.addWidget(right_title)
+
+        features = [
+            "Résultat MRD par méthode (gauges JF / Flo / ELN)",
+            "Conclusion clinique synthétique positive/négative",
+            "Tableau des nœuds SOM MRD positifs avec filtres",
+            "Profils radar d'expression pour les nœuds détectés",
+        ]
+        for feat in features:
+            lbl = QLabel(f"• {feat}")
+            lbl.setWordWrap(True)
+            lbl.setStyleSheet(
+                "color: #c3ceef; font-size: 13px; background: transparent;"
+            )
+            right_v.addWidget(lbl)
+
+        right_v.addStretch()
+
+        body_layout.addWidget(left, 1)
+        body_layout.addWidget(right, 1)
+        c_layout.addWidget(body)
+
+        footer = QLabel("Statut actuel: en attente d'une exécution du pipeline")
+        footer.setAlignment(Qt.AlignCenter)
+        footer.setStyleSheet(
+            "color: #a8b8e6; background: transparent; font-size: 12px; "
+            "font-weight: 600;"
+        )
+        c_layout.addWidget(footer)
 
         layout.addWidget(container, alignment=Qt.AlignCenter)
         return page
@@ -165,7 +285,9 @@ class HomeTab(QWidget):
 
         # ── Tableau nœuds MRD ──
         self._node_table = MRDNodeTable()
-        self._node_table.combo_filter.currentIndexChanged.connect(self._on_node_filter_changed)
+        self._node_table.combo_filter.currentIndexChanged.connect(
+            self._on_node_filter_changed
+        )
         self._results_layout.addWidget(self._node_table)
 
         # ── Mini Spider Plots des nœuds MRD ──
@@ -351,6 +473,7 @@ class HomeTab(QWidget):
         self._marker_cols = []
         try:
             import numpy as np
+
             node_mfi = getattr(result, "node_mfi_matrix", None)
             if node_mfi is not None and not node_mfi.empty:
                 self._mfi_data = node_mfi
@@ -359,14 +482,28 @@ class HomeTab(QWidget):
                 df = result.data
                 if df is not None and "FlowSOM_cluster" in df.columns:
                     _meta_cols = {
-                        "FlowSOM_cluster", "FlowSOM_metacluster", "condition",
-                        "file_origin", "xGrid", "yGrid", "xNodes", "yNodes",
-                        "size", "Condition_Num", "Condition", "Timepoint", "Timepoint_Num",
+                        "FlowSOM_cluster",
+                        "FlowSOM_metacluster",
+                        "condition",
+                        "file_origin",
+                        "xGrid",
+                        "yGrid",
+                        "xNodes",
+                        "yNodes",
+                        "size",
+                        "Condition_Num",
+                        "Condition",
+                        "Timepoint",
+                        "Timepoint_Num",
                     }
-                    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+                    numeric_cols = df.select_dtypes(
+                        include=[np.number]
+                    ).columns.tolist()
                     self._marker_cols = [c for c in numeric_cols if c not in _meta_cols]
                     if self._marker_cols:
-                        self._mfi_data = df.groupby("FlowSOM_cluster")[self._marker_cols].mean()
+                        self._mfi_data = df.groupby("FlowSOM_cluster")[
+                            self._marker_cols
+                        ].mean()
         except Exception:
             pass
 
@@ -427,7 +564,9 @@ class HomeTab(QWidget):
 
         if not positives:
             self.lbl_clinical.setText("MRD Négative")
-            self.lbl_clinical.setStyleSheet(f"color: {_GREEN}; background: transparent; font-size: 16px;")
+            self.lbl_clinical.setStyleSheet(
+                f"color: {_GREEN}; background: transparent; font-size: 16px;"
+            )
             details = [f"{g['method']} : {g['pct']:.4f} %" for g in gauges]
             self.lbl_clinical_detail.setText("  ·  ".join(details))
         else:
@@ -441,11 +580,19 @@ class HomeTab(QWidget):
             if ref is None:
                 ref = max(positives, key=lambda g: g.get("pct", 0))
 
-            self.lbl_clinical.setText(f"MRD Positive — {ref['pct']:.4f} % ({ref['method']})")
-            self.lbl_clinical.setStyleSheet(f"color: {_RED}; background: transparent; font-size: 16px;")
+            self.lbl_clinical.setText(
+                f"MRD Positive — {ref['pct']:.4f} % ({ref['method']})"
+            )
+            self.lbl_clinical.setStyleSheet(
+                f"color: {_RED}; background: transparent; font-size: 16px;"
+            )
             details = []
             for g in gauges:
-                status = "POSITIF" if (g.get("positive") or g.get("low_level")) else "négatif"
+                status = (
+                    "POSITIF"
+                    if (g.get("positive") or g.get("low_level"))
+                    else "négatif"
+                )
                 details.append(f"{g['method']} : {g['pct']:.4f} % ({status})")
             self.lbl_clinical_detail.setText("  ·  ".join(details))
 
@@ -479,9 +626,20 @@ class HomeTab(QWidget):
 
     # Marqueurs techniques à exclure du spider plot (pas cliniquement pertinents)
     _TECHNICAL_MARKERS = {
-        "fsc-a", "fsc-h", "fsc-w", "ssc-a", "ssc-h", "ssc-w",
-        "time", "event_", "event", "width", "height", "area",
-        "fsc", "ssc",
+        "fsc-a",
+        "fsc-h",
+        "fsc-w",
+        "ssc-a",
+        "ssc-h",
+        "ssc-w",
+        "time",
+        "event_",
+        "event",
+        "width",
+        "height",
+        "area",
+        "fsc",
+        "ssc",
     }
 
     def _filter_clinical_markers(self, markers: List[str]) -> List[str]:
@@ -496,12 +654,23 @@ class HomeTab(QWidget):
 
     # Palette de couleurs distinctes par nœud (calquée sur Set3 de Plotly)
     _NODE_COLORS = [
-        "#8dd3c7", "#ffffb3", "#bebada", "#fb8072", "#80b1d3",
-        "#fdb462", "#b3de69", "#fccde5", "#d9d9d9", "#bc80bd",
-        "#ccebc5", "#ffed6f",
+        "#8dd3c7",
+        "#ffffb3",
+        "#bebada",
+        "#fb8072",
+        "#80b1d3",
+        "#fdb462",
+        "#b3de69",
+        "#fccde5",
+        "#d9d9d9",
+        "#bc80bd",
+        "#ccebc5",
+        "#ffed6f",
     ]
 
-    def _refresh_spider_plots(self, nodes: List[Dict], *, method_label: str = "") -> None:
+    def _refresh_spider_plots(
+        self, nodes: List[Dict], *, method_label: str = ""
+    ) -> None:
         """
         Génère les mini spider plots pour les nœuds MRD filtrés (max 8).
 
@@ -537,7 +706,9 @@ class HomeTab(QWidget):
                 f"  ·  {n_nodes} nœud(s)"
             )
         else:
-            title_text = f"Profils d'Expression — Clusters MRD (Radar)  ·  {n_nodes} nœud(s)"
+            title_text = (
+                f"Profils d'Expression — Clusters MRD (Radar)  ·  {n_nodes} nœud(s)"
+            )
         self._spider_lbl.setText(title_text)
 
         angles = np.linspace(0, 2 * np.pi, n_markers, endpoint=False).tolist()
