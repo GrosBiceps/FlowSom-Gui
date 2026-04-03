@@ -79,41 +79,59 @@ class HomeTab(QWidget):
     def _build_waiting_page(self) -> QWidget:
         """Écran placeholder avant analyse."""
         page = QWidget()
-        page.setStyleSheet(f"background: {_BASE};")
+        page.setStyleSheet("background: #0d0d17;")
         layout = QVBoxLayout(page)
         layout.setAlignment(Qt.AlignCenter)
-        layout.setSpacing(16)
+        layout.setSpacing(20)
+
+        # Conteneur centré avec fond subtil
+        container = QWidget()
+        container.setFixedWidth(520)
+        container.setStyleSheet("""
+            QWidget {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(30, 32, 52, 0.7), stop:1 rgba(20, 22, 38, 0.6));
+                border-radius: 16px;
+                border: 1px solid rgba(137, 180, 250, 0.12);
+                border-top: 2px solid rgba(137, 180, 250, 0.2);
+            }
+        """)
+        c_layout = QVBoxLayout(container)
+        c_layout.setContentsMargins(40, 36, 40, 36)
+        c_layout.setSpacing(16)
 
         title = QLabel("FlowSOM MRD Analyzer")
-        title.setFont(QFont("Segoe UI", 20, QFont.Bold))
+        title.setFont(QFont("Segoe UI", 22, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet(f"color: {_BLUE}; background: transparent;")
-        layout.addWidget(title)
+        title.setStyleSheet(
+            f"color: #c8d8fd; background: transparent; letter-spacing: -0.02em;"
+        )
+        c_layout.addWidget(title)
 
         sub = QLabel(
-            "Configurez les dossiers FCS et les paramètres dans le panneau gauche,\n"
+            "Configurez les dossiers FCS et les paramètres,\n"
             "puis cliquez sur  Lancer le Pipeline  pour démarrer l'analyse."
         )
         sub.setAlignment(Qt.AlignCenter)
-        sub.setStyleSheet(f"color: {_SUBTEXT}; background: transparent; font-size: 13px;")
+        sub.setStyleSheet(f"color: #4a4c70; background: transparent; font-size: 12px; line-height: 1.6;")
         sub.setWordWrap(True)
-        layout.addWidget(sub)
+        c_layout.addWidget(sub)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setFixedWidth(300)
-        sep.setStyleSheet(f"color: {_SURFACE1};")
-        layout.addWidget(sep, alignment=Qt.AlignCenter)
+        sep.setStyleSheet("color: rgba(137,180,250,0.08); max-height: 1px;")
+        c_layout.addWidget(sep)
 
         hint = QLabel(
-            "Les résultats MRD (% résiduel, nœuds SOM positifs) s'afficheront ici\n"
-            "dès que le pipeline sera terminé."
+            "Les résultats MRD (% résiduel, nœuds SOM positifs)\n"
+            "s'afficheront ici dès que le pipeline sera terminé."
         )
         hint.setAlignment(Qt.AlignCenter)
-        hint.setStyleSheet(f"color: {_SURFACE1}; background: transparent; font-size: 11px;")
+        hint.setStyleSheet(f"color: #2e3050; background: transparent; font-size: 11px;")
         hint.setWordWrap(True)
-        layout.addWidget(hint)
+        c_layout.addWidget(hint)
 
+        layout.addWidget(container, alignment=Qt.AlignCenter)
         return page
 
     def _build_results_page(self) -> QWidget:
@@ -201,25 +219,30 @@ class HomeTab(QWidget):
         card.setObjectName("patientCard")
         card.setStyleSheet(f"""
             QWidget#patientCard {{
-                background: {_SURFACE0};
-                border-radius: 10px;
-                border: 1px solid {_SURFACE1};
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(44, 46, 66, 0.75), stop:1 rgba(28, 30, 48, 0.7));
+                border-radius: 12px;
+                border: 1px solid rgba(137, 180, 250, 0.16);
+                border-top: 2px solid rgba(137, 180, 250, 0.28);
             }}
         """)
         layout = QHBoxLayout(card)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(24)
+        layout.setContentsMargins(20, 14, 20, 14)
+        layout.setSpacing(32)
 
         def _info_block(label: str, attr: str) -> QWidget:
             block = QWidget()
             block.setStyleSheet("background: transparent;")
             v = QVBoxLayout(block)
             v.setContentsMargins(0, 0, 0, 0)
-            v.setSpacing(2)
-            lbl = QLabel(label)
-            lbl.setStyleSheet(f"color: {_SUBTEXT}; font-size: 10px; background: transparent;")
+            v.setSpacing(3)
+            lbl = QLabel(label.upper())
+            lbl.setStyleSheet(
+                f"color: #3a3c58; font-size: 9px; background: transparent; "
+                f"font-weight: 700; letter-spacing: 0.1em;"
+            )
             val = QLabel("—")
-            val.setFont(QFont("Segoe UI", 11))
+            val.setFont(QFont("Segoe UI", 11, QFont.Bold))
             val.setStyleSheet(f"color: {_TEXT}; background: transparent;")
             val.setWordWrap(True)
             setattr(self, attr, val)
@@ -228,13 +251,33 @@ class HomeTab(QWidget):
             return block
 
         layout.addWidget(_info_block("Échantillon", "lbl_patient_stem"))
+
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.VLine)
+        sep1.setStyleSheet("color: rgba(137,180,250,0.1);")
+        layout.addWidget(sep1)
+
         layout.addWidget(_info_block("Date", "lbl_patient_date"))
+
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.VLine)
+        sep2.setStyleSheet("color: rgba(137,180,250,0.1);")
+        layout.addWidget(sep2)
+
         layout.addWidget(_info_block("Cellules totales", "lbl_patient_cells"))
+
+        sep3 = QFrame()
+        sep3.setFrameShape(QFrame.VLine)
+        sep3.setStyleSheet("color: rgba(137,180,250,0.1);")
+        layout.addWidget(sep3)
+
         layout.addWidget(_info_block("Cellules pathologiques", "lbl_patient_patho"))
         layout.addStretch()
 
         self.lbl_run_time = QLabel("")
-        self.lbl_run_time.setStyleSheet(f"color: {_SUBTEXT}; font-size: 10px; background: transparent;")
+        self.lbl_run_time.setStyleSheet(
+            f"color: #2e3050; font-size: 9px; background: transparent; font-weight: 600;"
+        )
         self.lbl_run_time.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         layout.addWidget(self.lbl_run_time)
 
@@ -246,29 +289,35 @@ class HomeTab(QWidget):
         card.setObjectName("summaryCard")
         card.setStyleSheet(f"""
             QWidget#summaryCard {{
-                background: {_SURFACE0};
-                border-radius: 10px;
-                border: 1px solid {_SURFACE1};
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 rgba(38, 32, 60, 0.75), stop:1 rgba(28, 24, 48, 0.65));
+                border-radius: 12px;
+                border: 1px solid rgba(180, 190, 255, 0.14);
+                border-left: 3px solid rgba(180, 190, 255, 0.45);
             }}
         """)
         v = QVBoxLayout(card)
-        v.setContentsMargins(16, 12, 16, 12)
+        v.setContentsMargins(20, 14, 20, 14)
         v.setSpacing(6)
 
-        lbl = QLabel("Conclusion clinique")
-        lbl.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        lbl.setStyleSheet(f"color: {_LAVENDER}; background: transparent;")
+        lbl = QLabel("CONCLUSION CLINIQUE")
+        lbl.setFont(QFont("Segoe UI", 8, QFont.Bold))
+        lbl.setStyleSheet(
+            f"color: #5a5c88; background: transparent; letter-spacing: 0.12em;"
+        )
         v.addWidget(lbl)
 
         self.lbl_clinical = QLabel("—")
-        self.lbl_clinical.setFont(QFont("Segoe UI", 13, QFont.Bold))
+        self.lbl_clinical.setFont(QFont("Segoe UI", 14, QFont.Bold))
         self.lbl_clinical.setWordWrap(True)
         self.lbl_clinical.setStyleSheet(f"color: {_TEXT}; background: transparent;")
         v.addWidget(self.lbl_clinical)
 
         self.lbl_clinical_detail = QLabel("")
         self.lbl_clinical_detail.setWordWrap(True)
-        self.lbl_clinical_detail.setStyleSheet(f"color: {_SUBTEXT}; background: transparent; font-size: 11px;")
+        self.lbl_clinical_detail.setStyleSheet(
+            f"color: #6a6c90; background: transparent; font-size: 11px;"
+        )
         v.addWidget(self.lbl_clinical_detail)
 
         return card
