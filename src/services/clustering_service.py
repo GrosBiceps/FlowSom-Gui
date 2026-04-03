@@ -291,6 +291,16 @@ def run_clustering(
                 sorted({s.condition for s in samples if s.condition in _HEALTHY_CONDITIONS}),
             )
 
+        # Ajouter un index local par fichier pour pouvoir retrouver les lignes
+        # dans raw_data après l'équilibrage (ignore_index=True dans _to_flat_dataframe
+        # efface les indices originaux).
+        _IDX_COL = "_cell_idx"
+        _orig_data_backup: dict = {}
+        for _s in samples:
+            _orig_data_backup[_s.name] = _s.data
+            _s.data = _s.data.copy()
+            _s.data[_IDX_COL] = np.arange(len(_s.data), dtype=np.int64)
+
         df_balanced = equilibrer_pool_flowsom(
             samples=samples,
             nbm_ids=nbm_ids,
@@ -299,10 +309,14 @@ def run_clustering(
             seed=sd_cfg.seed,
         )
 
+        # Restaurer les données originales (sans la colonne temporaire _cell_idx)
+        for _s in samples:
+            _s.data = _orig_data_backup[_s.name]
+
         # Reconstruire des FlowSample synthétiques à partir du DataFrame équilibré,
         # un par fichier source, pour conserver condition/file_origin par cellule.
         from flowsom_pipeline_pro.src.models.sample import FlowSample as _FlowSample
-        _meta_cols = {"condition", "file_origin", "class"}
+        _meta_cols = {"condition", "file_origin", "class", _IDX_COL}
         _marker_cols = [c for c in df_balanced.columns if c not in _meta_cols]
         _balanced_samples: List[_FlowSample] = []
         for _fname, _grp in df_balanced.groupby("file_origin", sort=False):
@@ -310,6 +324,13 @@ def run_clustering(
             # Sample original pour récupérer le raw_data si disponible
             _orig = next((s for s in samples if s.name == _fname), None)
             _df_markers = _grp[_marker_cols].reset_index(drop=True)
+
+            # Propager raw_data en sélectionnant les lignes correspondantes
+            _raw_data_balanced: Optional[pd.DataFrame] = None
+            if _orig is not None and _orig.raw_data is not None and _IDX_COL in _grp.columns:
+                _cell_indices = _grp[_IDX_COL].values.astype(int)
+                _raw_data_balanced = _orig.raw_data.iloc[_cell_indices].reset_index(drop=True)
+
             _s = _FlowSample(
                 name=str(_fname),
                 path=_orig.path if _orig else "",
@@ -317,6 +338,7 @@ def run_clustering(
                 data=_df_markers,
                 metadata=_orig.metadata if _orig else {},
                 n_cells_raw=len(_df_markers),
+                raw_data=_raw_data_balanced,
             )
             _balanced_samples.append(_s)
         samples = _balanced_samples
