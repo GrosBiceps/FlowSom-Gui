@@ -5,8 +5,8 @@
 pipeline_version: "2.0"
 
 paths:
-  healthy_folder: "C:/Users/Florian Travail/Downloads/BLAST110/BLAST110/FCS/NBM/LitlleNBM"
-  patho_folder: "C:/Users/Florian Travail/Downloads/BLAST110/BLAST110/FCS/AML_Dx/T1"
+  healthy_folder: "C:/Users/Florian Travail/Downloads/BLAST110/BLAST110/FCS/NBM/T1"
+  patho_folder: "C:/Users/Florian Travail/Downloads/BLAST110/BLAST110/FCS/1 fichier"
   output_dir: "C:/Users/Florian Travail/Downloads/BLAST110/Résults"
 
 analysis:
@@ -18,7 +18,7 @@ pregate:
   mode_blastes_vs_normal: true # true = gating asymétrique CD45 patho seulement
   viable: true               # true = appliquer gating débris de base (SSC-A vs FSC-A)
   singlets: true             # true = appliquer gating doublets de base (FSC-H vs FSC-A)
-  cd45: false # true = gating asymétrique CD45 patho seulement de base
+  cd45: true # true = gating asymétrique CD45 patho seulement de base
   cd34: false # false = pas de gating CD34 de base (optionnel, souvent peu fiable)
 
 pregate_advanced:
@@ -243,7 +243,7 @@ patho_fcs_export:
   mrd_method: "flo"          # méthode utilisée pour Is_MRD : "flo" (méthode Flo) ou "jf" (méthode JF)
 
 batch:
-  enabled: true            # true = traiter chaque FCS du dossier patho individuellement (mode lot)
+  enabled: false            # true = traiter chaque FCS du dossier patho individuellement (mode lot)
 
 export_mode:
   # "standard" : tous les fichiers de sortie (FCS complet, CSV, JSON métadonnées, plots individuels, rapports, MRD)

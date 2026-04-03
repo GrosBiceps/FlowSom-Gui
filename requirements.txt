@@ -44,6 +44,7 @@ kaleido>=0.1.0               # export statique des figures Plotly
 plotly>=5.0
 PyQt5==5.15.11
 PyQtWebEngine==5.15.7        # visualisations interactives (figures HTML)
+qtawesome>=1.3.0             # icônes vectorielles Font Awesome 5 (GUI Wizard)
 
 # ── Monitoring de performance système ────────────────────────
 psutil>=5.9                  # collecte CPU / RAM / Disque / Réseau en temps réel

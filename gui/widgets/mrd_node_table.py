@@ -12,6 +12,7 @@ Architecture : QTableView + MRDNodeTableModel (QAbstractTableModel)
 Colonnes :
     Nœud SOM | Méthodes | % Sain (nœud) | % Patho (nœud) | Cellules patho | Total nœud
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
@@ -34,6 +35,9 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QAbstractItemView,
     QSizePolicy,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QStyle,
 )
 
 
@@ -41,25 +45,27 @@ from PyQt5.QtWidgets import (
 _C = {
     "surface0": "#313244",
     "surface1": "#45475a",
-    "base":     "#1e1e2e",
-    "crust":    "#11111b",
-    "text":     "#cdd6f4",
-    "subtext":  "#a6adc8",
-    "red":      "#f38ba8",
-    "green":    "#a6e3a1",
-    "yellow":   "#f9e2af",
-    "blue":     "#89b4fa",
-    "mauve":    "#cba6f7",
+    "base": "#1e1e2e",
+    "mantle": "#181825",
+    "crust": "#11111b",
+    "text": "#cdd6f4",
+    "subtext": "#a6adc8",
+    "red": "#f38ba8",
+    "green": "#a6e3a1",
+    "yellow": "#f9e2af",
+    "blue": "#89b4fa",
+    "lavender": "#b4befe",
+    "mauve": "#cba6f7",
     "overlay0": "#6c7086",
 }
 
 # Colonnes
-_COL_NODE    = 0
+_COL_NODE = 0
 _COL_METHODS = 1
-_COL_PCT_SAIN  = 2
+_COL_PCT_SAIN = 2
 _COL_PCT_PATHO = 3
-_COL_N_PATHO   = 4
-_COL_TOTAL     = 5
+_COL_N_PATHO = 4
+_COL_TOTAL = 5
 
 _HEADERS = [
     "Nœud SOM",
@@ -72,7 +78,7 @@ _HEADERS = [
 
 # Méthodes → clé booléenne dans le dict node
 _METHOD_FLAG: Dict[str, str] = {
-    "JF":  "is_mrd_jf",
+    "JF": "is_mrd_jf",
     "Flo": "is_mrd_flo",
     "ELN": "is_mrd_eln",
 }
@@ -129,7 +135,9 @@ class MRDNodeTableModel(QAbstractTableModel):
         if orientation == Qt.Horizontal and role == Qt.DisplayRole:
             return _HEADERS[section]
         if orientation == Qt.Horizontal and role == Qt.ForegroundRole:
-            return QBrush(QColor(_C["overlay0"]))
+            return QBrush(QColor(_C["mauve"]))
+        if orientation == Qt.Horizontal and role == Qt.BackgroundRole:
+            return QBrush(QColor(_C["surface0"]))
         return QVariant()
 
     def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:
@@ -169,20 +177,26 @@ class MRDNodeTableModel(QAbstractTableModel):
         # ── ForegroundRole ───────────────────────────────────────────
         if role == Qt.ForegroundRole:
             if col == _COL_METHODS:
-                return QBrush(QColor(_C["red"]))
+                return QBrush(QColor("#ddbfff"))
             if col == _COL_PCT_SAIN:
-                return QBrush(QColor(_C["green"]))
+                return QBrush(QColor("#bdf4b7"))
             if col == _COL_PCT_PATHO:
-                return QBrush(QColor(_C["red"]))
+                return QBrush(QColor("#ff9fbe"))
             if col in (_COL_N_PATHO, _COL_TOTAL):
-                return QBrush(QColor(_C["subtext"]))
+                return QBrush(QColor("#c9d2ff"))
             return QBrush(QColor(_C["text"]))
 
         # ── BackgroundRole (ligne alternée) ──────────────────────────
         if role == Qt.BackgroundRole:
+            if col == _COL_METHODS:
+                return QBrush(QColor(203, 166, 247, 28))
+            if col == _COL_PCT_SAIN:
+                return QBrush(QColor(166, 227, 161, 22))
+            if col == _COL_PCT_PATHO:
+                return QBrush(QColor(243, 139, 168, 26))
             if row % 2 == 0:
-                return QBrush(QColor(14, 15, 24, 220))
-            return QBrush(QColor(24, 26, 42, 180))
+                return QBrush(QColor(_C["base"]))
+            return QBrush(QColor(_C["mantle"]))
 
         # ── FontRole ─────────────────────────────────────────────────
         if role == Qt.FontRole:
@@ -252,9 +266,7 @@ class MRDMethodFilterProxy(QSortFilterProxyModel):
         self._method = method
         self.invalidateFilter()
 
-    def filterAcceptsRow(
-        self, source_row: int, source_parent: QModelIndex
-    ) -> bool:
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         if not self._method:
             return True
         model = self.sourceModel()
@@ -267,6 +279,65 @@ class MRDMethodFilterProxy(QSortFilterProxyModel):
         if not flag_key:
             return True
         return bool(node.get(flag_key, False))
+
+
+class MRDNodeColorDelegate(QStyledItemDelegate):
+    """Delegate de rendu pour forcer les couleurs de colonnes du tableau MRD."""
+
+    def initStyleOption(self, option, index):  # type: ignore[override]
+        super().initStyleOption(option, index)
+        col = index.column()
+
+        if col == _COL_METHODS:
+            option.palette.setColor(option.palette.Text, QColor("#ddbfff"))
+        elif col == _COL_PCT_SAIN:
+            option.palette.setColor(option.palette.Text, QColor("#bdf4b7"))
+        elif col == _COL_PCT_PATHO:
+            option.palette.setColor(option.palette.Text, QColor("#ff9fbe"))
+        elif col in (_COL_N_PATHO, _COL_TOTAL):
+            option.palette.setColor(option.palette.Text, QColor("#c9d2ff"))
+        else:
+            option.palette.setColor(option.palette.Text, QColor(_C["text"]))
+
+    def paint(self, painter, option, index):  # type: ignore[override]
+        # Rendu manuel pour éviter que le QSS global QTableView::item n'écrase les couleurs.
+        row = index.row()
+        col = index.column()
+
+        if col == _COL_METHODS:
+            txt = QColor("#ddbfff")
+            bg = QColor(203, 166, 247, 28)
+        elif col == _COL_PCT_SAIN:
+            txt = QColor("#bdf4b7")
+            bg = QColor(166, 227, 161, 22)
+        elif col == _COL_PCT_PATHO:
+            txt = QColor("#ff9fbe")
+            bg = QColor(243, 139, 168, 26)
+        elif col in (_COL_N_PATHO, _COL_TOTAL):
+            txt = QColor("#c9d2ff")
+            bg = QColor(_C["base"] if row % 2 == 0 else _C["mantle"])
+        else:
+            txt = QColor(_C["text"])
+            bg = QColor(_C["base"] if row % 2 == 0 else _C["mantle"])
+
+        if option.state & QStyle.State_Selected:
+            bg = QColor(203, 166, 247, 70)
+            txt = QColor("#f5f7ff")
+
+        painter.save()
+        painter.fillRect(option.rect, bg)
+
+        display = index.data(Qt.DisplayRole)
+        text = "" if display is None else str(display)
+        flags = Qt.AlignCenter | Qt.AlignVCenter
+
+        font = index.data(Qt.FontRole)
+        if isinstance(font, QFont):
+            painter.setFont(font)
+
+        painter.setPen(txt)
+        painter.drawText(option.rect.adjusted(8, 0, -8, 0), flags, text)
+        painter.restore()
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -312,7 +383,7 @@ class MRDNodeTable(QWidget):
         lbl = QLabel("NŒUDS SOM MRD POSITIFS")
         lbl.setObjectName("sectionLabel")
         lbl.setStyleSheet(
-            "color: #5a5c80; font-size: 9pt; font-weight: 700; "
+            "color: #cba6f7; font-size: 9pt; font-weight: 700; "
             "letter-spacing: 0.1em; background: transparent;"
         )
         header.addWidget(lbl)
@@ -320,7 +391,7 @@ class MRDNodeTable(QWidget):
 
         lbl_filter = QLabel("Filtre :")
         lbl_filter.setStyleSheet(
-            f"color: {_C['overlay0']}; font-size: 9pt; background: transparent;"
+            f"color: {_C['subtext']}; font-size: 9pt; background: transparent;"
         )
         header.addWidget(lbl_filter)
 
@@ -328,6 +399,18 @@ class MRDNodeTable(QWidget):
         self.combo_filter.setMinimumWidth(140)
         self.combo_filter.setMaximumWidth(180)
         self.combo_filter.currentTextChanged.connect(self._on_filter_changed)
+        self.combo_filter.setStyleSheet("""
+            QComboBox {
+                background: rgba(49, 50, 68, 0.95);
+                border: 1px solid rgba(203, 166, 247, 0.35);
+                border-radius: 7px;
+                color: #cdd6f4;
+                padding: 6px 10px;
+            }
+            QComboBox:hover {
+                border-color: rgba(180, 190, 255, 0.6);
+            }
+        """)
         header.addWidget(self.combo_filter)
 
         root.addWidget(header_widget)
@@ -341,14 +424,39 @@ class MRDNodeTable(QWidget):
         # ── Vue ──────────────────────────────────────────────────────
         self._view = QTableView()
         self._view.setModel(self._proxy)
+        self._view.setItemDelegate(MRDNodeColorDelegate(self._view))
         self._view.setSortingEnabled(True)
         self._view.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._view.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._view.setSelectionMode(QAbstractItemView.SingleSelection)
-        self._view.setAlternatingRowColors(False)   # géré par BackgroundRole
+        self._view.setAlternatingRowColors(False)  # géré par BackgroundRole
         self._view.verticalHeader().setVisible(False)
         self._view.setShowGrid(False)
         self._view.setWordWrap(False)
+        self._view.setStyleSheet("""
+            QTableView {
+                background: rgba(30, 30, 46, 0.96);
+                border: 1px solid rgba(137, 180, 250, 0.16);
+                border-top: none;
+                border-radius: 0px 0px 10px 10px;
+                color: #cdd6f4;
+                outline: none;
+                selection-background-color: rgba(203, 166, 247, 0.3);
+                selection-color: #f5f7ff;
+            }
+            QHeaderView::section {
+                background: rgba(49, 50, 68, 0.98);
+                color: #cba6f7;
+                border: none;
+                border-right: 1px solid rgba(137, 180, 250, 0.08);
+                border-bottom: 1px solid rgba(137, 180, 250, 0.12);
+                padding: 9px 10px;
+                font-weight: 700;
+            }
+            QHeaderView::section:checked {
+                color: #f5c2e7;
+            }
+        """)
 
         # Hauteur des rangées
         self._view.verticalHeader().setDefaultSectionSize(38)
@@ -356,12 +464,12 @@ class MRDNodeTable(QWidget):
         # Colonnes
         hh = self._view.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.Interactive)
-        hh.setSectionResizeMode(_COL_NODE,      QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(_COL_METHODS,   QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(_COL_PCT_SAIN,  QHeaderView.Stretch)
+        hh.setSectionResizeMode(_COL_NODE, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(_COL_METHODS, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(_COL_PCT_SAIN, QHeaderView.Stretch)
         hh.setSectionResizeMode(_COL_PCT_PATHO, QHeaderView.Stretch)
-        hh.setSectionResizeMode(_COL_N_PATHO,   QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(_COL_TOTAL,     QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(_COL_N_PATHO, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(_COL_TOTAL, QHeaderView.ResizeToContents)
         hh.setHighlightSections(False)
         hh.setStretchLastSection(False)
 

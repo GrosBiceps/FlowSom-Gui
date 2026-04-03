@@ -51,10 +51,10 @@ COLORS = {
 # Indicateurs de progression du Stepper (couleurs sémantiques)
 # ---------------------------------------------------------------------------
 STEP_COLORS = {
-    "done":    "#a6e3a1",   # vert — étape terminée
-    "active":  "#89b4fa",   # bleu — étape active
-    "pending": "#45475a",   # gris — étape future
-    "error":   "#f38ba8",   # rouge — erreur
+    "done": "#a6e3a1",  # vert — étape terminée
+    "active": "#89b4fa",  # bleu — étape active
+    "pending": "#45475a",  # gris — étape future
+    "error": "#f38ba8",  # rouge — erreur
 }
 
 # ---------------------------------------------------------------------------
@@ -287,7 +287,7 @@ QPushButton#primaryBtn {
     border: 1px solid rgba(137, 180, 250, 0.5);
     border-bottom: 1px solid rgba(80, 120, 210, 0.6);
     border-radius: 8px;
-    color: #0d0f1f;
+    color: #eef4ff;
     font-weight: 700;
     font-size: 10pt;
     padding: 10px 24px;
@@ -297,18 +297,21 @@ QPushButton#primaryBtn:hover {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #b4d0ff, stop:1 #8fbbfe);
     border-color: rgba(180, 210, 255, 0.7);
+    color: #f4f8ff;
 }
 
 QPushButton#primaryBtn:pressed {
     background: #6ea0ec;
     padding-top: 11px;
     padding-bottom: 9px;
+    color: #eaf2ff;
 }
 
 QPushButton#primaryBtn:disabled {
-    background: rgba(137, 180, 250, 0.2);
-    color: rgba(13, 15, 31, 0.4);
-    border-color: rgba(137, 180, 250, 0.15);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(128, 160, 214, 0.5), stop:1 rgba(96, 126, 178, 0.5));
+    color: #dbe6ff;
+    border-color: rgba(137, 180, 250, 0.52);
 }
 
 /* Succès — vert */

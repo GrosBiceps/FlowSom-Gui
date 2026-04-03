@@ -78,6 +78,7 @@ from flowsom_pipeline_pro.gui.tabs.home_tab import HomeTab
 # qtawesome — icônes vectorielles Font Awesome 5
 try:
     import qtawesome as qta
+
     _QTA = True
 except ImportError:
     _QTA = False
@@ -87,16 +88,23 @@ _WEBENGINE_ACTIVE = False
 
 # Chemin YAML
 if getattr(sys, "frozen", False):
-    _DEFAULT_CONFIG_PATH = Path(sys.executable).parent / "config" / "default_config.yaml"
-    _MRD_CONFIG_PATH     = Path(sys.executable).parent / "config" / "mrd_config.yaml"
+    _DEFAULT_CONFIG_PATH = (
+        Path(sys.executable).parent / "config" / "default_config.yaml"
+    )
+    _MRD_CONFIG_PATH = Path(sys.executable).parent / "config" / "mrd_config.yaml"
 else:
-    _DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "default_config.yaml"
-    _MRD_CONFIG_PATH     = Path(__file__).resolve().parent.parent / "config" / "mrd_config.yaml"
+    _DEFAULT_CONFIG_PATH = (
+        Path(__file__).resolve().parent.parent / "config" / "default_config.yaml"
+    )
+    _MRD_CONFIG_PATH = (
+        Path(__file__).resolve().parent.parent / "config" / "mrd_config.yaml"
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════
 # Utilitaires
 # ══════════════════════════════════════════════════════════════════════
+
 
 def _icon(name: str, color: str = "#cdd6f4", size: int = 16) -> Any:
     """Renvoie un QIcon qtawesome ou None si non disponible."""
@@ -113,14 +121,18 @@ class DarkComboBox(QComboBox):
 
     def showPopup(self) -> None:  # noqa: N802
         popup = self.view().window()
-        popup.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+        popup.setWindowFlags(
+            Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
+        )
         super().showPopup()
 
 
 class MatplotlibCanvas(FigureCanvas):
     """Canvas Matplotlib intégré dans PyQt5 avec thème sombre."""
 
-    def __init__(self, parent: Optional[QWidget] = None, width: int = 8, height: int = 6) -> None:
+    def __init__(
+        self, parent: Optional[QWidget] = None, width: int = 8, height: int = 6
+    ) -> None:
         self.fig = Figure(figsize=(width, height), dpi=100)
         self.fig.patch.set_facecolor(COLORS["base"])
         self.axes = self.fig.add_subplot(111)
@@ -143,6 +155,7 @@ class MatplotlibCanvas(FigureCanvas):
 
     def display_figure(self, fig: Figure) -> None:
         import matplotlib.pyplot as plt
+
         old_fig = self.fig
         self.fig = fig
         self.figure = fig
@@ -158,6 +171,7 @@ class MatplotlibCanvas(FigureCanvas):
 # ══════════════════════════════════════════════════════════════════════
 # Zone Drag & Drop (Étape 1)
 # ══════════════════════════════════════════════════════════════════════
+
 
 class DropZoneLabel(QLabel):
     """Label qui accepte le glisser-déposer de dossiers."""
@@ -216,10 +230,10 @@ class DropZoneLabel(QLabel):
 # ══════════════════════════════════════════════════════════════════════
 
 _STEPS = [
-    ("1", "Import",      "Dossiers FCS"),
+    ("1", "Import", "Dossiers FCS"),
     ("2", "Paramétrage", "SOM · MRD · Gating"),
-    ("3", "Exécution",   "Lancement & logs"),
-    ("4", "Résultats",   "MRD · Visualisation"),
+    ("3", "Exécution", "Lancement & logs"),
+    ("4", "Résultats", "MRD · Visualisation"),
 ]
 
 _STEP_ICONS = [
@@ -235,9 +249,9 @@ class StepSidebar(QWidget):
 
     # État : 0=pending, 1=active, 2=done, 3=error
     STATE_PENDING = 0
-    STATE_ACTIVE  = 1
-    STATE_DONE    = 2
-    STATE_ERROR   = 3
+    STATE_ACTIVE = 1
+    STATE_DONE = 2
+    STATE_ERROR = 3
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -472,7 +486,9 @@ class FlowSomAnalyzerPro(QMainWindow):
         title.setObjectName("titleLabel")
         layout.addWidget(title)
 
-        sub = QLabel("Glissez-déposez les dossiers FCS ou utilisez les boutons Parcourir.")
+        sub = QLabel(
+            "Glissez-déposez les dossiers FCS ou utilisez les boutons Parcourir."
+        )
         sub.setObjectName("subtitleLabel")
         layout.addWidget(sub)
 
@@ -484,12 +500,16 @@ class FlowSomAnalyzerPro(QMainWindow):
         grid = QGridLayout()
         grid.setSpacing(16)
 
-        def _folder_row(label_text: str, placeholder: str, browse_slot) -> DropZoneLabel:
+        def _folder_row(
+            label_text: str, placeholder: str, browse_slot
+        ) -> DropZoneLabel:
             lbl_cat = QLabel(label_text)
             lbl_cat.setObjectName("cardLabel")
             grid.addWidget(lbl_cat, grid.rowCount(), 0, 1, 2)
 
-            drop = DropZoneLabel(f"  {placeholder}\n  Glissez un dossier ici ou cliquez sur Parcourir…")
+            drop = DropZoneLabel(
+                f"  {placeholder}\n  Glissez un dossier ici ou cliquez sur Parcourir…"
+            )
             row = grid.rowCount()
             grid.addWidget(drop, row, 0)
 
@@ -525,7 +545,7 @@ class FlowSomAnalyzerPro(QMainWindow):
         layout.addStretch()
         nav = QHBoxLayout()
         nav.addStretch()
-        btn_next = QPushButton("  Paramétrage →")
+        btn_next = QPushButton("  Paramétrage")
         btn_next.setObjectName("primaryBtn")
         btn_next.setMinimumHeight(42)
         ico_next = _icon("fa5s.arrow-right", "#11111b")
@@ -612,7 +632,7 @@ class FlowSomAnalyzerPro(QMainWindow):
         nbl = QHBoxLayout(nav_bar)
         nbl.setContentsMargins(32, 12, 32, 12)
 
-        btn_back = QPushButton("  ← Import")
+        btn_back = QPushButton("  Import")
         btn_back.setObjectName("ghostBtn")
         ico_back = _icon("fa5s.arrow-left", "#89b4fa")
         if ico_back:
@@ -626,7 +646,7 @@ class FlowSomAnalyzerPro(QMainWindow):
         btn_launch.setObjectName("primaryBtn")
         btn_launch.setMinimumHeight(42)
         btn_launch.setMinimumWidth(180)
-        ico_play = _icon("fa5s.play", "#11111b")
+        ico_play = _icon("fa5s.play", "#cdd6f4")
         if ico_play:
             btn_launch.setIcon(ico_play)
         btn_launch.clicked.connect(self._run_pipeline)
@@ -917,7 +937,7 @@ class FlowSomAnalyzerPro(QMainWindow):
         # ── Boutons ───────────────────────────────────────────────────
         btn_row = QHBoxLayout()
 
-        btn_back2 = QPushButton("  ← Paramétrage")
+        btn_back2 = QPushButton("  Paramétrage")
         btn_back2.setObjectName("ghostBtn")
         ico_back = _icon("fa5s.arrow-left", "#89b4fa")
         if ico_back:
@@ -959,7 +979,7 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.btn_run_step3 = QPushButton("  Lancer le Pipeline")
         self.btn_run_step3.setObjectName("primaryBtn")
         self.btn_run_step3.setMinimumHeight(40)
-        ico_play = _icon("fa5s.play", "#11111b")
+        ico_play = _icon("fa5s.play", "#cdd6f4")
         if ico_play:
             self.btn_run_step3.setIcon(ico_play)
         self.btn_run_step3.clicked.connect(self._run_pipeline)
@@ -1006,8 +1026,8 @@ class FlowSomAnalyzerPro(QMainWindow):
         abl.addWidget(btn_csv)
 
         btn_report = QPushButton("  Rapport HTML")
-        btn_report.setObjectName("successBtn")
-        ico_rep = _icon("fa5s.file-alt", "#11111b")
+        btn_report.setObjectName("exportBtn")
+        ico_rep = _icon("fa5s.file-alt", "#cba6f7")
         if ico_rep:
             btn_report.setIcon(ico_rep)
         btn_report.clicked.connect(self._open_html_report)
@@ -1022,7 +1042,7 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         abl.addStretch()
 
-        btn_back3 = QPushButton("  ← Logs")
+        btn_back3 = QPushButton("  Logs")
         btn_back3.setObjectName("ghostBtn")
         btn_back3.clicked.connect(lambda: self._navigate_to_step(2))
         abl.addWidget(btn_back3)
@@ -1031,12 +1051,12 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         # Onglets résultats
         self.tabs = QTabWidget()
-        self._build_home_tab()       # 0 — Accueil MRD
-        self._build_viz_tab()        # 1 — Visualisation
-        self._build_pregate_tab()    # 2 — Représentations
-        self._build_clusters_tab()   # 3 — Clusters
-        self._build_results_tab()    # 4 — Résultats clusters
-        self._build_fcs_viewer_tab() # 5 — Visualisation FCS
+        self._build_home_tab()  # 0 — Accueil MRD
+        self._build_viz_tab()  # 1 — Visualisation
+        self._build_pregate_tab()  # 2 — Représentations
+        self._build_clusters_tab()  # 3 — Clusters
+        self._build_results_tab()  # 4 — Résultats clusters
+        self._build_fcs_viewer_tab()  # 5 — Visualisation FCS
         layout.addWidget(self.tabs, 1)
 
         return page
@@ -1046,9 +1066,6 @@ class FlowSomAnalyzerPro(QMainWindow):
     def _build_home_tab(self) -> None:
         self._home_tab = HomeTab()
         self.tabs.addTab(self._home_tab, "  Accueil MRD")
-        ico = _icon("fa5s.heartbeat", "#f38ba8")
-        if ico:
-            self.tabs.setTabIcon(0, ico)
 
     def _build_viz_tab(self) -> None:
         tab = QWidget()
@@ -1058,14 +1075,25 @@ class FlowSomAnalyzerPro(QMainWindow):
         selector_layout = QHBoxLayout()
         selector_layout.addWidget(QLabel("Afficher :"))
         self.combo_plot = DarkComboBox()
-        self.combo_plot.addItems([
-            "Heatmap MFI", "Distribution Métaclusters", "UMAP",
-            "Star Chart FlowSOM", "Grille SOM statique", "MST Statique",
-            "Sankey Gating", "MST Interactif", "Grille SOM interactive",
-            "Radar Métaclusters", "% Cellules Patho / Cluster",
-            "% Cellules / Cluster", "% Patho / Nœud SOM",
-            "% Cellules / Nœud SOM", "Vue Combinée Nœuds SOM",
-        ])
+        self.combo_plot.addItems(
+            [
+                "Heatmap MFI",
+                "Distribution Métaclusters",
+                "UMAP",
+                "Star Chart FlowSOM",
+                "Grille SOM statique",
+                "MST Statique",
+                "Sankey Gating",
+                "MST Interactif",
+                "Grille SOM interactive",
+                "Radar Métaclusters",
+                "% Cellules Patho / Cluster",
+                "% Cellules / Cluster",
+                "% Patho / Nœud SOM",
+                "% Cellules / Nœud SOM",
+                "Vue Combinée Nœuds SOM",
+            ]
+        )
         self.combo_plot.currentIndexChanged.connect(self._on_plot_selection_changed)
         selector_layout.addWidget(self.combo_plot, 1)
 
@@ -1092,12 +1120,16 @@ class FlowSomAnalyzerPro(QMainWindow):
         png_layout.setContentsMargins(0, 0, 0, 0)
         self.canvas = MatplotlibCanvas(tab, width=10, height=7)
         self.toolbar = NavigationToolbar(self.canvas, tab)
-        self.toolbar.setStyleSheet("background: rgba(24,24,37,0.8); border-radius: 6px; padding: 3px;")
+        self.toolbar.setStyleSheet(
+            "background: rgba(24,24,37,0.8); border-radius: 6px; padding: 3px;"
+        )
         png_layout.addWidget(self.toolbar)
         png_layout.addWidget(self.canvas, 1)
         self._viz_stack.addWidget(png_widget)
 
-        html_placeholder = QLabel("Figures interactives (.html)\nCliquez sur  'Navigateur'  pour les afficher.")
+        html_placeholder = QLabel(
+            "Figures interactives (.html)\nCliquez sur  'Navigateur'  pour les afficher."
+        )
         html_placeholder.setAlignment(Qt.AlignCenter)
         html_placeholder.setObjectName("subtitleLabel")
         self._web_view = None
@@ -1129,7 +1161,9 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         self.gate_canvas = MatplotlibCanvas(tab, width=10, height=6)
         gate_toolbar = NavigationToolbar(self.gate_canvas, tab)
-        gate_toolbar.setStyleSheet("background: rgba(24,24,37,0.8); border-radius: 6px; padding: 3px;")
+        gate_toolbar.setStyleSheet(
+            "background: rgba(24,24,37,0.8); border-radius: 6px; padding: 3px;"
+        )
         layout.addWidget(gate_toolbar)
         layout.addWidget(self.gate_canvas, 1)
 
@@ -1140,7 +1174,14 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.gate_table = QTableWidget()
         self.gate_table.setColumnCount(6)
         self.gate_table.setHorizontalHeaderLabels(
-            ["Gate", "Fichier", "Cellules avant", "Cellules après", "% conservé", "Mode"]
+            [
+                "Gate",
+                "Fichier",
+                "Cellules avant",
+                "Cellules après",
+                "% conservé",
+                "Mode",
+            ]
         )
         self.gate_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.gate_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -1267,7 +1308,9 @@ class FlowSomAnalyzerPro(QMainWindow):
         self._results_web = None
         self._combined_canvas = MatplotlibCanvas(tab, width=10, height=5)
         self._combined_toolbar = NavigationToolbar(self._combined_canvas, tab)
-        self._combined_toolbar.setStyleSheet("background: rgba(24,24,37,0.8); border-radius: 6px; padding: 3px;")
+        self._combined_toolbar.setStyleSheet(
+            "background: rgba(24,24,37,0.8); border-radius: 6px; padding: 3px;"
+        )
         layout.addWidget(self._combined_toolbar)
         layout.addWidget(self._combined_canvas, 1)
 
@@ -1318,7 +1361,9 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         ctrl_layout.addWidget(QLabel("Couleur:"))
         self.combo_fcs_color = DarkComboBox()
-        self.combo_fcs_color.addItems(["Aucune", "FlowSOM_cluster", "FlowSOM_metacluster", "Condition"])
+        self.combo_fcs_color.addItems(
+            ["Aucune", "FlowSOM_cluster", "FlowSOM_metacluster", "Condition"]
+        )
         self.combo_fcs_color.currentIndexChanged.connect(self._update_fcs_plot)
         ctrl_layout.addWidget(self.combo_fcs_color)
 
@@ -1367,6 +1412,7 @@ class FlowSomAnalyzerPro(QMainWindow):
     def _load_default_config(self) -> None:
         try:
             from flowsom_pipeline_pro.config.pipeline_config import PipelineConfig
+
             if _DEFAULT_CONFIG_PATH.exists():
                 self._config = PipelineConfig.from_yaml(str(_DEFAULT_CONFIG_PATH))
                 self._sync_config_to_ui()
@@ -1378,6 +1424,7 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         try:
             import yaml
+
             if _MRD_CONFIG_PATH.exists():
                 with open(_MRD_CONFIG_PATH, "r", encoding="utf-8") as f:
                     self._mrd_raw = yaml.safe_load(f) or {}
@@ -1445,11 +1492,15 @@ class FlowSomAnalyzerPro(QMainWindow):
             self.chk_downsampling.setChecked(c.downsampling.enabled)
             self.spin_max_cells.setValue(c.downsampling.max_cells_per_file)
         if hasattr(c, "export_mode"):
-            idx = self.combo_export_mode.findText(getattr(c.export_mode, "mode", "standard"))
+            idx = self.combo_export_mode.findText(
+                getattr(c.export_mode, "mode", "standard")
+            )
             if idx >= 0:
                 self.combo_export_mode.setCurrentIndex(idx)
         if hasattr(c, "patho_fcs_export"):
-            idx = self.combo_mrd_fcs_method.findText(getattr(c.patho_fcs_export, "mrd_method", "flo"))
+            idx = self.combo_mrd_fcs_method.findText(
+                getattr(c.patho_fcs_export, "mrd_method", "flo")
+            )
             if idx >= 0:
                 self.combo_mrd_fcs_method.setCurrentIndex(idx)
         if hasattr(c, "stratified_downsampling"):
@@ -1508,8 +1559,12 @@ class FlowSomAnalyzerPro(QMainWindow):
         if hasattr(c, "patho_fcs_export"):
             c.patho_fcs_export.mrd_method = self.combo_mrd_fcs_method.currentText()
         if hasattr(c, "stratified_downsampling"):
-            c.stratified_downsampling.balance_conditions = self.chk_balance_conditions.isChecked()
-            c.stratified_downsampling.imbalance_ratio = self.spin_imbalance_ratio.value()
+            c.stratified_downsampling.balance_conditions = (
+                self.chk_balance_conditions.isChecked()
+            )
+            c.stratified_downsampling.imbalance_ratio = (
+                self.spin_imbalance_ratio.value()
+            )
 
         self._sync_ui_to_mrd_config()
 
@@ -1524,9 +1579,13 @@ class FlowSomAnalyzerPro(QMainWindow):
             self.combo_mrd_method.setCurrentIndex(idx)
         eln = params.get("eln_standards", {})
         self.spin_eln_min_events.setValue(int(eln.get("min_cluster_events", 50)))
-        self.spin_eln_positivity.setValue(float(eln.get("clinical_positivity_pct", 0.1)))
+        self.spin_eln_positivity.setValue(
+            float(eln.get("clinical_positivity_pct", 0.1))
+        )
         flo = params.get("method_flo", {})
-        self.spin_flo_multiplier.setValue(float(flo.get("normal_marrow_multiplier", 2.0)))
+        self.spin_flo_multiplier.setValue(
+            float(flo.get("normal_marrow_multiplier", 2.0))
+        )
         jf = params.get("method_jf", {})
         self.spin_jf_max_normal.setValue(float(jf.get("max_normal_marrow_pct", 0.1)))
         self.spin_jf_min_patho.setValue(float(jf.get("min_patho_cells_pct", 10.0)))
@@ -1536,15 +1595,26 @@ class FlowSomAnalyzerPro(QMainWindow):
             self._mrd_raw = {}
         params = self._mrd_raw.setdefault("mrd_parameters", {})
         params["method"] = self.combo_mrd_method.currentText()
-        params.setdefault("eln_standards", {})["min_cluster_events"] = self.spin_eln_min_events.value()
-        params["eln_standards"]["clinical_positivity_pct"] = self.spin_eln_positivity.value()
-        params.setdefault("method_flo", {})["normal_marrow_multiplier"] = self.spin_flo_multiplier.value()
-        params.setdefault("method_jf", {})["max_normal_marrow_pct"] = self.spin_jf_max_normal.value()
+        params.setdefault("eln_standards", {})["min_cluster_events"] = (
+            self.spin_eln_min_events.value()
+        )
+        params["eln_standards"]["clinical_positivity_pct"] = (
+            self.spin_eln_positivity.value()
+        )
+        params.setdefault("method_flo", {})["normal_marrow_multiplier"] = (
+            self.spin_flo_multiplier.value()
+        )
+        params.setdefault("method_jf", {})["max_normal_marrow_pct"] = (
+            self.spin_jf_max_normal.value()
+        )
         params["method_jf"]["min_patho_cells_pct"] = self.spin_jf_min_patho.value()
         try:
             import yaml
+
             with open(_MRD_CONFIG_PATH, "w", encoding="utf-8") as f:
-                yaml.dump(self._mrd_raw, f, allow_unicode=True, default_flow_style=False)
+                yaml.dump(
+                    self._mrd_raw, f, allow_unicode=True, default_flow_style=False
+                )
         except Exception as e:
             self._log(f" Avertissement sauvegarde MRD config : {e}")
 
@@ -1553,17 +1623,23 @@ class FlowSomAnalyzerPro(QMainWindow):
     # ==================================================================
 
     def _select_healthy_folder(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Sélectionner le dossier NBM / Sain")
+        path = QFileDialog.getExistingDirectory(
+            self, "Sélectionner le dossier NBM / Sain"
+        )
         if path:
             self.drop_healthy.set_path(path)
 
     def _select_patho_folder(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Sélectionner le dossier Pathologique")
+        path = QFileDialog.getExistingDirectory(
+            self, "Sélectionner le dossier Pathologique"
+        )
         if path:
             self.drop_patho.set_path(path)
 
     def _select_output_folder(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Sélectionner le dossier de sortie")
+        path = QFileDialog.getExistingDirectory(
+            self, "Sélectionner le dossier de sortie"
+        )
         if path:
             self.drop_output.set_path(path)
 
@@ -1580,7 +1656,9 @@ class FlowSomAnalyzerPro(QMainWindow):
         patho = self.drop_patho.path
 
         if not healthy:
-            QMessageBox.warning(self, "Erreur", "Veuillez sélectionner le dossier NBM / Sain.")
+            QMessageBox.warning(
+                self, "Erreur", "Veuillez sélectionner le dossier NBM / Sain."
+            )
             return
         if not Path(healthy).is_dir():
             QMessageBox.warning(self, "Erreur", f"Dossier NBM introuvable :\n{healthy}")
@@ -1588,10 +1666,14 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         if self.chk_compare.isChecked():
             if not patho:
-                QMessageBox.warning(self, "Erreur", "Mode comparaison : sélectionnez le dossier Patho.")
+                QMessageBox.warning(
+                    self, "Erreur", "Mode comparaison : sélectionnez le dossier Patho."
+                )
                 return
             if not Path(patho).is_dir():
-                QMessageBox.warning(self, "Erreur", f"Dossier Patho introuvable :\n{patho}")
+                QMessageBox.warning(
+                    self, "Erreur", f"Dossier Patho introuvable :\n{patho}"
+                )
                 return
 
         self._sync_ui_to_config()
@@ -1606,7 +1688,9 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.log_output.clear()
 
         self._log("═══════════════════════════════════════════════")
-        self._log(f"Pipeline FlowSOM Pro — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        self._log(
+            f"Pipeline FlowSOM Pro — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
         self._log(f"Grille : {self._config.flowsom.xdim}×{self._config.flowsom.ydim}")
         self._log(f"Métaclusters : {self._config.flowsom.n_metaclusters}")
         self._log(f"Transformation : {self._config.transform.method}")
@@ -1617,6 +1701,7 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         if self._config.batch.enabled:
             from flowsom_pipeline_pro.gui.workers import BatchWorker
+
             self._worker = BatchWorker(self._config, parent=self)
             self._worker.log_message.connect(self._on_log_message)
             self._worker.progress.connect(self._on_progress)
@@ -1638,7 +1723,9 @@ class FlowSomAnalyzerPro(QMainWindow):
     def _stop_pipeline(self) -> None:
         if self._worker is not None and self._worker.isRunning():
             reply = QMessageBox.question(
-                self, "Confirmation", "Voulez-vous interrompre le pipeline ?",
+                self,
+                "Confirmation",
+                "Voulez-vous interrompre le pipeline ?",
                 QMessageBox.Yes | QMessageBox.No,
             )
             if reply == QMessageBox.Yes:
@@ -1671,7 +1758,11 @@ class FlowSomAnalyzerPro(QMainWindow):
         if result is not None and result.success:
             self.progress_bar.setValue(100)
             self._sidebar.set_done(2)
-            elapsed = f"{result.elapsed_seconds:.1f}s" if hasattr(result, "elapsed_seconds") else ""
+            elapsed = (
+                f"{result.elapsed_seconds:.1f}s"
+                if hasattr(result, "elapsed_seconds")
+                else ""
+            )
             self.statusBar().showMessage(
                 f" Terminé — {result.n_cells:,} cellules, "
                 f"{result.n_metaclusters} métaclusters  {elapsed}"
@@ -1736,7 +1827,8 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         if excel and Path(excel).exists():
             reply = QMessageBox.question(
-                self, "Batch terminé",
+                self,
+                "Batch terminé",
                 f"{n_ok}/{n_total} fichier(s).\n\nOuvrir l'Excel de synthèse ?",
                 QMessageBox.Yes | QMessageBox.No,
             )
@@ -1786,9 +1878,15 @@ class FlowSomAnalyzerPro(QMainWindow):
                 self.results_table.setItem(i, 3, QTableWidgetItem(f"{pct:.1f}%"))
                 if has_cond:
                     sub = df[df[group_col] == cl_id]
-                    n_patho = (sub["condition"].str.lower().str.contains("patho|pathologique", na=False)).sum()
+                    n_patho = (
+                        sub["condition"]
+                        .str.lower()
+                        .str.contains("patho|pathologique", na=False)
+                    ).sum()
                     pct_patho = n_patho / count * 100 if count > 0 else 0
-                    self.results_table.setItem(i, 4, QTableWidgetItem(f"{pct_patho:.1f}%"))
+                    self.results_table.setItem(
+                        i, 4, QTableWidgetItem(f"{pct_patho:.1f}%")
+                    )
                 else:
                     self.results_table.setItem(i, 4, QTableWidgetItem("N/A"))
         except Exception as e:
@@ -1798,19 +1896,36 @@ class FlowSomAnalyzerPro(QMainWindow):
         if self._result is None or not self._result.success:
             QMessageBox.information(self, "Info", "Aucun résultat disponible.")
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Exporter clusters", "clusters_stats.txt", "Text files (*.txt)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Exporter clusters", "clusters_stats.txt", "Text files (*.txt)"
+        )
         if not path:
             return
         try:
             import numpy as np
+
             df = self._result.data
-            lines = ["=" * 70, "STATISTIQUES DES CLUSTERS — FlowSOM Analyzer Pro", "=" * 70,
-                     f"  Analyse  : {self._result.timestamp}", f"  Cellules : {self._result.n_cells:,}", ""]
-            group_col = "FlowSOM_cluster" if "FlowSOM_cluster" in df.columns else "FlowSOM_metacluster"
-            has_mc = "FlowSOM_metacluster" in df.columns and group_col == "FlowSOM_cluster"
+            lines = [
+                "=" * 70,
+                "STATISTIQUES DES CLUSTERS — FlowSOM Analyzer Pro",
+                "=" * 70,
+                f"  Analyse  : {self._result.timestamp}",
+                f"  Cellules : {self._result.n_cells:,}",
+                "",
+            ]
+            group_col = (
+                "FlowSOM_cluster"
+                if "FlowSOM_cluster" in df.columns
+                else "FlowSOM_metacluster"
+            )
+            has_mc = (
+                "FlowSOM_metacluster" in df.columns and group_col == "FlowSOM_cluster"
+            )
             has_cond = "condition" in df.columns
             total = len(df)
-            lines.append(f"{'Cluster':>10}  {'Métacluster':>12}  {'Cellules':>10}  {'% total':>8}  {'% patho':>8}")
+            lines.append(
+                f"{'Cluster':>10}  {'Métacluster':>12}  {'Cellules':>10}  {'% total':>8}  {'% patho':>8}"
+            )
             lines.append("-" * 70)
             for cl_id, count in df[group_col].value_counts().sort_index().items():
                 pct = count / total * 100 if total > 0 else 0
@@ -1821,9 +1936,15 @@ class FlowSomAnalyzerPro(QMainWindow):
                 patho_str = "N/A"
                 if has_cond:
                     sub = df[df[group_col] == cl_id]
-                    n_p = (sub["condition"].str.lower().str.contains("patho|pathologique", na=False)).sum()
+                    n_p = (
+                        sub["condition"]
+                        .str.lower()
+                        .str.contains("patho|pathologique", na=False)
+                    ).sum()
                     patho_str = f"{n_p / count * 100:.1f}%"
-                lines.append(f"{int(cl_id):>10}  {mc_val:>12}  {count:>10,}  {pct:>7.1f}%  {patho_str:>8}")
+                lines.append(
+                    f"{int(cl_id):>10}  {mc_val:>12}  {count:>10,}  {pct:>7.1f}%  {patho_str:>8}"
+                )
             with open(path, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines))
             self._log(f"Clusters exportés : {path}")
@@ -1854,9 +1975,19 @@ class FlowSomAnalyzerPro(QMainWindow):
                 return
 
             _meta_cols = {
-                "FlowSOM_cluster", "FlowSOM_metacluster", "condition", "file_origin",
-                "xGrid", "yGrid", "xNodes", "yNodes", "size", "Condition_Num",
-                "Condition", "Timepoint", "Timepoint_Num",
+                "FlowSOM_cluster",
+                "FlowSOM_metacluster",
+                "condition",
+                "file_origin",
+                "xGrid",
+                "yGrid",
+                "xNodes",
+                "yNodes",
+                "size",
+                "Condition_Num",
+                "Condition",
+                "Timepoint",
+                "Timepoint_Num",
             }
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             marker_cols = [c for c in numeric_cols if c not in _meta_cols]
@@ -1866,7 +1997,9 @@ class FlowSomAnalyzerPro(QMainWindow):
                 self.marker_list.addItem(QListWidgetItem(m))
             self.marker_list.selectAll()
 
-            mc_col = "FlowSOM_metacluster" if "FlowSOM_metacluster" in df.columns else None
+            mc_col = (
+                "FlowSOM_metacluster" if "FlowSOM_metacluster" in df.columns else None
+            )
             mfi_df = df.groupby("FlowSOM_cluster")[marker_cols].mean()
             mfi_df["n_cells"] = df.groupby("FlowSOM_cluster").size()
             if mc_col:
@@ -1879,7 +2012,11 @@ class FlowSomAnalyzerPro(QMainWindow):
             self._cluster_mfi = mfi_df
             total_cells = len(df)
             for cl_id, row_data in mfi_df.iterrows():
-                mc = int(row_data["metacluster"]) if "metacluster" in row_data.index else -1
+                mc = (
+                    int(row_data["metacluster"])
+                    if "metacluster" in row_data.index
+                    else -1
+                )
                 n = int(row_data["n_cells"])
                 pct = n / total_cells * 100 if total_cells > 0 else 0
                 label_text = f"Cluster {cl_id}  (MC{mc})  — {n:,} cell. ({pct:.1f}%)"
@@ -1891,6 +2028,7 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         except Exception as e:
             import traceback
+
             self._log(f"Erreur peuplement clusters : {e}\n{traceback.format_exc()}")
 
     def _on_cluster_selected(self, row: int) -> None:
@@ -1913,10 +2051,14 @@ class FlowSomAnalyzerPro(QMainWindow):
             if self.marker_list.item(i).isSelected()
         ]
         if not selected_markers:
-            QMessageBox.warning(self, "Avertissement", "Sélectionnez au moins un marqueur.")
+            QMessageBox.warning(
+                self, "Avertissement", "Sélectionnez au moins un marqueur."
+            )
             return
         if len(selected_markers) < 3:
-            QMessageBox.warning(self, "Avertissement", "Sélectionnez au moins 3 marqueurs.")
+            QMessageBox.warning(
+                self, "Avertissement", "Sélectionnez au moins 3 marqueurs."
+            )
             return
 
         cluster_ids = list(self._cluster_mfi.index)
@@ -1935,7 +2077,9 @@ class FlowSomAnalyzerPro(QMainWindow):
             parent=self,
         )
         self._spider_worker.figure_ready.connect(self._on_spider_ready)
-        self._spider_worker.error.connect(lambda msg: self._log(f"Spider erreur : {msg}"))
+        self._spider_worker.error.connect(
+            lambda msg: self._log(f"Spider erreur : {msg}")
+        )
         self._spider_worker.start()
 
     def _on_spider_ready(self, fig: Any) -> None:
@@ -2001,7 +2145,10 @@ class FlowSomAnalyzerPro(QMainWindow):
                 for label, keys in self._gate_plot_keys.items():
                     if not label.startswith("Prégating"):
                         continue
-                    if any(k.replace("fig_", "").replace("_", "") in fname.replace("_", "") for k in keys):
+                    if any(
+                        k.replace("fig_", "").replace("_", "") in fname.replace("_", "")
+                        for k in keys
+                    ):
                         if label not in self._gate_plot_paths:
                             self._gate_plot_paths[label] = str(file_path)
                         break
@@ -2018,9 +2165,14 @@ class FlowSomAnalyzerPro(QMainWindow):
             self.btn_open_combined.setEnabled(bool(self._combined_html_path))
 
         combined_png = self._output_plot_paths.get("Vue Combinée Nœuds SOM")
-        if combined_png and Path(combined_png).exists() and combined_png.lower().endswith(".png"):
+        if (
+            combined_png
+            and Path(combined_png).exists()
+            and combined_png.lower().endswith(".png")
+        ):
             try:
                 import matplotlib.image as mpimg
+
                 self._combined_canvas.fig.clear()
                 ax = self._combined_canvas.fig.add_subplot(111)
                 ax.imshow(mpimg.imread(combined_png))
@@ -2031,14 +2183,29 @@ class FlowSomAnalyzerPro(QMainWindow):
             except Exception as e:
                 self._log(f"Avertissement vue combinée PNG : {e}")
 
-        _repr_mapping = {k: k for k in [
-            "Heatmap MFI", "Distribution Métaclusters", "UMAP", "Star Chart FlowSOM",
-            "Grille SOM statique", "MST Statique", "Sankey Gating", "Radar Métaclusters",
-            "% Cellules Patho / Cluster", "% Cellules / Cluster",
-            "% Patho / Nœud SOM", "% Cellules / Nœud SOM", "Vue Combinée Nœuds SOM",
-        ]}
+        _repr_mapping = {
+            k: k
+            for k in [
+                "Heatmap MFI",
+                "Distribution Métaclusters",
+                "UMAP",
+                "Star Chart FlowSOM",
+                "Grille SOM statique",
+                "MST Statique",
+                "Sankey Gating",
+                "Radar Métaclusters",
+                "% Cellules Patho / Cluster",
+                "% Cellules / Cluster",
+                "% Patho / Nœud SOM",
+                "% Cellules / Nœud SOM",
+                "Vue Combinée Nœuds SOM",
+            ]
+        }
         for repr_label, plot_label in _repr_mapping.items():
-            if plot_label in self._output_plot_paths and repr_label not in self._gate_plot_paths:
+            if (
+                plot_label in self._output_plot_paths
+                and repr_label not in self._gate_plot_paths
+            ):
                 self._gate_plot_paths[repr_label] = self._output_plot_paths[plot_label]
 
         self._on_gate_plot_changed(self.combo_gate_plot.currentIndex())
@@ -2065,6 +2232,7 @@ class FlowSomAnalyzerPro(QMainWindow):
         self._viz_stack.setCurrentIndex(0)
         try:
             import matplotlib.image as mpimg
+
             self.canvas.fig.clear()
             ax = self.canvas.fig.add_subplot(111)
             ax.imshow(mpimg.imread(path))
@@ -2083,9 +2251,16 @@ class FlowSomAnalyzerPro(QMainWindow):
         self._viz_stack.setCurrentIndex(0)
         self.canvas.clear_and_reset()
         self.canvas.axes.text(
-            0.5, 0.5, text, transform=self.canvas.axes.transAxes,
-            ha="center", va="center", fontsize=13, color=COLORS["subtext"],
-            style="italic", wrap=True,
+            0.5,
+            0.5,
+            text,
+            transform=self.canvas.axes.transAxes,
+            ha="center",
+            va="center",
+            fontsize=13,
+            color=COLORS["subtext"],
+            style="italic",
+            wrap=True,
         )
         self.canvas.axes.set_xlim(0, 1)
         self.canvas.axes.set_ylim(0, 1)
@@ -2124,21 +2299,32 @@ class FlowSomAnalyzerPro(QMainWindow):
 
     def _on_gate_plot_changed(self, index: int) -> None:
         label = self.combo_gate_plot.currentText()
-        path = self._gate_plot_paths.get(label) if hasattr(self, "_gate_plot_paths") else None
+        path = (
+            self._gate_plot_paths.get(label)
+            if hasattr(self, "_gate_plot_paths")
+            else None
+        )
         if path and Path(path).exists():
             if path.lower().endswith(".html"):
                 webbrowser.open(str(Path(path).resolve()))
                 self.gate_canvas.clear_and_reset()
                 self.gate_canvas.axes.text(
-                    0.5, 0.5, f"Figure interactive\nOuverture dans le navigateur…\n\n{label}",
+                    0.5,
+                    0.5,
+                    f"Figure interactive\nOuverture dans le navigateur…\n\n{label}",
                     transform=self.gate_canvas.axes.transAxes,
-                    ha="center", va="center", fontsize=11, color=COLORS["subtext"], style="italic",
+                    ha="center",
+                    va="center",
+                    fontsize=11,
+                    color=COLORS["subtext"],
+                    style="italic",
                 )
                 self.gate_canvas.axes.axis("off")
                 self.gate_canvas.draw()
             else:
                 try:
                     import matplotlib.image as mpimg
+
                     self.gate_canvas.fig.clear()
                     ax = self.gate_canvas.fig.add_subplot(111)
                     ax.imshow(mpimg.imread(path))
@@ -2151,16 +2337,26 @@ class FlowSomAnalyzerPro(QMainWindow):
         else:
             self.gate_canvas.clear_and_reset()
             self.gate_canvas.axes.text(
-                0.5, 0.5, f"'{label}'\nnon disponible pour cette analyse",
+                0.5,
+                0.5,
+                f"'{label}'\nnon disponible pour cette analyse",
                 transform=self.gate_canvas.axes.transAxes,
-                ha="center", va="center", fontsize=11, color=COLORS["subtext"], style="italic",
+                ha="center",
+                va="center",
+                fontsize=11,
+                color=COLORS["subtext"],
+                style="italic",
             )
             self.gate_canvas.axes.axis("off")
             self.gate_canvas.draw()
 
     def _open_current_repr_browser(self) -> None:
         label = self.combo_gate_plot.currentText()
-        path = self._gate_plot_paths.get(label) if hasattr(self, "_gate_plot_paths") else None
+        path = (
+            self._gate_plot_paths.get(label)
+            if hasattr(self, "_gate_plot_paths")
+            else None
+        )
         if path and Path(path).exists():
             webbrowser.open(str(Path(path).resolve()))
         else:
@@ -2177,13 +2373,19 @@ class FlowSomAnalyzerPro(QMainWindow):
         output_files = self._result.output_files or {}
         fcs_path = output_files.get("fcs_kaluza") or output_files.get("fcs")
         if fcs_path and Path(fcs_path).exists():
-            QMessageBox.information(self, "Export FCS", f"Fichier FCS exporté par le pipeline :\n{fcs_path}")
+            QMessageBox.information(
+                self, "Export FCS", f"Fichier FCS exporté par le pipeline :\n{fcs_path}"
+            )
         else:
             try:
-                path, _ = QFileDialog.getSaveFileName(self, "Exporter FCS", "", "FCS Files (*.fcs)")
+                path, _ = QFileDialog.getSaveFileName(
+                    self, "Exporter FCS", "", "FCS Files (*.fcs)"
+                )
                 if path:
                     self._result.data.to_csv(path.replace(".fcs", ".csv"), index=False)
-                    self._log(f" Données exportées en CSV : {path.replace('.fcs', '.csv')}")
+                    self._log(
+                        f" Données exportées en CSV : {path.replace('.fcs', '.csv')}"
+                    )
             except Exception as e:
                 QMessageBox.critical(self, "Erreur", str(e))
 
@@ -2194,10 +2396,14 @@ class FlowSomAnalyzerPro(QMainWindow):
         output_files = self._result.output_files or {}
         csv_path = output_files.get("cells_csv") or output_files.get("csv")
         if csv_path and Path(csv_path).exists():
-            QMessageBox.information(self, "Export CSV", f"Fichier CSV déjà exporté :\n{csv_path}")
+            QMessageBox.information(
+                self, "Export CSV", f"Fichier CSV déjà exporté :\n{csv_path}"
+            )
         else:
             try:
-                path, _ = QFileDialog.getSaveFileName(self, "Exporter CSV", "", "CSV Files (*.csv)")
+                path, _ = QFileDialog.getSaveFileName(
+                    self, "Exporter CSV", "", "CSV Files (*.csv)"
+                )
                 if path and self._result.data is not None:
                     self._result.data.to_csv(path, index=False)
                     self._log(f" CSV exporté : {path}")
@@ -2239,6 +2445,7 @@ class FlowSomAnalyzerPro(QMainWindow):
     def _extract_fcs_names(self, file_path: str, n_channels: int) -> List[str]:
         try:
             import flowio
+
             text = flowio.FlowData(file_path).text
             norm: Dict[str, str] = {}
             for k, v in text.items():
@@ -2274,7 +2481,9 @@ class FlowSomAnalyzerPro(QMainWindow):
             parts = text_str[1:].split(delim)
             td: Dict[str, str] = {}
             for j in range(0, len(parts) - 1, 2):
-                td[parts[j].strip().upper()] = parts[j + 1].strip() if j + 1 < len(parts) else ""
+                td[parts[j].strip().upper()] = (
+                    parts[j + 1].strip() if j + 1 < len(parts) else ""
+                )
             names = []
             for i in range(1, n_channels + 1):
                 name = ""
@@ -2293,6 +2502,7 @@ class FlowSomAnalyzerPro(QMainWindow):
     def _read_fcs_binary(self, file_path: str) -> Any:
         import struct
         import numpy as np
+
         try:
             import anndata as ad
         except ImportError:
@@ -2314,13 +2524,19 @@ class FlowSomAnalyzerPro(QMainWindow):
             parts = text_str[1:].split(delimiter)
             text_dict: Dict[str, str] = {}
             for i in range(0, len(parts) - 1, 2):
-                text_dict[parts[i].strip().upper()] = parts[i + 1].strip() if i + 1 < len(parts) else ""
+                text_dict[parts[i].strip().upper()] = (
+                    parts[i + 1].strip() if i + 1 < len(parts) else ""
+                )
             n_params = int(text_dict.get("$PAR", text_dict.get("PAR", 0)))
             n_events = int(text_dict.get("$TOT", text_dict.get("TOT", 0)))
-            datatype = text_dict.get("$DATATYPE", text_dict.get("DATATYPE", "F")).upper()
+            datatype = text_dict.get(
+                "$DATATYPE", text_dict.get("DATATYPE", "F")
+            ).upper()
             byteord = text_dict.get("$BYTEORD", text_dict.get("BYTEORD", "1,2,3,4"))
             if n_params == 0 or n_events == 0:
-                raise ValueError(f"Paramètres invalides : {n_params} params, {n_events} events")
+                raise ValueError(
+                    f"Paramètres invalides : {n_params} params, {n_events} events"
+                )
             endian = "<" if byteord in ("1,2,3,4", "1,2") else ">"
             channel_names: List[str] = []
             for i in range(1, n_params + 1):
@@ -2348,7 +2564,7 @@ class FlowSomAnalyzerPro(QMainWindow):
             offset = i * bpe
             if offset + bpe <= len(data_bytes):
                 try:
-                    events.append(struct.unpack(fmt, data_bytes[offset:offset + bpe]))
+                    events.append(struct.unpack(fmt, data_bytes[offset : offset + bpe]))
                 except Exception:
                     break
         if not events:
@@ -2361,7 +2577,10 @@ class FlowSomAnalyzerPro(QMainWindow):
 
     def _load_fcs_for_visualization(self) -> None:
         import numpy as np
-        file_path, _ = QFileDialog.getOpenFileName(self, "Charger un fichier FCS", "", "FCS Files (*.fcs *.FCS)")
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Charger un fichier FCS", "", "FCS Files (*.fcs *.FCS)"
+        )
         if not file_path:
             return
         try:
@@ -2371,6 +2590,7 @@ class FlowSomAnalyzerPro(QMainWindow):
 
             try:
                 import flowsom as fs
+
                 adata = fs.io.read_FCS(file_path)
                 self._log("Chargé avec flowsom")
             except Exception as e1:
@@ -2381,6 +2601,7 @@ class FlowSomAnalyzerPro(QMainWindow):
                 try:
                     import flowio
                     import anndata as ad
+
                     fcs_data = flowio.FlowData(file_path)
                     events = np.reshape(fcs_data.events, (-1, fcs_data.channel_count))
                     n_ev, n_ch = events.shape
@@ -2408,9 +2629,15 @@ class FlowSomAnalyzerPro(QMainWindow):
                 try:
                     import fcsparser
                     import anndata as ad
+
                     for naming in ("$PnS", "$PnN"):
                         try:
-                            meta, data = fcsparser.parse(file_path, meta_data_only=False, reformat_meta=False, channel_naming=naming)
+                            meta, data = fcsparser.parse(
+                                file_path,
+                                meta_data_only=False,
+                                reformat_meta=False,
+                                channel_naming=naming,
+                            )
                             adata = ad.AnnData(data.values.astype(np.float32))
                             adata.var_names = list(data.columns)
                             self._log(f"Chargé avec fcsparser ({naming})")
@@ -2432,7 +2659,9 @@ class FlowSomAnalyzerPro(QMainWindow):
                     last_error = e4
 
             if adata is None:
-                raise RuntimeError(f"Impossible de charger le FCS. Dernière erreur : {last_error}")
+                raise RuntimeError(
+                    f"Impossible de charger le FCS. Dernière erreur : {last_error}"
+                )
 
             real_names = self._extract_fcs_names(file_path, adata.shape[1])
             try:
@@ -2452,14 +2681,24 @@ class FlowSomAnalyzerPro(QMainWindow):
             self.combo_fcs_color.blockSignals(True)
             self.combo_fcs_color.clear()
             self.combo_fcs_color.addItem("Aucune")
-            color_patterns = ("flowsom_cluster", "flowsom_metacluster", "condition", "cluster", "metacluster", "flowsom")
+            color_patterns = (
+                "flowsom_cluster",
+                "flowsom_metacluster",
+                "condition",
+                "cluster",
+                "metacluster",
+                "flowsom",
+            )
             for m in markers:
                 if any(p in m.lower() for p in color_patterns):
                     self.combo_fcs_color.addItem(m)
             self.combo_fcs_color.blockSignals(False)
 
             fsc_idx = next((i for i, m in enumerate(markers) if "FSC" in m.upper()), 0)
-            ssc_idx = next((i for i, m in enumerate(markers) if "SSC" in m.upper()), min(1, len(markers) - 1))
+            ssc_idx = next(
+                (i for i, m in enumerate(markers) if "SSC" in m.upper()),
+                min(1, len(markers) - 1),
+            )
             self.combo_fcs_x.setCurrentIndex(fsc_idx)
             self.combo_fcs_y.setCurrentIndex(ssc_idx)
 
@@ -2467,7 +2706,9 @@ class FlowSomAnalyzerPro(QMainWindow):
                 f"{Path(file_path).name}  |  {adata.shape[0]:,} cellules  |  {adata.shape[1]} paramètres"
             )
             self._update_fcs_plot()
-            self._log(f"FCS chargé : {adata.shape[0]:,} cellules, {adata.shape[1]} paramètres")
+            self._log(
+                f"FCS chargé : {adata.shape[0]:,} cellules, {adata.shape[1]} paramètres"
+            )
 
         except Exception as e:
             QMessageBox.critical(self, "Erreur chargement FCS", str(e))
@@ -2522,11 +2763,25 @@ class FlowSomAnalyzerPro(QMainWindow):
                 if is_som_y:
                     y_data = y_data + r * np.sin(theta) * radius
 
-            dim_cols = {"tsne1", "tsne2", "umap1", "umap2", "tSNE1", "tSNE2", "UMAP1", "UMAP2"}
+            dim_cols = {
+                "tsne1",
+                "tsne2",
+                "umap1",
+                "umap2",
+                "tSNE1",
+                "tSNE2",
+                "UMAP1",
+                "UMAP2",
+            }
             is_dim_x = x_marker in dim_cols
             is_dim_y = y_marker in dim_cols
             if is_dim_x or is_dim_y:
-                mask = np.isfinite(x_data) & (x_data != -999.0) & np.isfinite(y_data) & (y_data != -999.0)
+                mask = (
+                    np.isfinite(x_data)
+                    & (x_data != -999.0)
+                    & np.isfinite(y_data)
+                    & (y_data != -999.0)
+                )
             else:
                 mask = np.isfinite(x_data) & np.isfinite(y_data)
 
@@ -2544,7 +2799,9 @@ class FlowSomAnalyzerPro(QMainWindow):
                     color_data = color_data[idx]
 
             n_shown = len(x_data)
-            self.lbl_fcs_info.setText(f"Affichage : {n_shown:,} / {self.current_fcs_adata.shape[0]:,} cellules")
+            self.lbl_fcs_info.setText(
+                f"Affichage : {n_shown:,} / {self.current_fcs_adata.shape[0]:,} cellules"
+            )
 
             self.fcs_viz_canvas.clear_and_reset()
             ax = self.fcs_viz_canvas.axes
@@ -2553,43 +2810,83 @@ class FlowSomAnalyzerPro(QMainWindow):
 
             if color_data is not None and plot_type == "Scatter":
                 from matplotlib.patches import Patch
+
                 unique_vals = np.unique(color_data[np.isfinite(color_data)])
                 n_c = len(unique_vals)
-                cmap = plt.cm.tab20 if n_c <= 20 else (plt.cm.tab20b if n_c <= 40 else plt.cm.turbo)
+                cmap = (
+                    plt.cm.tab20
+                    if n_c <= 20
+                    else (plt.cm.tab20b if n_c <= 40 else plt.cm.turbo)
+                )
                 indices = np.searchsorted(unique_vals, color_data)
                 scatter_colors = cmap(indices / max(n_c - 1, 1))
                 if n_c <= 20:
                     legend_handles = [
-                        Patch(facecolor=cmap(i / max(n_c - 1, 1)), edgecolor="white",
-                              label=f"{color_by.replace('FlowSOM_', '')} {int(v)}")
+                        Patch(
+                            facecolor=cmap(i / max(n_c - 1, 1)),
+                            edgecolor="white",
+                            label=f"{color_by.replace('FlowSOM_', '')} {int(v)}",
+                        )
                         for i, v in enumerate(unique_vals)
                     ]
 
             if plot_type == "Scatter":
-                ax.scatter(x_data, y_data, s=3, alpha=0.6, c=scatter_colors, edgecolors="none", rasterized=True)
+                ax.scatter(
+                    x_data,
+                    y_data,
+                    s=3,
+                    alpha=0.6,
+                    c=scatter_colors,
+                    edgecolors="none",
+                    rasterized=True,
+                )
                 if legend_handles:
-                    ax.legend(handles=legend_handles, loc="upper right", fontsize=7,
-                              facecolor="#313244", labelcolor="#cdd6f4", edgecolor="#45475a",
-                              framealpha=0.9, ncol=2 if len(legend_handles) > 10 else 1)
+                    ax.legend(
+                        handles=legend_handles,
+                        loc="upper right",
+                        fontsize=7,
+                        facecolor="#313244",
+                        labelcolor="#cdd6f4",
+                        edgecolor="#45475a",
+                        framealpha=0.9,
+                        ncol=2 if len(legend_handles) > 10 else 1,
+                    )
             elif plot_type == "Densite":
-                h = ax.hist2d(x_data, y_data, bins=100, cmap="viridis", norm=mcolors.LogNorm())
+                h = ax.hist2d(
+                    x_data, y_data, bins=100, cmap="viridis", norm=mcolors.LogNorm()
+                )
                 cb = self.fcs_viz_canvas.fig.colorbar(h[3], ax=ax, label="Densité")
                 cb.ax.tick_params(colors=COLORS["subtext"])
                 cb.ax.yaxis.label.set_color(COLORS["subtext"])
             elif plot_type == "Contour":
                 from scipy import stats as sp_stats
+
                 try:
                     n_kde = min(5000, len(x_data))
                     kde_idx = np.random.choice(len(x_data), n_kde, replace=False)
                     xmin, xmax = x_data.min(), x_data.max()
                     ymin, ymax = y_data.min(), y_data.max()
                     xx, yy = np.mgrid[xmin:xmax:100j, ymin:ymax:100j]
-                    kernel = sp_stats.gaussian_kde(np.vstack([x_data[kde_idx], y_data[kde_idx]]))
-                    f = np.reshape(kernel(np.vstack([xx.ravel(), yy.ravel()])).T, xx.shape)
+                    kernel = sp_stats.gaussian_kde(
+                        np.vstack([x_data[kde_idx], y_data[kde_idx]])
+                    )
+                    f = np.reshape(
+                        kernel(np.vstack([xx.ravel(), yy.ravel()])).T, xx.shape
+                    )
                     ax.contourf(xx, yy, f, levels=20, cmap="viridis")
-                    ax.contour(xx, yy, f, levels=10, colors="white", linewidths=0.3, alpha=0.5)
+                    ax.contour(
+                        xx, yy, f, levels=10, colors="white", linewidths=0.3, alpha=0.5
+                    )
                 except Exception:
-                    ax.scatter(x_data, y_data, s=2, alpha=0.5, c=COLORS["blue"], edgecolors="none", rasterized=True)
+                    ax.scatter(
+                        x_data,
+                        y_data,
+                        s=2,
+                        alpha=0.5,
+                        c=COLORS["blue"],
+                        edgecolors="none",
+                        rasterized=True,
+                    )
 
             from matplotlib.ticker import FuncFormatter
 
@@ -2612,10 +2909,19 @@ class FlowSomAnalyzerPro(QMainWindow):
                 subtitle += " | jitter"
             if color_by != "Aucune":
                 subtitle += f" | couleur : {color_by.replace('FlowSOM_', '')}"
-            ax.set_title(f"{x_marker} vs {y_marker}\n{subtitle}", fontsize=12,
-                         color=COLORS["text"], fontweight="bold", pad=12)
-            ax.set_xlabel(x_marker, color=COLORS["text"], fontsize=11, fontweight="bold")
-            ax.set_ylabel(y_marker, color=COLORS["text"], fontsize=11, fontweight="bold")
+            ax.set_title(
+                f"{x_marker} vs {y_marker}\n{subtitle}",
+                fontsize=12,
+                color=COLORS["text"],
+                fontweight="bold",
+                pad=12,
+            )
+            ax.set_xlabel(
+                x_marker, color=COLORS["text"], fontsize=11, fontweight="bold"
+            )
+            ax.set_ylabel(
+                y_marker, color=COLORS["text"], fontsize=11, fontweight="bold"
+            )
             self.fcs_viz_canvas.fig.tight_layout(pad=1.5)
             self.fcs_viz_canvas.draw()
 
