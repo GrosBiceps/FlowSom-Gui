@@ -1008,6 +1008,7 @@ def plot_cd45_kde_qc(
     kde_n_grid: int = 1000,
     # kept for backwards compat — ignored
     n_grid: int = 1_000,
+    mrd_result: Optional[Any] = None,
 ) -> Tuple[Any, Any, float, Optional[float]]:
     """
     QC Gate 3 — Densité KDE CD45 avec seuil pied du pic.
@@ -1032,6 +1033,8 @@ def plot_cd45_kde_qc(
         kde_finesse: Facteur bandwidth Silverman.
         kde_sigma_smooth: Sigma du lissage gaussien.
         kde_n_grid: Résolution de la grille KDE.
+        mrd_result: MRDResult optionnel — si fourni, affiche le ratio MRD
+            (blastes / CD45+ patho) calculé par le pipeline dans l'encadré.
 
     Returns:
         Tuple (fig, ax, threshold, None).
@@ -1264,6 +1267,28 @@ def plot_cd45_kde_qc(
                     f"CD45−  : {n_patho_neg:,} ({p_neg:.1f}%)\n"
                     f"Total  : {n_patho_total:,}"
                 )
+
+                # ── Ratio MRD corrigé (blastes / CD45+ patho) ─────────────
+                if mrd_result is not None:
+                    _denom_mode = getattr(mrd_result, "mrd_denominator_mode", "none")
+                    _denom = getattr(mrd_result, "mrd_denominator", n_patho_total)
+                    _denom_lbl = (
+                        "CD45+ patho" if _denom_mode in ("cd45", "cd45_dim")
+                        else "patho total"
+                    )
+                    _mrd_jf = getattr(mrd_result, "mrd_pct_jf", None)
+                    _mrd_flo = getattr(mrd_result, "mrd_pct_flo", None)
+                    _mrd_eln = getattr(mrd_result, "mrd_pct_eln", None)
+                    _mrd_lines = [f"\n─── MRD (÷ {_denom_lbl}) ───"]
+                    _mrd_lines.append(f"  Dénominateur: {_denom:,}")
+                    if _mrd_jf is not None:
+                        _mrd_lines.append(f"  JF : {_mrd_jf:.4f}%")
+                    if _mrd_flo is not None:
+                        _mrd_lines.append(f"  Flo: {_mrd_flo:.4f}%")
+                    if _mrd_eln is not None:
+                        _mrd_lines.append(f"  ELN: {_mrd_eln:.4f}%")
+                    patho_text += "\n".join(_mrd_lines)
+
                 ax.text(
                     0.98,
                     0.58,

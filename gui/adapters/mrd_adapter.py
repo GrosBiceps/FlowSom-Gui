@@ -38,7 +38,9 @@ def adapt_mrd_result(result: Any, method_used: str = "all") -> Dict[str, Any]:
         "date": getattr(result, "patho_date", "") or "",
         "timestamp": getattr(result, "timestamp", "") or "",
         "n_cells": result.n_cells,
-        "n_cells_patho": getattr(mrd, "total_cells_patho", 0),
+        "n_cells_patho": (
+            getattr(mrd, "n_patho_pre_cd45", 0) or getattr(mrd, "total_cells_patho", 0)
+        ),
     }
 
     # ── Gauges par méthode ───────────────────────────────────────────

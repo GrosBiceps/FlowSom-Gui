@@ -1202,7 +1202,185 @@ class FlowSOMPipeline:
 
                 if mrd_cfg.enabled and "condition" in df_cells.columns:
                     _logger.info("Étape 8: Calcul MRD résiduelle (nœuds SOM)...")
-                    mrd_result = compute_mrd(df_cells, clustering, mrd_cfg)
+
+                    # ── Masque CD45 pour la MRD ───────────────────────────────
+                    # Construit systématiquement pour permettre le toggle UI
+                    # (blastes / total patho ↔ blastes / CD45+ patho), quelle
+                    # que soit la valeur de cd45_autogating_mode.
+                    #
+                    # Cas 1 — gate CD45 active (pregate.cd45=True) :
+                    #   df_cells ne contient que des cellules CD45+ → mask all True
+                    # Cas 2 — gate CD45 inactive :
+                    #   reconstruction depuis la colonne CD45 de df_cells
+                    _cd45_autogating_mode = getattr(
+                        config.pregate, "cd45_autogating_mode", "none"
+                    )
+                    _pregate_cd45_active = getattr(config.pregate, "cd45", True)
+                    _cd45_mask_mrd: Optional[np.ndarray] = None
+
+                    if _pregate_cd45_active:
+                        # Gate CD45 active : df_cells ne contient que des CD45+.
+                        # Récupération du nombre exact de cellules patho CD45+
+                        # depuis l'event COMBINED G3_cd45 (extras n_patho_post_cd45),
+                        # stocké lors du gating asymétrique mode_blastes_vs_normal.
+                        _combined_g3_event = next(
+                            (
+                                e for e in self._gating_logger.events
+                                if e.gate_name == "G3_cd45" and e.file == "COMBINED"
+                            ),
+                            None,
+                        )
+                        _n_patho_post_cd45 = (
+                            _combined_g3_event.extra.get("n_patho_post_cd45")
+                            if _combined_g3_event is not None
+                            else None
+                        )
+                        _n_patho_pre_cd45 = (
+                            _combined_g3_event.extra.get("n_patho_pre_cd45")
+                            if _combined_g3_event is not None
+                            else None
+                        )
+                        if _n_patho_post_cd45 is not None and _n_patho_post_cd45 > 0:
+                            # On passe un masque all-True à compute_mrd (df_cells
+                            # est déjà CD45+), et on surcharge n_patho_cd45pos
+                            # et n_patho_pre_cd45 après coup avec les valeurs exactes.
+                            _cd45_mask_mrd = np.ones(len(df_cells), dtype=bool)
+                            _n_patho_cd45_override: Optional[int] = int(_n_patho_post_cd45)
+                            _n_patho_pre_override: Optional[int] = (
+                                int(_n_patho_pre_cd45)
+                                if _n_patho_pre_cd45 is not None
+                                else None
+                            )
+                            _logger.info(
+                                "n_patho_cd45pos (COMBINED G3 extras): %d CD45+ / %d total patho",
+                                _n_patho_cd45_override,
+                                _n_patho_pre_override or 0,
+                            )
+                        else:
+                            _cd45_mask_mrd = np.ones(len(df_cells), dtype=bool)
+                            _n_patho_cd45_override = None
+                            _n_patho_pre_override = None
+                            _logger.warning(
+                                "n_patho_post_cd45 absent de l'event COMBINED G3_cd45 "
+                                "— relancer sans checkpoint pour régénérer les extras."
+                            )
+                    else:
+                        # Gate CD45 inactive → recalcul depuis la colonne CD45
+                        _n_patho_cd45_override = None
+                        _n_patho_pre_override = None
+                        _cd45_col = next(
+                            (c for c in df_cells.columns
+                             if c.upper() in ("CD45", "CD45-PECY5", "CD45-PC5")),
+                            None,
+                        )
+                        if _cd45_col is not None:
+                            _pct = getattr(
+                                config.pregate, "cd45_threshold_percentile", 5.0
+                            )
+                            _cd45_vals = df_cells[_cd45_col].values
+                            _thr = np.nanpercentile(_cd45_vals, _pct)
+                            _cd45_mask_mrd = _cd45_vals >= _thr
+                            _logger.info(
+                                "Masque CD45 MRD (seuil %.1f%%): %d/%d cellules CD45+",
+                                _pct,
+                                int(_cd45_mask_mrd.sum()),
+                                len(_cd45_mask_mrd),
+                            )
+                        else:
+                            _logger.warning(
+                                "Colonne CD45 absente dans df_cells — "
+                                "n_patho_cd45pos non disponible pour le toggle UI."
+                            )
+
+                    mrd_result = compute_mrd(
+                        df_cells,
+                        clustering,
+                        mrd_cfg,
+                        cd45_autogating_mode=_cd45_autogating_mode,
+                        cd45_mask=_cd45_mask_mrd,
+                    )
+
+                    # Override n_patho_cd45pos et n_patho_pre_cd45 avec les valeurs
+                    # exactes du gating logger (gating combiné asymétrique).
+                    if mrd_result is not None and _n_patho_cd45_override is not None and _n_patho_cd45_override > 0:
+                        mrd_result.n_patho_cd45pos = _n_patho_cd45_override
+                    if mrd_result is not None and _n_patho_pre_override is not None and _n_patho_pre_override > 0:
+                        mrd_result.n_patho_pre_cd45 = _n_patho_pre_override
+
+                    # ── Regénération QC Gate 3 KDE CD45 avec ratio MRD ────────
+                    # Le plot KDE CD45 initial est généré avant le calcul MRD
+                    # dans preprocessing_service. On le régénère ici pour
+                    # afficher le ratio MRD corrigé (blastes / CD45+ patho).
+                    if viz_save and mrd_result is not None:
+                        try:
+                            from flowsom_pipeline_pro.src.visualization.gating_plots import (
+                                plot_cd45_kde_qc as _plot_cd45_kde_mrd,
+                            )
+                            from flowsom_pipeline_pro.src.core.gating import (
+                                PreGating as _PG_mrd,
+                            )
+                            _cd45_col_name = next(
+                                (c for c in df_cells.columns
+                                 if c.upper() in ("CD45", "CD45-PECY5", "CD45-PC5")),
+                                None,
+                            )
+                            if _cd45_col_name is not None:
+                                _cd45_data_mrd = df_cells[_cd45_col_name].values.astype(
+                                    np.float64
+                                )
+                                # Masque CD45 : toutes les cellules de df_cells
+                                # sont CD45+ si gate CD45 était active
+                                _mask_cd45_mrd_plot = (
+                                    _cd45_mask_mrd
+                                    if _cd45_mask_mrd is not None
+                                    else np.ones(len(df_cells), dtype=bool)
+                                )
+                                _cond_mrd = (
+                                    df_cells["condition"].values
+                                    if "condition" in df_cells.columns
+                                    else None
+                                )
+                                _fig_kde_cd45_mrd, _, _, _ = _plot_cd45_kde_mrd(
+                                    cd45_data=_cd45_data_mrd,
+                                    mask_cd45=_mask_cd45_mrd_plot,
+                                    output_path=output_dir
+                                    / "plots"
+                                    / "gating"
+                                    / f"combined_07_kde_cd45_mrd_{timestamp}.png",
+                                    conditions=_cond_mrd,
+                                    condition_patho=mrd_cfg.condition_patho,
+                                    kde_seuil_relatif=getattr(
+                                        config.pregate, "kde_cd45_seuil_relatif", 0.05
+                                    ),
+                                    kde_finesse=getattr(
+                                        config.pregate, "kde_cd45_finesse", 0.6
+                                    ),
+                                    kde_sigma_smooth=getattr(
+                                        config.pregate, "kde_cd45_sigma_smooth", 10
+                                    ),
+                                    kde_n_grid=getattr(
+                                        config.pregate, "kde_cd45_n_grid", 1000
+                                    ),
+                                    mrd_result=mrd_result,
+                                )
+                                if _fig_kde_cd45_mrd is not None:
+                                    # Remplace le plot KDE CD45 initial par la
+                                    # version enrichie avec le ratio MRD
+                                    gating_figures["fig_kde_cd45"] = _fig_kde_cd45_mrd
+                                    _logger.info(
+                                        "QC Gate 3 KDE CD45 regénéré avec ratio MRD corrigé"
+                                    )
+                        except Exception as _kde_mrd_e:
+                            _logger.warning(
+                                "Regénération QC KDE CD45 + MRD échouée (non bloquant): %s",
+                                _kde_mrd_e,
+                            )
+
+                    # Propager les figures de gating (dont fig_kde_cd45 regénéré)
+                    # vers _mpl_figures — _mpl_figures est une copie shallow de
+                    # gating_figures faite avant le MRD, donc les updates postérieurs
+                    # sur gating_figures ne se reflètent pas automatiquement.
+                    _mpl_figures.update(gating_figures)
 
                     # Visualisation MRD
                     if viz_save and mrd_result is not None:

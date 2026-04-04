@@ -105,6 +105,11 @@ class PregateConfig:
     kde_cd45_sigma_smooth: int = 10  # Lissage gaussien sur la courbe KDE (sigma)
     kde_cd45_n_grid: int = 1000  # Résolution de la grille KDE
     kde_cd45_max_samples: int = 10000  # Sous-échantillonnage max pour KDE CD45
+    # Mode d'autogating CD45 pour le calcul MRD :
+    #   "none"     → pas de gate CD45 (dénominateur = toutes cellules patho)
+    #   "cd45"     → gate CD45+ standard (dénominateur = cellules patho CD45+)
+    #   "cd45_dim" → gate CD45 incluant les blastes CD45-dim (dénominateur = cellules patho CD45+)
+    cd45_autogating_mode: str = "none"  # "none" | "cd45" | "cd45_dim"
 
 
 @dataclass
@@ -435,6 +440,7 @@ class PipelineConfig:
             "kde_cd45_sigma_smooth": "kde_cd45_sigma_smooth",
             "kde_cd45_n_grid": "kde_cd45_n_grid",
             "kde_cd45_max_samples": "kde_cd45_max_samples",
+            "cd45_autogating_mode": "cd45_autogating_mode",
         }
         for yaml_key, attr in mapping_pregate.items():
             if yaml_key in pg_adv:

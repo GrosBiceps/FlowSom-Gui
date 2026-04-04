@@ -938,6 +938,20 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.chk_mode_blastes.setChecked(True)
         grid.addWidget(self.chk_mode_blastes, 3, 0, 1, 2)
 
+        grid.addWidget(QLabel("Dénominateur MRD :"), 4, 0)
+        self.combo_cd45_autogating_mode = DarkComboBox()
+        self.combo_cd45_autogating_mode.addItems([
+            "none",      # Toutes cellules patho (comportement historique)
+            "cd45",      # Cellules patho CD45+ standard
+            "cd45_dim",  # Cellules patho CD45+ (inclut blastes CD45-dim)
+        ])
+        self.combo_cd45_autogating_mode.setToolTip(
+            "none     → MRD % = blastes / toutes cellules patho\n"
+            "cd45     → MRD % = blastes / cellules patho CD45+\n"
+            "cd45_dim → MRD % = blastes / cellules patho CD45+ (blastes dim inclus)"
+        )
+        grid.addWidget(self.combo_cd45_autogating_mode, 4, 1)
+
         vbox.addLayout(grid)
         return group
 
@@ -1648,6 +1662,12 @@ class FlowSomAnalyzerPro(QMainWindow):
             self.chk_cd34.setChecked(c.pregate.cd34)
             if hasattr(c.pregate, "mode_blastes_vs_normal"):
                 self.chk_mode_blastes.setChecked(c.pregate.mode_blastes_vs_normal)
+            if hasattr(c.pregate, "cd45_autogating_mode"):
+                _cd45_mode_idx = self.combo_cd45_autogating_mode.findText(
+                    c.pregate.cd45_autogating_mode
+                )
+                if _cd45_mode_idx >= 0:
+                    self.combo_cd45_autogating_mode.setCurrentIndex(_cd45_mode_idx)
 
         if hasattr(c, "visualization"):
             self.chk_umap.setChecked(c.visualization.umap_enabled)
@@ -1718,6 +1738,10 @@ class FlowSomAnalyzerPro(QMainWindow):
         c.pregate.cd34 = self.chk_cd34.isChecked()
         if hasattr(c.pregate, "mode_blastes_vs_normal"):
             c.pregate.mode_blastes_vs_normal = self.chk_mode_blastes.isChecked()
+        if hasattr(c.pregate, "cd45_autogating_mode"):
+            c.pregate.cd45_autogating_mode = (
+                self.combo_cd45_autogating_mode.currentText()
+            )
 
         c.visualization.umap_enabled = self.chk_umap.isChecked()
         c.gpu.enabled = self.chk_gpu.isChecked()

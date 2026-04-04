@@ -155,6 +155,18 @@ class MRDResult:
     total_cells: int
     total_cells_patho: int
     total_cells_sain: int
+    # Dénominateur effectif utilisé pour le calcul MRD%
+    # = total_cells_patho si cd45_autogating_mode="none"
+    # = cellules patho CD45+ si cd45_autogating_mode in ("cd45", "cd45_dim")
+    mrd_denominator: int = 0
+    mrd_denominator_mode: str = "none"  # "none" | "cd45" | "cd45_dim"
+    # Nombre de cellules patho CD45+ — toujours calculé si cd45_mask fourni,
+    # indépendamment du dénominateur effectif. Permet le toggle UI.
+    n_patho_cd45pos: int = 0
+    # Nombre de cellules patho AVANT la gate CD45 (CD45+ + CD45-).
+    # = total_cells_patho si gate CD45 inactive.
+    # Stocké pour le toggle UI : dénominateur "toutes cellules patho".
+    n_patho_pre_cd45: int = 0
 
     # Méthode JF
     mrd_cells_jf: int = 0
@@ -186,6 +198,10 @@ class MRDResult:
             "total_cells": self.total_cells,
             "total_cells_patho": self.total_cells_patho,
             "total_cells_sain": self.total_cells_sain,
+            "mrd_denominator": self.mrd_denominator,
+            "mrd_denominator_mode": self.mrd_denominator_mode,
+            "n_patho_cd45pos": self.n_patho_cd45pos,
+            "n_patho_pre_cd45": self.n_patho_pre_cd45,
             "mrd_jf": {
                 "mrd_cells": self.mrd_cells_jf,
                 "mrd_pct": round(self.mrd_pct_jf, 6),
@@ -232,6 +248,8 @@ def compute_mrd(
     clustering: np.ndarray,
     mrd_cfg: MRDConfig,
     condition_column: str = "condition",
+    cd45_autogating_mode: str = "none",
+    cd45_mask: Optional[np.ndarray] = None,
 ) -> MRDResult:
     """
     Calcule la MRD résiduelle selon les méthodes JF, Flo et/ou ELN.
@@ -243,11 +261,21 @@ def compute_mrd(
         clustering: Array (n_cells,) d'assignation nœud SOM (0-based).
         mrd_cfg: Configuration MRD (seuils, méthodes).
         condition_column: Nom de la colonne condition dans df_cells.
+        cd45_autogating_mode: Mode d'autogating CD45 pour le dénominateur MRD.
+            "none"     → dénominateur = toutes cellules patho (comportement historique).
+            "cd45"     → dénominateur = cellules patho CD45+ uniquement.
+            "cd45_dim" → idem "cd45" (inclut les blastes CD45-dim passés par la gate).
+        cd45_mask: Masque booléen (n_cells,) indiquant les cellules CD45+ (True).
+            Obligatoire si cd45_autogating_mode != "none".
 
     Returns:
         MRDResult avec le détail par nœud SOM et les totaux MRD.
     """
-    _logger.info("Calcul MRD (nœuds SOM) — méthode(s): %s", mrd_cfg.method)
+    _logger.info(
+        "Calcul MRD (nœuds SOM) — méthode(s): %s | dénominateur CD45: %s",
+        mrd_cfg.method,
+        cd45_autogating_mode,
+    )
 
     condition = df_cells[condition_column].values if condition_column in df_cells.columns else None
     if condition is None:
@@ -261,8 +289,38 @@ def compute_mrd(
 
     unique_nodes = np.unique(clustering)
     n_total = len(clustering)
-    total_patho = int((condition == mrd_cfg.condition_patho).sum())
+    is_patho = condition == mrd_cfg.condition_patho
+    total_patho = int(is_patho.sum())
     total_sain = int((condition == mrd_cfg.condition_sain).sum())
+
+    # ── Comptage cellules patho CD45+ (toujours calculé si masque disponible) ──
+    # Stocké dans MRDResult.n_patho_cd45pos pour le toggle UI, indépendamment
+    # du dénominateur effectif choisi par l'utilisateur.
+    n_patho_cd45pos = 0
+    if cd45_mask is not None:
+        cd45_arr = np.asarray(cd45_mask, dtype=bool)
+        if len(cd45_arr) == len(condition):
+            n_patho_cd45pos = int((is_patho & cd45_arr).sum())
+        else:
+            _logger.warning(
+                "cd45_mask longueur %d ≠ n_cells %d — n_patho_cd45pos non calculé.",
+                len(cd45_arr),
+                len(condition),
+            )
+
+    # ── Dénominateur effectif pour le calcul MRD% ─────────────────────────────
+    # "cd45" / "cd45_dim" → blastes / CD45+ patho
+    # "none"              → blastes / toutes cellules patho (comportement historique)
+    use_cd45_denom = cd45_autogating_mode in ("cd45", "cd45_dim")
+    if use_cd45_denom and n_patho_cd45pos > 0:
+        total_patho_cd45pos = n_patho_cd45pos
+        _logger.info(
+            "Dénominateur MRD CD45+ : %d cellules patho CD45+ (sur %d patho totales)",
+            total_patho_cd45pos,
+            total_patho,
+        )
+    else:
+        total_patho_cd45pos = total_patho
 
     run_jf = mrd_cfg.method in ("jf", "both", "all")
     run_flo = mrd_cfg.method in ("flo", "both", "all")
@@ -348,12 +406,16 @@ def compute_mrd(
             is_mrd_eln=is_mrd_eln,
         ))
 
-    # MRD % = cellules MRD / total cellules pathologiques de la patiente
-    # (dénominateur = fichier patho uniquement, pas le total sain+patho)
-    _denom_patho = total_patho if total_patho > 0 else 1
-    mrd_pct_jf = (mrd_cells_jf / _denom_patho * 100.0) if total_patho > 0 else 0.0
-    mrd_pct_flo = (mrd_cells_flo / _denom_patho * 100.0) if total_patho > 0 else 0.0
-    mrd_pct_eln = (mrd_cells_eln / _denom_patho * 100.0) if total_patho > 0 else 0.0
+    # MRD % = cellules MRD / dénominateur patho
+    # Si cd45_autogating_mode in ("cd45", "cd45_dim") :
+    #   dénominateur = cellules patho CD45+ (population de référence CD45+)
+    # Sinon (comportement historique) :
+    #   dénominateur = toutes cellules patho
+    _denom_patho = total_patho_cd45pos if total_patho_cd45pos > 0 else 1
+    _has_patho = total_patho_cd45pos > 0
+    mrd_pct_jf = (mrd_cells_jf / _denom_patho * 100.0) if _has_patho else 0.0
+    mrd_pct_flo = (mrd_cells_flo / _denom_patho * 100.0) if _has_patho else 0.0
+    mrd_pct_eln = (mrd_cells_eln / _denom_patho * 100.0) if _has_patho else 0.0
 
     # Statut clinique ELN
     eln_positive = mrd_pct_eln >= mrd_cfg.eln_standards.clinical_positivity_pct
@@ -364,6 +426,10 @@ def compute_mrd(
         total_cells=n_total,
         total_cells_patho=total_patho,
         total_cells_sain=total_sain,
+        mrd_denominator=total_patho_cd45pos,
+        mrd_denominator_mode=cd45_autogating_mode,
+        n_patho_cd45pos=n_patho_cd45pos,
+        n_patho_pre_cd45=total_patho,
         mrd_cells_jf=mrd_cells_jf,
         mrd_pct_jf=mrd_pct_jf,
         n_nodes_mrd_jf=n_nodes_jf,

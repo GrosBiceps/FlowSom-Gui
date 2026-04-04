@@ -1184,12 +1184,16 @@ def _apply_gating_combined(
                 n_patho_post / max(n_patho_pre, 1) * 100,
                 n_sain_pre,
             )
+        _g3_extras: dict = {"method": mode}
+        if mode_blastes_vs_normal:
+            _g3_extras["n_patho_pre_cd45"] = n_patho_pre
+            _g3_extras["n_patho_post_cd45"] = n_patho_post
         gating_logger.log(
             "COMBINED",
             "G3_cd45",
             n_after_g1g2,
             n_after_cd45,
-            method=mode,
+            **_g3_extras,
         )
         combined_mask &= mask_cd45
         gate_masks["G3_cd45"] = mask_cd45

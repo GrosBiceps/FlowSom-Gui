@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QGridLayout,
     QStackedWidget,
+    QPushButton,
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
@@ -65,6 +66,11 @@ class HomeTab(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._gauges: List[MRDGauge] = []
+        # État du toggle dénominateur MRD
+        # False = toutes cellules patho  |  True = cellules patho CD45+ seulement
+        self._denom_cd45_only: bool = False
+        self._raw_mrd_result: Any = None   # MRDResult brut stocké pour recalcul
+        self._current_method: str = "all"
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -271,6 +277,10 @@ class HomeTab(QWidget):
         self._patient_card = self._build_patient_card()
         self._results_layout.addWidget(self._patient_card)
 
+        # ── Barre de contrôle dénominateur MRD ──
+        self._denom_bar = self._build_denom_bar()
+        self._results_layout.addWidget(self._denom_bar)
+
         # ── Gauges MRD ──
         self._gauge_container = QWidget()
         self._gauge_container.setStyleSheet("background: transparent;")
@@ -334,6 +344,76 @@ class HomeTab(QWidget):
 
         scroll.setWidget(content)
         return scroll
+
+    def _build_denom_bar(self) -> QWidget:
+        """Barre de contrôle pour basculer le dénominateur MRD."""
+        bar = QWidget()
+        bar.setObjectName("denomBar")
+        bar.setStyleSheet(f"""
+            QWidget#denomBar {{
+                background: rgba(36, 38, 58, 0.75);
+                border-radius: 10px;
+                border: 1px solid rgba(137, 180, 250, 0.14);
+            }}
+        """)
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(12)
+
+        icon_lbl = QLabel("÷")
+        icon_lbl.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        icon_lbl.setStyleSheet("color: #6a7cbf; background: transparent;")
+        layout.addWidget(icon_lbl)
+
+        lbl = QLabel("DÉNOMINATEUR MRD")
+        lbl.setFont(QFont("Segoe UI", 8, QFont.Bold))
+        lbl.setStyleSheet(
+            "color: #4a5080; background: transparent; letter-spacing: 0.12em;"
+        )
+        layout.addWidget(lbl)
+
+        layout.addSpacing(4)
+
+        self.lbl_denom_status = QLabel("Toutes cellules pathologiques")
+        self.lbl_denom_status.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        self.lbl_denom_status.setStyleSheet(f"color: {_TEXT}; background: transparent;")
+        layout.addWidget(self.lbl_denom_status)
+
+        self.lbl_denom_count = QLabel("")
+        self.lbl_denom_count.setStyleSheet(
+            f"color: {_SUBTEXT}; background: transparent; font-size: 10px;"
+        )
+        layout.addWidget(self.lbl_denom_count)
+
+        layout.addStretch()
+
+        self.btn_toggle_denom = QPushButton("  Basculer vers CD45+")
+        self.btn_toggle_denom.setEnabled(False)
+        self.btn_toggle_denom.setFixedHeight(30)
+        self.btn_toggle_denom.setStyleSheet(f"""
+            QPushButton {{
+                background: rgba(137, 180, 250, 0.14);
+                color: #89b4fa;
+                border: 1px solid rgba(137, 180, 250, 0.35);
+                border-radius: 7px;
+                padding: 0 14px;
+                font-size: 10px;
+                font-weight: 700;
+            }}
+            QPushButton:hover {{
+                background: rgba(137, 180, 250, 0.24);
+                border-color: rgba(137, 180, 250, 0.55);
+            }}
+            QPushButton:disabled {{
+                background: rgba(69, 71, 90, 0.3);
+                color: #4a4c70;
+                border-color: rgba(69, 71, 90, 0.4);
+            }}
+        """)
+        self.btn_toggle_denom.clicked.connect(self._toggle_mrd_denominator)
+        layout.addWidget(self.btn_toggle_denom)
+
+        return bar
 
     def _build_patient_card(self) -> QWidget:
         """Carte infos patient/fichier."""
@@ -460,6 +540,15 @@ class HomeTab(QWidget):
             result: PipelineResult post-pipeline.
             method_used: méthode MRD choisie ("all", "jf", "flo", "eln").
         """
+        # Stocker le résultat brut pour le toggle dénominateur
+        self._raw_mrd_result = getattr(result, "mrd_result", None)
+        self._current_method = method_used
+        self._denom_cd45_only = False  # Réinitialiser à chaque nouveau résultat
+        self._last_patient_stem = getattr(result, "patho_stem", "") or ""
+
+        # Configurer le bouton toggle selon la disponibilité du dénominateur CD45+
+        self._refresh_denom_bar()
+
         data = adapt_mrd_result(result, method_used)
 
         if not data["has_data"]:
@@ -603,6 +692,136 @@ class HomeTab(QWidget):
         self._node_table.load_nodes(nodes, available_methods)
         # Afficher les spider plots pour la sélection initiale
         self._refresh_spider_plots(nodes, method_label="")
+
+    # ------------------------------------------------------------------
+    # Toggle dénominateur MRD
+    # ------------------------------------------------------------------
+
+    def _refresh_denom_bar(self) -> None:
+        """Met à jour l'état de la barre de contrôle dénominateur."""
+        mrd = self._raw_mrd_result
+        if mrd is None:
+            self.btn_toggle_denom.setEnabled(False)
+            self.lbl_denom_status.setText("Toutes cellules pathologiques")
+            self.lbl_denom_count.setText("")
+            return
+
+        # n_patho_pre_cd45 = total patho avant gate CD45 (CD45+ + CD45-)
+        # Si non disponible (gate inactive), fallback sur total_cells_patho.
+        n_pre = getattr(mrd, "n_patho_pre_cd45", 0)
+        total_patho = n_pre if n_pre > 0 else getattr(mrd, "total_cells_patho", 0)
+        n_cd45pos = getattr(mrd, "n_patho_cd45pos", 0)
+
+        # Le toggle est disponible uniquement si les deux valeurs sont distinctes
+        cd45_available = n_cd45pos > 0 and n_cd45pos != total_patho
+
+        if self._denom_cd45_only:
+            self.lbl_denom_status.setText("Cellules pathologiques CD45+")
+            self.lbl_denom_status.setStyleSheet(
+                "color: #89dceb; background: transparent; font-size: 10px; font-weight: bold;"
+            )
+            self.lbl_denom_count.setText(f"({n_cd45pos:,} cellules)" if n_cd45pos > 0 else "")
+            btn_label = "  Revenir au total patho"
+        else:
+            self.lbl_denom_status.setText("Toutes cellules pathologiques")
+            self.lbl_denom_status.setStyleSheet(
+                f"color: {_TEXT}; background: transparent; font-size: 10px; font-weight: bold;"
+            )
+            self.lbl_denom_count.setText(f"({total_patho:,} cellules)" if total_patho > 0 else "")
+            btn_label = "  Basculer vers CD45+"
+
+        self.btn_toggle_denom.setText(btn_label)
+        self.btn_toggle_denom.setEnabled(cd45_available)
+
+    def _toggle_mrd_denominator(self) -> None:
+        """Bascule entre le dénominateur total patho et CD45+ patho."""
+        self._denom_cd45_only = not self._denom_cd45_only
+        self._refresh_denom_bar()
+
+        mrd = self._raw_mrd_result
+        if mrd is None:
+            return
+
+        # Recalculer les pourcentages MRD avec le nouveau dénominateur
+        new_gauges = self._recompute_gauges_with_denom(mrd, self._current_method)
+        self._update_gauges(new_gauges)
+        self._update_summary(new_gauges, {"stem": self._last_patient_stem})
+
+        # Mettre à jour le compteur "Cellules pathologiques" dans la carte patient
+        n_cd45pos = getattr(mrd, "n_patho_cd45pos", 0)
+        n_pre = getattr(mrd, "n_patho_pre_cd45", 0)
+        total_patho = n_pre if n_pre > 0 else getattr(mrd, "total_cells_patho", 0)
+        displayed = n_cd45pos if self._denom_cd45_only else total_patho
+        if hasattr(self, "lbl_patient_patho") and displayed > 0:
+            suffix = " (CD45+)" if self._denom_cd45_only else ""
+            self.lbl_patient_patho.setText(f"{displayed:,}{suffix}")
+
+    def _recompute_gauges_with_denom(
+        self, mrd: Any, method_used: str
+    ) -> List[Dict]:
+        """
+        Recalcule les gauges MRD avec le dénominateur choisi.
+
+        Si _denom_cd45_only=True  → dénominateur = mrd.n_patho_cd45pos (CD45+ patho)
+        Sinon                     → dénominateur = mrd.n_patho_pre_cd45 (total patho avant gate)
+        """
+        n_pre = getattr(mrd, "n_patho_pre_cd45", 0)
+        total_patho = n_pre if n_pre > 0 else getattr(mrd, "total_cells_patho", 0)
+        n_cd45pos = getattr(mrd, "n_patho_cd45pos", 0)
+
+        denom = n_cd45pos if (self._denom_cd45_only and n_cd45pos > 0) else total_patho
+        if denom <= 0:
+            denom = max(total_patho, 1)
+
+        def _pct(n_cells: int) -> float:
+            return round(n_cells / denom * 100.0, 4) if denom > 0 else 0.0
+
+        gauges: List[Dict] = []
+        _show_jf = method_used in ("all", "jf")
+        _show_flo = method_used in ("all", "flo")
+        _show_eln = method_used == "eln"
+
+        if _show_jf:
+            n = getattr(mrd, "mrd_cells_jf", 0)
+            p = _pct(n)
+            gauges.append({
+                "method": "JF",
+                "pct": p,
+                "n_cells": n,
+                "n_nodes": getattr(mrd, "n_nodes_mrd_jf", 0),
+                "positive": p > 0,
+                "positivity_threshold": None,
+            })
+
+        if _show_flo:
+            n = getattr(mrd, "mrd_cells_flo", 0)
+            p = _pct(n)
+            gauges.append({
+                "method": "Flo",
+                "pct": p,
+                "n_cells": n,
+                "n_nodes": getattr(mrd, "n_nodes_mrd_flo", 0),
+                "positive": p > 0,
+                "positivity_threshold": None,
+            })
+
+        if _show_eln:
+            n = getattr(mrd, "mrd_cells_eln", 0)
+            p = _pct(n)
+            cfg = getattr(mrd, "config_snapshot", {})
+            eln_cfg = cfg.get("eln_standards", {}) if isinstance(cfg, dict) else {}
+            threshold = eln_cfg.get("clinical_positivity_pct", 0.1)
+            gauges.append({
+                "method": "ELN 2025",
+                "pct": p,
+                "n_cells": n,
+                "n_nodes": getattr(mrd, "n_nodes_mrd_eln", 0),
+                "positive": p >= threshold,
+                "low_level": (n > 0) and (p < threshold),
+                "positivity_threshold": threshold,
+            })
+
+        return gauges
 
     def _on_node_filter_changed(self) -> None:
         """Rafraîchit les spider plots quand le filtre de méthode change."""
