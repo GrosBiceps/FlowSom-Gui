@@ -69,13 +69,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import yaml
 
 from flowsom_pipeline_pro.src.utils.logger import get_logger
+
+# ARCH-1 : imports au niveau du module (évite les imports différés dans les fonctions)
+from flowsom_pipeline_pro.src.analysis.blast_detection import (
+    build_blast_weights,
+    score_nodes_for_blasts,
+    score_nodes_mahalanobis,
+    score_nodes_hybrid,
+    categorize_blast_score,
+    compute_reference_stats,
+)
 
 _logger = get_logger("analysis.mrd_calculator")
 
@@ -99,8 +109,16 @@ class MRDMethodJF:
     Les deux critères ensemble évitent les nœuds "mixtes" qui contiennent des
     cellules normales et pathologiques en proportions comparables.
     """
-    max_normal_marrow_pct: float = 0.1   # % max de moelle normale dans ce cluster / total sain
-    min_patho_cells_pct: float = 10.0    # % min de cellules patho DANS le cluster
+
+    max_normal_marrow_pct: float = (
+        2.0  # % max de moelle normale dans ce cluster / total sain
+    )
+    # ⚠  Valeur portée de 0.1 → 2.0 : FlowSOM génère inévitablement du bruit
+    # topologique (quelques cellules saines dans les nœuds de blastes massifs).
+    # À 0.1 %, un cluster de 80 % MRD contenant ~300 cellules saines "de bruit"
+    # dépassait ce seuil et était rejeté entièrement. La valeur 2.0 % est
+    # cohérente avec la résolution typique d'une grille SOM 10×10.
+    min_patho_cells_pct: float = 10.0  # % min de cellules patho DANS le cluster
 
 
 @dataclass
@@ -115,7 +133,8 @@ class MRDMethodFlo:
     Plus permissive que JF sur les clusters mixtes, mais exige un déséquilibre
     significatif en faveur des cellules pathologiques.
     """
-    normal_marrow_multiplier: float = 2.0   # ratio pct_patho / pct_sain minimum
+
+    normal_marrow_multiplier: float = 2.0  # ratio pct_patho / pct_sain minimum
 
 
 @dataclass
@@ -136,37 +155,91 @@ class ELNStandards:
       Valeur de référence ELN pour la décision thérapeutique (rechute précoce).
       En dessous : MRD détectable mais non positive (MRD low-level).
     """
-    min_cluster_events: int = 50          # LOQ ELN 2022 : min d'événements/nœud
+
+    min_cluster_events: int = 50  # LOQ ELN 2022 : min d'événements/nœud
     clinical_positivity_pct: float = 0.1  # Seuil de positivité clinique (%)
 
 
 @dataclass
 class BlastPhenotypeFilter:
     """
-    Porte biologique hybride — filtre phénotypique ELN 2022 / score d'Ogata.
+    Porte biologique hybride — filtre phénotypique ELN 2022 / score d'Ogata
+    avec distance de Mahalanobis et modulation par la pureté topologique.
 
-    Rôle dans l'entonnoir à deux portes :
-      Quand enabled=True, un nœud ne peut être classé MRD que si sa
-      blast_category figure dans allowed_categories. Cela exige que le nœud
-      présente une signature phénotypique blastique conforme aux critères
-      ELN 2022 (LAIP) et au score d'Ogata (CD45-dim, SSC-bas, CD34/CD117 bright).
+    ── Choix du moteur de scoring (scoring_method) ─────────────────────────────
 
-    Réduit fortement les faux positifs liés à :
-      - L'effet batch (cellules saines atypiques isolées dans un nœud dédié)
-      - Les clusters de transition (progéniteurs normaux CD34+)
-      - Les débris non exclus par le gating
+    "linear"   (historique) : score ELN 2022 / Ogata pur — somme pondérée de
+                              Z-scores directionnels. Rapide, interprétable, mais
+                              aveugle aux corrélations entre marqueurs. Échoue sur
+                              les LAM matures CD34−/CD117− (P25/P57).
+                              Comportement identique à l'implémentation pré-Stratégie A.
 
-    Granularité : applicable indépendamment à chaque méthode (apply_to_jf,
-    apply_to_flo, apply_to_eln) pour une configuration fine.
+    "mahalanobis"           : distance de Mahalanobis seule, modulée par la
+                              pureté topologique. Résout le paradoxe des LAM
+                              matures mais sans connaissance clinique directionnelle.
 
-    Seuils configurables (high_threshold, moderate_threshold, weak_threshold) :
-      Permettent d'adapter la sensibilité à la présentation clinique.
-      Ex : abaisser moderate_threshold à 2.0 pour capturer les blastes matures
-      ayant perdu le CD34 dans les leucémies massives avancées.
+    "hybrid"   (recommandé) : combinaison pondérée Mahalanobis + linéaire.
+                              mahal_weight × D²_normalisé + linear_weight × Score_ELN.
+                              Capture à la fois la distance géométrique (brisant le
+                              paradoxe P25/P57 vs P105) et la direction clinique.
 
-    Référence : blast_detection.py — build_blast_weights(), score_nodes_for_blasts(),
-               categorize_blast_score() — basés sur ELN 2022 + score Ogata.
+    "none"                  : bypass total de la Porte Biologique. Équivalent à
+                              enabled=False mais sans avoir à modifier ce flag.
+                              Utile pour les tests de la Porte 1 seule, ou pour
+                              des cas cliniques où seule la topologie FlowSOM
+                              fait foi (MRD massive évidente > 50%).
+
+    ── Paramètres Mahalanobis ───────────────────────────────────────────────────
+
+    d2_threshold_high, d2_threshold_moderate :
+      Seuils de D² pour l'admission en "BLAST_HIGH" / "BLAST_MODERATE" dans le
+      mode "mahalanobis" pur. En mode "hybrid", ces seuils ne sont pas utilisés
+      directement — c'est le score hybride /10 qui est comparé à high_threshold.
+
+      Valeurs de référence (χ² avec k marqueurs) :
+        k=10 : χ²(10, 0.95)=18.3 → d2_high≈20, d2_moderate≈12
+        k=8  : χ²(8,  0.95)=15.5 → d2_high≈16, d2_moderate≈10
+
+    d2_normalization :
+      Valeur D² normalisée à 10/10 dans le score hybride.
+      Défaut : 20.0 (≈ χ²(10, 0.95) + marge de sécurité).
+
+    purity_modulation_power :
+      Exposant de la modulation par pureté topologique (Porte 1).
+      0.5 = racine carrée (défaut recommandé).
+      0.0 = pas de modulation (comportement pre-Mahalanobis).
+      1.0 = linéaire (modulation plus agressive).
+
+    mahal_weight, linear_weight :
+      Poids des composantes dans le score hybride.
+      Défaut : 0.65 / 0.35 (Mahalanobis dominant).
+      Augmenter mahal_weight si cohorte à forte prévalence de LAM matures.
+      Augmenter linear_weight si risque de faux positifs géométriques.
+
+    mahal_boost_factor :
+      Facteur multiplicatif appliqué au score linéaire quand D² > d2_normalization.
+      Booste les blastes atypiques géométriquement très anormaux (ex: P25).
+      Défaut : 1.5. Réduire si trop de FP sur les patients très inflammatoires.
+
+    ── Seuil dynamique (purity_threshold_override) ─────────────────────────────
+
+    Quand purity_threshold_override=True, le seuil de validation du score
+    hybride devient dynamique en fonction de la pureté du nœud :
+
+        seuil_effectif = high_threshold × (1 − (purity − purity_strict_above)
+                         × relax_factor) si purity ≥ purity_strict_above
+
+    Comportement :
+      • Nœud très pur (≥ purity_strict_above, ex: 95%) : seuil abaissé jusqu'à
+        high_threshold × (1 − relax_factor). Un phénotype "pas parfait" est accepté
+        car la pureté topologique est une preuve en soi.
+      • Nœud mixte (< purity_strict_above) : seuil maintenu à high_threshold.
+        La biologie doit compenser l'ambiguïté topologique.
+
+    Référence : blast_detection.py — score_nodes_mahalanobis(), score_nodes_hybrid(),
+               compute_reference_stats() — basés sur ELN 2022 + score Ogata + Mahalanobis.
     """
+
     enabled: bool = False
     allowed_categories: List[str] = field(
         default_factory=lambda: ["BLAST_HIGH", "BLAST_MODERATE"]
@@ -174,14 +247,56 @@ class BlastPhenotypeFilter:
     apply_to_jf: bool = True
     apply_to_flo: bool = True
     apply_to_eln: bool = True
-    high_threshold: float = 6.0
-    moderate_threshold: float = 2.0
+    # Pivot Biologique : seuils linéaires très bas (la linéarité domine à 70%)
+    high_threshold: float = 4.0
+    moderate_threshold: float = 0.5
     weak_threshold: float = 0.0
+    # ARCH-2 FIX : marker_weights = None par défaut → les poids hardcodés dans
+    # blast_detection.build_blast_weights() font autorité (source unique de vérité).
+    # L'ancienne valeur SSC=-3.0 divergeait silencieusement de build_blast_weights
+    # (SSC=-1.0), produisant des scores différents selon la présence du YAML.
+    # Pour surcharger : renseigner ce dict dans mrd_config.yaml › marker_weights.
+    marker_weights: Optional[Dict[str, float]] = None
+
+    # ── Choix du moteur de scoring ────────────────────────────────────────────
+    # "linear"       → score ELN 2022 / Ogata pur (historique, comportement inchangé)
+    # "mahalanobis"  → distance D² seule (modulée par pureté topologique)
+    # "hybrid"       → combinaison pondérée Mahalanobis + linéaire (recommandé)
+    # "none"         → bypass total de la Porte Biologique (Porte 1 seule fait foi)
+    scoring_method: str = "hybrid"  # "linear" | "mahalanobis" | "hybrid" | "none"
+    # Pivot Biologique : score linéaire dominant (70%), Mahalanobis comme détecteur
+    # d'anomalie extrême uniquement (30%) — supprime le biais anti-LAM mature
+    mahal_weight: float = 0.30  # poids Mahalanobis dans le score hybride
+    linear_weight: float = 0.70  # poids linéaire dans le score hybride
+    d2_normalization: float = 45.0  # D² → 10/10 (élargi pour tolérer les LAM matures)
+    d2_threshold_high: float = 40.0  # seuil D² BLAST_HIGH (mode mahalanobis pur)
+    d2_threshold_moderate: float = 25.0  # seuil D² BLAST_MODERATE
+    purity_modulation_power: float = 0.5  # exposant modulation pureté (0=off, 0.5=sqrt)
+    # d2_min_normal_threshold supprimé — masquait les LAM matures (impasse géométrique)
+    mahal_boost_factor: float = 1.5  # boost score linéaire si D² > d2_normalization
+
+    # ── Seuil dynamique par pureté ────────────────────────────────────────────
+    purity_threshold_override: bool = True  # activer le seuil dynamique
+    purity_strict_above: float = 0.85   # pureté ≥ 85% → seuil assoupli
+    # ARCH-6 FIX : relax_factor abaissé de 0.90 → 0.50 pour éviter l'annulation
+    # complète de la Porte 2 sur les nœuds très purs.
+    # Avec high_threshold=4.0, purity_strict_above=0.85, relax_factor=0.50 :
+    #   purity=100% → seuil = 4.0 × (1 − 0.50×1.0) = 2.0 (floor modéré)
+    #   purity=90%  → seuil = 4.0 × (1 − 0.50×0.33) = 3.33
+    #   purity=80%  → seuil = 4.0 (nœud mixte, seuil plein — porte non assouplie)
+    # L'ancienne valeur 0.90 donnait seuil=0.40 à 100% de pureté, annulant la Porte 2.
+    purity_relax_factor: float = 0.50   # assouplissement 50% max (configurable via YAML)
+
+    # ── Performance Mode 2 (stats NBM internes) ─────────────────────────────
+    nbm_stats_max_cells: int = 250000   # max lignes pour mediane/IQR NBM
+    nbm_cov_max_cells: int = 120000     # max lignes pour covariance NBM
+    nbm_mincovdet_max_cells: int = 30000  # seuil max pour utiliser MinCovDet
 
 
 @dataclass
 class MRDConfig:
     """Configuration complète du calcul MRD."""
+
     enabled: bool = True
     method: str = "all"  # "jf", "flo", "eln", "all"
     method_jf: MRDMethodJF = field(default_factory=MRDMethodJF)
@@ -226,41 +341,145 @@ def load_mrd_config(config_path: Optional[Path | str] = None) -> MRDConfig:
 
                 jf = params.get("method_jf", {})
                 cfg.method_jf.max_normal_marrow_pct = jf.get(
-                    "max_normal_marrow_pct", cfg.method_jf.max_normal_marrow_pct)
+                    "max_normal_marrow_pct", cfg.method_jf.max_normal_marrow_pct
+                )
                 cfg.method_jf.min_patho_cells_pct = jf.get(
-                    "min_patho_cells_pct", cfg.method_jf.min_patho_cells_pct)
+                    "min_patho_cells_pct", cfg.method_jf.min_patho_cells_pct
+                )
 
                 flo = params.get("method_flo", {})
                 cfg.method_flo.normal_marrow_multiplier = flo.get(
-                    "normal_marrow_multiplier", cfg.method_flo.normal_marrow_multiplier)
+                    "normal_marrow_multiplier", cfg.method_flo.normal_marrow_multiplier
+                )
 
                 eln = params.get("eln_standards", {})
                 cfg.eln_standards.min_cluster_events = eln.get(
-                    "min_cluster_events", cfg.eln_standards.min_cluster_events)
+                    "min_cluster_events", cfg.eln_standards.min_cluster_events
+                )
                 cfg.eln_standards.clinical_positivity_pct = eln.get(
-                    "clinical_positivity_pct", cfg.eln_standards.clinical_positivity_pct)
+                    "clinical_positivity_pct", cfg.eln_standards.clinical_positivity_pct
+                )
 
                 bpf = params.get("blast_phenotype_filter", {})
                 cfg.blast_phenotype_filter.enabled = bpf.get(
-                    "enabled", cfg.blast_phenotype_filter.enabled)
+                    "enabled", cfg.blast_phenotype_filter.enabled
+                )
                 cfg.blast_phenotype_filter.allowed_categories = bpf.get(
-                    "allowed_categories", cfg.blast_phenotype_filter.allowed_categories)
+                    "allowed_categories", cfg.blast_phenotype_filter.allowed_categories
+                )
                 cfg.blast_phenotype_filter.apply_to_jf = bpf.get(
-                    "apply_to_jf", cfg.blast_phenotype_filter.apply_to_jf)
+                    "apply_to_jf", cfg.blast_phenotype_filter.apply_to_jf
+                )
                 cfg.blast_phenotype_filter.apply_to_flo = bpf.get(
-                    "apply_to_flo", cfg.blast_phenotype_filter.apply_to_flo)
+                    "apply_to_flo", cfg.blast_phenotype_filter.apply_to_flo
+                )
                 cfg.blast_phenotype_filter.apply_to_eln = bpf.get(
-                    "apply_to_eln", cfg.blast_phenotype_filter.apply_to_eln)
-                cfg.blast_phenotype_filter.high_threshold = float(bpf.get(
-                    "high_threshold", cfg.blast_phenotype_filter.high_threshold))
-                cfg.blast_phenotype_filter.moderate_threshold = float(bpf.get(
-                    "moderate_threshold", cfg.blast_phenotype_filter.moderate_threshold))
-                cfg.blast_phenotype_filter.weak_threshold = float(bpf.get(
-                    "weak_threshold", cfg.blast_phenotype_filter.weak_threshold))
+                    "apply_to_eln", cfg.blast_phenotype_filter.apply_to_eln
+                )
+                cfg.blast_phenotype_filter.high_threshold = float(
+                    bpf.get("high_threshold", cfg.blast_phenotype_filter.high_threshold)
+                )
+                cfg.blast_phenotype_filter.moderate_threshold = float(
+                    bpf.get(
+                        "moderate_threshold",
+                        cfg.blast_phenotype_filter.moderate_threshold,
+                    )
+                )
+                cfg.blast_phenotype_filter.weak_threshold = float(
+                    bpf.get("weak_threshold", cfg.blast_phenotype_filter.weak_threshold)
+                )
+                _raw_mw = bpf.get("marker_weights", None)
+                if isinstance(_raw_mw, dict) and _raw_mw:
+                    cfg.blast_phenotype_filter.marker_weights = {
+                        str(k): float(v) for k, v in _raw_mw.items()
+                    }
+
+                # ── Choix du moteur de scoring ────────────────────────────
+                # Accepte "scoring_method" (spec officielle) et "scoring_mode"
+                # (nom utilisé en interne lors du dev) pour la rétrocompatibilité.
+                _sm_value = bpf.get("scoring_method", None) or bpf.get(
+                    "scoring_mode", cfg.blast_phenotype_filter.scoring_method
+                )
+                cfg.blast_phenotype_filter.scoring_method = _sm_value
+                cfg.blast_phenotype_filter.mahal_weight = float(
+                    bpf.get("mahal_weight", cfg.blast_phenotype_filter.mahal_weight)
+                )
+                cfg.blast_phenotype_filter.linear_weight = float(
+                    bpf.get("linear_weight", cfg.blast_phenotype_filter.linear_weight)
+                )
+                cfg.blast_phenotype_filter.d2_normalization = float(
+                    bpf.get(
+                        "d2_normalization", cfg.blast_phenotype_filter.d2_normalization
+                    )
+                )
+                cfg.blast_phenotype_filter.d2_threshold_high = float(
+                    bpf.get(
+                        "d2_threshold_high",
+                        cfg.blast_phenotype_filter.d2_threshold_high,
+                    )
+                )
+                cfg.blast_phenotype_filter.d2_threshold_moderate = float(
+                    bpf.get(
+                        "d2_threshold_moderate",
+                        cfg.blast_phenotype_filter.d2_threshold_moderate,
+                    )
+                )
+                cfg.blast_phenotype_filter.purity_modulation_power = float(
+                    bpf.get(
+                        "purity_modulation_power",
+                        cfg.blast_phenotype_filter.purity_modulation_power,
+                    )
+                )
+                cfg.blast_phenotype_filter.mahal_boost_factor = float(
+                    bpf.get(
+                        "mahal_boost_factor",
+                        cfg.blast_phenotype_filter.mahal_boost_factor,
+                    )
+                )
+
+                # ── Seuil dynamique par pureté ────────────────────────────
+                cfg.blast_phenotype_filter.purity_threshold_override = bool(
+                    bpf.get(
+                        "purity_threshold_override",
+                        cfg.blast_phenotype_filter.purity_threshold_override,
+                    )
+                )
+                cfg.blast_phenotype_filter.purity_strict_above = float(
+                    bpf.get(
+                        "purity_strict_above",
+                        cfg.blast_phenotype_filter.purity_strict_above,
+                    )
+                )
+                cfg.blast_phenotype_filter.purity_relax_factor = float(
+                    bpf.get(
+                        "purity_relax_factor",
+                        cfg.blast_phenotype_filter.purity_relax_factor,
+                    )
+                )
+                cfg.blast_phenotype_filter.nbm_stats_max_cells = int(
+                    bpf.get(
+                        "nbm_stats_max_cells",
+                        cfg.blast_phenotype_filter.nbm_stats_max_cells,
+                    )
+                )
+                cfg.blast_phenotype_filter.nbm_cov_max_cells = int(
+                    bpf.get(
+                        "nbm_cov_max_cells",
+                        cfg.blast_phenotype_filter.nbm_cov_max_cells,
+                    )
+                )
+                cfg.blast_phenotype_filter.nbm_mincovdet_max_cells = int(
+                    bpf.get(
+                        "nbm_mincovdet_max_cells",
+                        cfg.blast_phenotype_filter.nbm_mincovdet_max_cells,
+                    )
+                )
 
                 _logger.info("MRD config chargée depuis %s", config_path.name)
             except Exception as e:
-                _logger.warning("Erreur lecture mrd_config.yaml (%s) — valeurs par défaut.", e)
+                _logger.warning(
+                    "Erreur lecture mrd_config.yaml (%s) — valeurs par défaut.", e
+                )
 
     return cfg
 
@@ -273,24 +492,30 @@ def load_mrd_config(config_path: Optional[Path | str] = None) -> MRDConfig:
 @dataclass
 class MRDClusterResult:
     """Résultat MRD pour un nœud SOM individuel."""
-    cluster_id: int      # ID du nœud SOM
+
+    cluster_id: int  # ID du nœud SOM
     n_cells_total: int
     n_cells_sain: int
     n_cells_patho: int
-    pct_sain: float        # % de cellules saines DANS ce nœud (par rapport au total du nœud)
-    pct_patho: float       # % de cellules pathologiques DANS ce nœud
-    pct_sain_global: float  # % des cellules saines de ce nœud / total moelle normale (méthode JF)
-    is_mrd_jf: bool      # qualifié MRD par méthode JF
-    is_mrd_flo: bool     # qualifié MRD par méthode Flo
-    is_mrd_eln: bool     # qualifié MRD par méthode ELN
+    pct_sain: float  # % de cellules saines DANS ce nœud (par rapport au total du nœud)
+    pct_patho: float  # % de cellules pathologiques DANS ce nœud
+    pct_sain_global: (
+        float  # % des cellules saines de ce nœud / total moelle normale (méthode JF)
+    )
+    is_mrd_jf: bool  # qualifié MRD par méthode JF
+    is_mrd_flo: bool  # qualifié MRD par méthode Flo
+    is_mrd_eln: bool  # qualifié MRD par méthode ELN
     # Porte biologique (None si filtre désactivé ou données absentes)
     blast_score: Optional[float] = None
     blast_category: Optional[str] = None
+    mahal_d2: Optional[float] = None  # D² brut (debug / calibration)
+    node_purity: Optional[float] = None  # fraction cellules patho (0–1)
 
 
 @dataclass
 class MRDResult:
     """Résultat global du calcul MRD."""
+
     method_used: str
     total_cells: int
     total_cells_patho: int
@@ -322,11 +547,12 @@ class MRDResult:
     mrd_cells_eln: int = 0
     mrd_pct_eln: float = 0.0
     n_nodes_mrd_eln: int = 0
-    eln_positive: bool = False     # MRD% >= seuil clinique ELN
-    eln_low_level: bool = False    # MRD détectable mais < seuil clinique
+    eln_positive: bool = False  # MRD% >= seuil clinique ELN
+    eln_low_level: bool = False  # MRD détectable mais < seuil clinique
 
     # Filtre phénotypique hybride — état pour la traçabilité
     blast_filter_active: bool = False  # True si le filtre a été appliqué
+    blast_scoring_mode: str = "linear"  # "linear" | "mahalanobis" | "hybrid"
 
     # Détail par nœud SOM
     per_node: List[MRDClusterResult] = field(default_factory=list)
@@ -346,6 +572,7 @@ class MRDResult:
             "n_patho_cd45pos": self.n_patho_cd45pos,
             "n_patho_pre_cd45": self.n_patho_pre_cd45,
             "blast_filter_active": self.blast_filter_active,
+            "blast_scoring_mode": self.blast_scoring_mode,
             "mrd_jf": {
                 "mrd_cells": self.mrd_cells_jf,
                 "mrd_pct": round(self.mrd_pct_jf, 6),
@@ -375,8 +602,16 @@ class MRDResult:
                     "is_mrd_jf": c.is_mrd_jf,
                     "is_mrd_flo": c.is_mrd_flo,
                     "is_mrd_eln": c.is_mrd_eln,
-                    "blast_score": round(c.blast_score, 2) if c.blast_score is not None else None,
+                    "blast_score": round(c.blast_score, 2)
+                    if c.blast_score is not None
+                    else None,
                     "blast_category": c.blast_category,
+                    "mahal_d2": round(c.mahal_d2, 3)
+                    if c.mahal_d2 is not None
+                    else None,
+                    "node_purity": round(c.node_purity, 4)
+                    if c.node_purity is not None
+                    else None,
                 }
                 for c in self.per_node
             ],
@@ -395,83 +630,204 @@ def _build_node_blast_scores(
     node_medians: Optional[np.ndarray] = None,
     nbm_center: Optional[np.ndarray] = None,
     nbm_scale: Optional[np.ndarray] = None,
-) -> np.ndarray:
+    nbm_inv_cov: Optional[np.ndarray] = None,
+    patho_purity: Optional[np.ndarray] = None,
+    scoring_method: str = "hybrid",
+    mahal_weight: float = 0.65,
+    linear_weight: float = 0.35,
+    d2_normalization: float = 20.0,
+    purity_modulation_power: float = 0.5,
+    mahal_boost_factor: float = 1.5,
+    custom_weights: Optional[Dict[str, float]] = None,
+) -> Tuple[np.ndarray, Optional[np.ndarray]]:
     """
-    Calcule le blast_score /10 pour chaque nœud SOM, vectorisé sur toute la grille.
+    Routeur principal des moteurs de scoring blast.
 
-    ── Trois modes d'entrée (par ordre de priorité) ─────────────────────────────
+    Calcule le blast_score /10 pour chaque nœud SOM et redirige vers le moteur
+    choisi via scoring_method. C'est la seule fonction à appeler depuis compute_mrd.
 
-    Mode 1 — X_norm fourni (z-scores pré-calculés) :
-      Les médianes SOM sont déjà en z-scores par rapport à la moelle normale,
-      produits par compute_reference_normalization() de blast_detection.py.
-      C'est le mode le plus précis : les blastes ont z_CD34 ≈ +2, z_SSC ≈ −2.
+    ── Moteurs disponibles (scoring_method) ─────────────────────────────────────
 
-    Mode 2 — node_medians + nbm_center + nbm_scale fournis :
-      Z-scoring à la volée via les statistiques NBM passées explicitement.
-      Equivalent au Mode 1 mais sans pré-calcul de X_norm.
-      nbm_center = médiane NBM par marqueur (après transformation arcsinh).
-      nbm_scale  = IQR/1.35 NBM par marqueur (pseudo-std robuste).
+    "linear"       : Moteur historique — score ELN 2022 / Ogata pur.
+                     Somme pondérée de Z-scores directionnels par rapport à la NBM.
+                     Comportement identique à l'implémentation pre-Stratégie A.
+                     Requiert : X_norm OU (node_medians + nbm_center + nbm_scale).
 
-    Mode 3 — node_medians seul (fallback dégradé) :
-      Z-scoring intra-dataset : centre = médiane des médianes de nœuds,
-      scale = std des médianes de nœuds.
-      MOINS PRÉCIS : fonctionne si le dataset contient un mélange sain/patho
-      (les nœuds de blastes s'éloignent de la moyenne des nœuds normaux).
-      NE PAS UTILISER en production — uniquement en l'absence totale de NBM.
+    "mahalanobis"  : Moteur Mahalanobis seul — distance D² modulée par purity.
+                     Résout le paradoxe P25/P57 vs P105 sans connaissance directionnelle.
+                     Requiert : node_medians (brutes) + nbm_inv_cov.
+
+    "hybrid"       : Moteur hybride — combinaison pondérée Mahalanobis + linéaire.
+                     mahal_weight × D²_normalisé + linear_weight × Score_linéaire.
+                     Recommandé : capture la géométrie ET la connaissance clinique.
+                     Requiert : node_medians + nbm_inv_cov + z-scores.
+
+    "none"         : Bypass — retourne un tableau de scores nuls (10.0 partout)
+                     afin que _passes_blast_gate() laisse passer tous les nœuds.
+                     La Porte Biologique est entièrement désactivée.
+                     Ne requiert aucune donnée supplémentaire.
+
+    ── Fallback automatique ─────────────────────────────────────────────────────
+
+    Si scoring_method est "mahalanobis" ou "hybrid" mais que nbm_inv_cov est None
+    (non calculée, ex: trop peu de cellules NBM), le routeur rétrograde
+    silencieusement sur "linear" avec un warning dans le log.
+
+    ── Modes d'entrée pour la composante linéaire ───────────────────────────────
+
+    Mode 1 — X_norm fourni (z-scores pré-calculés, prioritaire).
+    Mode 2 — node_medians + nbm_center + nbm_scale (z-scoring à la volée).
+    Mode 3 — BLOQUÉ : z-scoring intra-dataset instable à haute MRD (> 20%).
 
     Args:
-        marker_names: Noms des marqueurs (colonnes de X_norm ou node_medians).
-        X_norm: Matrice [n_nodes, n_markers] des z-scores SOM vs NBM.
-                Prioritaire sur tous les autres modes si fournie.
-        node_medians: Matrice [n_nodes, n_markers] des médianes brutes par nœud
-                      (dans l'espace transformé, ex: arcsinh/5).
-        nbm_center: Vecteur [n_markers] des médianes NBM par marqueur.
-                    Requis avec node_medians pour le Mode 2.
-        nbm_scale: Vecteur [n_markers] des échelles NBM (IQR/1.35 ou std).
-                   Requis avec node_medians pour le Mode 2.
+        marker_names: Noms des marqueurs (colonnes de X_norm / node_medians).
+        X_norm: Médianes z-scorées [n_nodes, n_markers] vs NBM (Mode 1).
+        node_medians: Médianes brutes [n_nodes, n_markers] (arcsinh/5).
+                      Requis pour Mahalanobis. Aussi utilisé comme Mode 2 si
+                      nbm_center+nbm_scale fournis.
+        nbm_center: Vecteur [n_markers] médiane NBM (centre du nuage).
+        nbm_scale: Vecteur [n_markers] IQR/1.35 NBM (échelle robuste).
+        nbm_inv_cov: Matrice [n_markers × n_markers] inverse de covariance NBM.
+                     Requis pour "mahalanobis" et "hybrid".
+        patho_purity: Tableau [n_nodes] ∈ [0, 1] — fraction de cellules patient
+                      par nœud. Utilisé pour la modulation de la distance D².
+        scoring_method: Moteur choisi : "linear" | "mahalanobis" | "hybrid" | "none".
+        mahal_weight: Poids Mahalanobis dans le mode "hybrid" (défaut 0.65).
+        linear_weight: Poids linéaire dans le mode "hybrid" (défaut 0.35).
+        d2_normalization: Valeur D² normalisée à 10/10 (défaut 20.0 ≈ χ²(10,0.95)).
+        purity_modulation_power: Exposant de modulation pureté (0.5 = racine carrée).
+        custom_weights: Poids personnalisés pour le moteur linéaire (YAML marker_weights).
 
     Returns:
-        np.ndarray de forme (n_nodes,) avec scores dans [0.0, 10.0].
+        Tuple (scores, d2_raw) :
+          - scores  : np.ndarray [n_nodes] dans [0.0, 10.0].
+          - d2_raw  : np.ndarray [n_nodes] distances D² brutes (None si moteur
+                      linéaire pur ou mode "none").
 
     Raises:
-        ValueError: Si aucun des modes ne peut être utilisé.
+        ValueError: Si les données requises sont absentes pour le moteur demandé
+                    (ex: moteur "linear" sans z-scores ni stats NBM).
     """
-    from flowsom_pipeline_pro.src.analysis.blast_detection import (
-        build_blast_weights,
-        score_nodes_for_blasts,
-        compute_reference_stats,
-    )
+    # ARCH-1 : imports déplacés au niveau du module — suppression des imports différés.
+
+    # ── Mode "none" : bypass total, scores maximaux pour laisser tout passer ─
+    if scoring_method == "none":
+        _logger.debug(
+            "_build_node_blast_scores : scoring_method='none' — "
+            "Porte Biologique désactivée, tous les nœuds validés."
+        )
+        # Déterminer n_nodes à partir de la première entrée disponible
+        _n_nodes = (
+            len(X_norm)
+            if X_norm is not None
+            else len(node_medians)
+            if node_medians is not None
+            else 0
+        )
+        return np.full(_n_nodes, 10.0, dtype=float), None
+
+    # ── Résoudre le z-score pour la composante linéaire ─────────────────────
+    _X_zscore: Optional[np.ndarray] = None
 
     if X_norm is not None:
-        # Mode 1 : z-scores pré-calculés dans l'espace NBM
-        _X = np.asarray(X_norm, dtype=float)
+        _X_zscore = np.asarray(X_norm, dtype=float)
 
     elif node_medians is not None and nbm_center is not None and nbm_scale is not None:
-        # Mode 2 : z-scoring à la volée avec stats NBM explicites
-        _raw    = np.asarray(node_medians, dtype=float)
-        _center = np.asarray(nbm_center, dtype=float)
-        _scale  = np.asarray(nbm_scale, dtype=float)
-        _scale  = np.where(_scale < 0.01, 0.01, _scale)  # éviter div/0
-        _X = (_raw - _center) / _scale
-
-    elif node_medians is not None:
-        # Mode 3 : z-scoring intra-dataset (fallback dégradé — voir docstring)
         _raw = np.asarray(node_medians, dtype=float)
-        _logger.warning(
-            "Blast scoring : pas de stats NBM disponibles — z-scoring intra-dataset "
-            "(Mode 3 dégradé). Les scores seront moins discriminants. "
-            "Fournir nbm_center + nbm_scale pour un scoring optimal."
+        _center = np.asarray(nbm_center, dtype=float)
+        _scale = np.asarray(nbm_scale, dtype=float)
+        _scale = np.where(_scale < 0.01, 0.01, _scale)
+        _X_zscore = (_raw - _center) / _scale
+
+    elif node_medians is not None and scoring_method == "linear":
+        raise ValueError(
+            "build_node_blast_scores (moteur 'linear') : stats NBM requises. "
+            "Fournir nbm_center + nbm_scale, ou X_norm (z-scores pré-calculés). "
+            "Le z-scoring intra-dataset est désactivé (instable à haute MRD)."
         )
-        _center, _scale = compute_reference_stats(_raw, robust=True)
-        _X = (_raw - _center) / _scale
+
+    elif node_medians is None and scoring_method not in ("mahalanobis",):
+        raise ValueError("build_node_blast_scores : X_norm ou node_medians requis.")
+
+    # ── Résoudre node_medians_raw pour la composante Mahalanobis ────────────
+    _raw_medians: Optional[np.ndarray] = (
+        np.asarray(node_medians, dtype=float) if node_medians is not None else None
+    )
+
+    # ── Fallback automatique si inv_cov absent ───────────────────────────────
+    _effective_method = scoring_method
+    if scoring_method in ("mahalanobis", "hybrid") and nbm_inv_cov is None:
+        _logger.warning(
+            "build_node_blast_scores : inv_cov absent — fallback automatique "
+            "sur moteur 'linear' (moteur '%s' ignoré). "
+            "Calculer nbm_inv_cov via compute_reference_stats() pour activer Mahalanobis.",
+            scoring_method,
+        )
+        _effective_method = "linear"
+
+    # ── Routage vers le moteur ────────────────────────────────────────────────
+    weights = build_blast_weights(marker_names, custom_weights=custom_weights)
+
+    if _effective_method == "linear":
+        if _X_zscore is None:
+            raise ValueError(
+                "build_node_blast_scores (moteur 'linear') : z-scores requis."
+            )
+        return score_nodes_for_blasts(_X_zscore, marker_names, weights), None
+
+    elif _effective_method == "mahalanobis":
+        if _raw_medians is None:
+            raise ValueError(
+                "build_node_blast_scores (moteur 'mahalanobis') : "
+                "node_medians (brutes, arcsinh/5) requis."
+            )
+        _mu = (
+            np.asarray(nbm_center, dtype=float)
+            if nbm_center is not None
+            else np.zeros(len(marker_names))
+        )
+        d2_raw, d2_mod = score_nodes_mahalanobis(
+            _raw_medians,
+            _mu,
+            np.asarray(nbm_inv_cov, dtype=float),
+            patho_purity=patho_purity,
+            purity_modulation_power=purity_modulation_power,
+        )
+        scores = np.clip(d2_mod / max(d2_normalization, 1e-6) * 10.0, 0.0, 10.0)
+        return scores, d2_raw
 
     else:
-        raise ValueError(
-            "_build_node_blast_scores : X_norm ou node_medians requis."
+        # Moteur hybride
+        if _raw_medians is None:
+            raise ValueError(
+                "build_node_blast_scores (moteur 'hybrid') : "
+                "node_medians (brutes, arcsinh/5) requis."
+            )
+        if _X_zscore is None:
+            raise ValueError(
+                "build_node_blast_scores (moteur 'hybrid') : z-scores requis "
+                "pour la composante linéaire (X_norm ou node_medians+stats_NBM)."
+            )
+        scores, d2_raw = score_nodes_hybrid(
+            node_medians_raw=_raw_medians,
+            node_medians_zscore=_X_zscore,
+            nbm_center=np.asarray(nbm_center, dtype=float),
+            nbm_inv_cov=np.asarray(nbm_inv_cov, dtype=float),
+            marker_names=marker_names,
+            patho_purity=patho_purity,
+            weights=weights,
+            mahal_weight=mahal_weight,
+            linear_weight=linear_weight,
+            d2_normalization=d2_normalization,
+            purity_modulation_power=purity_modulation_power,
+            mahal_boost_factor=mahal_boost_factor,
         )
+        return scores, d2_raw
 
-    weights = build_blast_weights(marker_names)
-    return score_nodes_for_blasts(_X, marker_names, weights)
+
+# Alias public du routeur (sans underscore) — exposé dans __init__ et
+# utilisable directement dans les scripts d'analyse et notebooks.
+build_node_blast_scores = _build_node_blast_scores
 
 
 def compute_mrd(
@@ -486,6 +842,7 @@ def compute_mrd(
     marker_names: Optional[List[str]] = None,
     nbm_center: Optional[np.ndarray] = None,
     nbm_scale: Optional[np.ndarray] = None,
+    nbm_inv_cov: Optional[np.ndarray] = None,
 ) -> MRDResult:
     """
     Calcule la MRD résiduelle selon les méthodes JF, Flo et/ou ELN.
@@ -553,6 +910,11 @@ def compute_mrd(
             Calcule par compute_reference_stats() sur les données NBM.
         nbm_scale: Vecteur [n_markers] des IQR/1.35 NBM par marqueur.
             Combiné avec nbm_center pour le z-scoring du Mode 2.
+        nbm_inv_cov: Matrice [n_markers, n_markers] — inverse de la covariance NBM.
+            Calculée par compute_reference_stats() (3e valeur retournée).
+            Requise pour scoring_method "mahalanobis" ou "hybrid" dans
+            blast_phenotype_filter. Si None et mode hybride demandé, fallback
+            automatique sur le score linéaire.
 
     Returns:
         MRDResult avec :
@@ -571,7 +933,11 @@ def compute_mrd(
     bpf = mrd_cfg.blast_phenotype_filter
     blast_filter_active = False
 
-    condition = df_cells[condition_column].values if condition_column in df_cells.columns else None
+    condition = (
+        df_cells[condition_column].values
+        if condition_column in df_cells.columns
+        else None
+    )
     if condition is None:
         _logger.warning("Colonne '%s' absente — MRD impossible.", condition_column)
         return MRDResult(
@@ -616,42 +982,136 @@ def compute_mrd(
     run_flo = mrd_cfg.method in ("flo", "both", "all")
     run_eln = mrd_cfg.method in ("eln", "all")
 
+    # === Calcul dynamique des stats NBM (centre, échelle, inv_cov) ===
+    # Si les stats NBM ne sont pas fournies explicitement, on les calcule à la
+    # volée sur les cellules saines du pool d'analyse. Cela garantit que le
+    # z-score de référence est ancré sur la moelle normale réelle, même quand
+    # les blastes représentent 80-90 % du dataset.
+    # On calcule aussi inv_cov ici si non fournie (requis pour Mahalanobis).
+    if marker_names is not None and (nbm_center is None or nbm_scale is None):
+        sain_mask = condition == mrd_cfg.condition_sain
+        if sain_mask.sum() > 0:
+            _marker_cols = [m for m in marker_names if m in df_cells.columns]
+            if _marker_cols:
+                sain_cells = df_cells.loc[sain_mask, _marker_cols].values
+                # ARCH-1 : compute_reference_stats importé au niveau du module.
+                nbm_center, nbm_scale, _inv_cov_auto = compute_reference_stats(
+                    sain_cells,
+                    robust=True,
+                    max_samples_for_stats=bpf.nbm_stats_max_cells,
+                    max_samples_for_covariance=bpf.nbm_cov_max_cells,
+                    max_samples_for_mincovdet=bpf.nbm_mincovdet_max_cells,
+                )
+                # N'écraser nbm_inv_cov que s'il n'a pas été fourni explicitement
+                if nbm_inv_cov is None:
+                    nbm_inv_cov = _inv_cov_auto
+                marker_names = _marker_cols
+                _logger.info(
+                    "Stats NBM calculées à la volée sur %d cellules saines (%d marqueurs) "
+                    "— inv_cov %s.",
+                    int(sain_mask.sum()),
+                    len(_marker_cols),
+                    "calculée"
+                    if nbm_inv_cov is not None
+                    else "indisponible (trop peu de points)",
+                )
+
+    # ── Pré-vectorisation O(N) : comptages par nœud via np.bincount ─────────
+    # On calcule une seule fois les tableaux de taille (n_nodes_total,) indexés
+    # directement par node_id — ce qui résout simultanément le goulot O(N×K)
+    # et le bug de désynchronisation node_idx / node_id.
+    _n_nodes_total = int(clustering.max()) + 1  # taille des tableaux bincount
+    _is_patho_int = is_patho.astype(np.int32)
+    _is_sain_int = (condition == mrd_cfg.condition_sain).astype(np.int32)
+
+    _counts_total = np.bincount(clustering, minlength=_n_nodes_total)        # n_total par nœud
+    _counts_patho = np.bincount(clustering, weights=_is_patho_int, minlength=_n_nodes_total).astype(np.int64)
+    _counts_sain  = np.bincount(clustering, weights=_is_sain_int,  minlength=_n_nodes_total).astype(np.int64)
+
+    # ── Porte Biologique : pré-calcul de la pureté par nœud ──────────────────
+    # purity_per_node[node_id] = n_patho / n_in_node — indexé par node_id directement.
+    _purity_per_node: Optional[np.ndarray] = None
+    if bpf.enabled and bpf.purity_modulation_power > 0.0:
+        _denom_counts = np.where(_counts_total > 0, _counts_total, 1)
+        _purity_per_node = _counts_patho / _denom_counts  # shape (n_nodes_total,)
+
     # ── Porte Biologique : pré-calcul des blast scores par nœud ──────────────
-    # node_blast_scores[i] = blast_score du i-ème nœud dans unique_nodes.
-    # node_blast_cats[i]   = blast_category correspondante.
+    # node_blast_scores[i] = blast_score /10 du i-ème nœud dans unique_nodes.
+    # node_blast_cats[i]   = blast_category correspondante (pour le mode linéaire).
+    # node_d2_raw[i]       = D² brut pour la traçabilité / calibration.
     node_blast_scores: Optional[np.ndarray] = None
     node_blast_cats: Optional[List[str]] = None
+    node_d2_raw: Optional[np.ndarray] = None
 
-    if bpf.enabled:
-        # Détermine le mode d'entrée disponible pour le scoring blast vectorisé
+    _active_scoring_mode = bpf.scoring_method  # mode effectif (peut être rétrogradé)
+
+    if bpf.scoring_method == "none":
+        _logger.info(
+            "Porte biologique : scoring_method='none' — Porte 2 bypassée, "
+            "seule la Porte 1 (topologique) est active."
+        )
+
+    if bpf.enabled and bpf.scoring_method != "none":
         _has_xnorm = X_norm is not None and marker_names is not None
         _has_medians = node_medians is not None and marker_names is not None
+        _has_inv_cov = nbm_inv_cov is not None
 
         if _has_xnorm or _has_medians:
             try:
-                from flowsom_pipeline_pro.src.analysis.blast_detection import (
-                    categorize_blast_score,
+                _has_nbm_stats = nbm_center is not None and nbm_scale is not None
+
+                # Log du mode effectif
+                _mode_label = (
+                    "Mode 1 — X_norm (z-scores pré-calculés)"
+                    if _has_xnorm
+                    else "Mode 2 — node_medians + stats NBM"
+                )
+                _logger.info(
+                    "Porte biologique — scoring_method='%s' | %s | inv_cov=%s",
+                    bpf.scoring_method,
+                    _mode_label,
+                    "OK"
+                    if _has_inv_cov
+                    else "absent (fallback linéaire si hybrid/mahal)",
                 )
 
-                # Choix du mode de z-scoring :
-                #   Mode 1 : X_norm déjà en z-scores (prioritaire)
-                #   Mode 2 : node_medians + stats NBM explicites
-                #   Mode 3 : node_medians seul, z-scoring intra-dataset (dégradé)
-                _has_nbm_stats = nbm_center is not None and nbm_scale is not None
-                if _has_xnorm:
-                    _mode_label = "Mode 1 — X_norm (z-scores pré-calculés)"
-                elif _has_medians and _has_nbm_stats:
-                    _mode_label = "Mode 2 — node_medians + stats NBM"
-                else:
-                    _mode_label = "Mode 3 — z-scoring intra-dataset (dégradé)"
+                # CR-1 FIX : les scores sont calculés sur unique_nodes (dans l'ordre)
+                # → on construit une table de correspondance node_id → rank pour une
+                # indexation sûre, indépendante de la continuité des IDs de nœuds.
+                _node_rank_map: Dict[int, int] = {
+                    int(nid): rank for rank, nid in enumerate(unique_nodes)
+                }
 
-                node_blast_scores = _build_node_blast_scores(
+                node_blast_scores, node_d2_raw = _build_node_blast_scores(
                     marker_names=list(marker_names),
                     X_norm=np.asarray(X_norm, dtype=float) if _has_xnorm else None,
-                    node_medians=np.asarray(node_medians, dtype=float) if not _has_xnorm else None,
-                    nbm_center=np.asarray(nbm_center, dtype=float) if _has_nbm_stats and not _has_xnorm else None,
-                    nbm_scale=np.asarray(nbm_scale, dtype=float) if _has_nbm_stats and not _has_xnorm else None,
+                    node_medians=np.asarray(node_medians, dtype=float)
+                    if _has_medians
+                    else None,
+                    nbm_center=np.asarray(nbm_center, dtype=float)
+                    if _has_nbm_stats
+                    else None,
+                    nbm_scale=np.asarray(nbm_scale, dtype=float)
+                    if _has_nbm_stats
+                    else None,
+                    nbm_inv_cov=np.asarray(nbm_inv_cov, dtype=float)
+                    if _has_inv_cov
+                    else None,
+                    patho_purity=_purity_per_node,
+                    scoring_method=bpf.scoring_method,
+                    mahal_weight=bpf.mahal_weight,
+                    linear_weight=bpf.linear_weight,
+                    d2_normalization=bpf.d2_normalization,
+                    purity_modulation_power=bpf.purity_modulation_power,
+                    mahal_boost_factor=bpf.mahal_boost_factor,
+                    custom_weights=bpf.marker_weights,
                 )
+
+                # Si le routeur a rétrogradé en linéaire (inv_cov absent),
+                # mettre à jour le mode effectif pour la traçabilité.
+                if not _has_inv_cov and bpf.scoring_method not in ("linear", "none"):
+                    _active_scoring_mode = "linear"
+
                 node_blast_cats = [
                     categorize_blast_score(
                         float(s),
@@ -663,19 +1123,22 @@ def compute_mrd(
                 ]
                 blast_filter_active = True
                 _n_high = sum(1 for c in node_blast_cats if c == "BLAST_HIGH")
-                _n_mod  = sum(1 for c in node_blast_cats if c == "BLAST_MODERATE")
+                _n_mod = sum(1 for c in node_blast_cats if c == "BLAST_MODERATE")
                 _logger.info(
-                    "Filtre phénotypique hybride ACTIVE — %s — %d noeuds scores : "
-                    "%d BLAST_HIGH, %d BLAST_MODERATE (categories acceptees : %s)",
-                    _mode_label,
+                    "Filtre phénotypique ACTIF — mode='%s' — %d nœuds : "
+                    "%d BLAST_HIGH, %d BLAST_MODERATE (catégories acceptées : %s)",
+                    _active_scoring_mode,
                     len(node_blast_scores),
-                    _n_high, _n_mod,
+                    _n_high,
+                    _n_mod,
                     bpf.allowed_categories,
                 )
+            except ValueError:
+                raise
             except Exception as exc:
                 _logger.warning(
-                    "Filtre phénotypique : erreur lors du scoring blast (%s) — "
-                    "porte biologique désactivée pour cette analyse.",
+                    "Filtre phénotypique : erreur inattendue (%s) — porte biologique "
+                    "désactivée pour cette analyse.",
                     exc,
                 )
         else:
@@ -683,6 +1146,80 @@ def compute_mrd(
                 "blast_phenotype_filter.enabled=True mais ni X_norm ni node_medians "
                 "n'est fourni avec marker_names — porte biologique désactivée."
             )
+
+    # CR-3 FIX : logger explicitement l'état final de la porte biologique AVANT
+    # la boucle, pour qu'un bypass silencieux soit immédiatement visible dans les logs.
+    _logger.info(
+        "État porte biologique (Porte 2) : %s",
+        "ACTIVE — filtrage phénotypique appliqué" if blast_filter_active
+        else "INACTIF — tous les nœuds topologiquement valides sont acceptés sans filtrage biologique",
+    )
+
+    # ── Porte Biologique : fonction évaluatrice (définie hors boucle) ────────
+    # Sortie de la boucle for pour éviter la reconstruction à chaque itération.
+    # Reçoit les valeurs du nœud courant en paramètres explicites.
+    def _passes_blast_gate(
+        apply_flag: bool,
+        blast_score: Optional[float],
+        blast_cat: Optional[str],
+        node_purity: float,
+    ) -> bool:
+        """
+        Routeur de la Porte Biologique — adapte sa logique au moteur actif.
+
+        ── Comportement selon scoring_method ────────────────────────────────
+
+        "none"  :  Bypass total. La porte est toujours ouverte.
+
+        "linear":  Logique historique. Vérifie que blast_category figure dans
+                   bpf.allowed_categories. Seuil fixe — pas de modulation pureté.
+
+        "mahalanobis" / "hybrid" :
+                   Seuil dynamique modulé par la pureté.
+                   Purity ≥ purity_strict_above → seuil assoupli (confiance FlowSOM).
+                   Nœud mixte → seuil nominal (la biologie compense).
+
+        ── Seuil dynamique (mode mahalanobis/hybrid) ────────────────────────
+
+        Exemple : purity_strict_above=0.85, relax_factor=0.90, high_threshold=4.0
+          purity=100% → seuil = 4.0 × (1 - 0.90×1.0) = 0.40 (confiance aveugle)
+          purity=90%  → seuil = 4.0 × (1 - 0.90×0.33) = 2.81
+          purity=80%  → seuil = 4.0 (nœud mixte, seuil plein)
+
+        Floor de sécurité : le seuil effectif ne descend jamais sous moderate_threshold.
+        """
+        if not blast_filter_active or not apply_flag:
+            return True
+        if bpf.scoring_method == "none":
+            return True
+        if blast_score is None or blast_cat is None:
+            return True
+        if _active_scoring_mode == "linear":
+            return blast_cat in bpf.allowed_categories
+
+        # Moteur mahalanobis / hybrid — seuil dynamique
+        effective_threshold = bpf.high_threshold
+        if bpf.purity_threshold_override and node_purity >= bpf.purity_strict_above:
+            excess_purity = (node_purity - bpf.purity_strict_above) / max(
+                1.0 - bpf.purity_strict_above, 1e-6
+            )
+            excess_purity = min(excess_purity, 1.0)
+            relax = bpf.purity_relax_factor * excess_purity
+            effective_threshold = max(
+                bpf.high_threshold * (1.0 - relax),
+                bpf.moderate_threshold,  # floor de sécurité
+            )
+
+        passes = blast_score >= effective_threshold
+        if not passes and node_purity >= bpf.purity_strict_above:
+            _logger.debug(
+                "Nœud : score=%.2f < seuil_effectif=%.2f "
+                "(pureté=%.1f%% → assouplissement actif) — REJETÉ.",
+                blast_score,
+                effective_threshold,
+                node_purity * 100,
+            )
+        return passes
 
     per_node: List[MRDClusterResult] = []
     mrd_cells_jf = 0
@@ -692,83 +1229,111 @@ def compute_mrd(
     n_nodes_flo = 0
     n_nodes_eln = 0
 
-    for node_idx, node_id in enumerate(unique_nodes):
-        mask = clustering == node_id
-        n_in_node = int(mask.sum())
+    # Dénominateurs globaux (protections contre division par zéro)
+    _denom_sain   = total_sain  if total_sain  > 0 else 1
+    _denom_patho_g = total_patho if total_patho > 0 else 1
+
+    for node_id in unique_nodes:
+        # ── Comptages vectorisés : lecture directe dans les tableaux bincount ──
+        # node_id est l'index réel → pas de risque de désynchronisation
+        n_in_node = int(_counts_total[node_id])
         if n_in_node == 0:
             continue
 
-        cond_in_node = condition[mask]
-        n_sain = int((cond_in_node == mrd_cfg.condition_sain).sum())
-        n_patho = int((cond_in_node == mrd_cfg.condition_patho).sum())
+        n_sain  = int(_counts_sain[node_id])
+        n_patho = int(_counts_patho[node_id])
 
-        # pct_sain / pct_patho : % AU SEIN du cluster (utilisé par Flo et ELN)
-        pct_sain = (n_sain / n_in_node) * 100.0
+        # pct_sain / pct_patho : % AU SEIN du cluster (Flo et ELN)
+        pct_sain  = (n_sain  / n_in_node) * 100.0
         pct_patho = (n_patho / n_in_node) * 100.0
 
-        # pct_sain_global : % des cellules saines du cluster / totalité moelle normale
-        _denom_sain = total_sain if total_sain > 0 else 1
-        pct_sain_global = (n_sain / _denom_sain) * 100.0
+        # Pureté du nœud : fraction de cellules patient [0, 1]
+        node_purity = n_patho / n_in_node
+
+        # pct_sain_global : % des cellules saines / total moelle normale (méthode JF)
+        pct_sain_global  = (n_sain  / _denom_sain)    * 100.0
+        # pct_patho_global : % des cellules patho / total cellules patho
+        pct_patho_global = (n_patho / _denom_patho_g) * 100.0
 
         # ── Porte Biologique pour ce nœud ─────────────────────────────────
+        # CR-1 FIX : node_blast_scores est indexé par RANG dans unique_nodes
+        # (pas par node_id). On utilise _node_rank_map pour la correspondance sûre.
         _blast_score: Optional[float] = None
         _blast_cat: Optional[str] = None
-        if node_blast_scores is not None and node_blast_cats is not None:
-            _blast_score = float(node_blast_scores[node_idx])
-            _blast_cat = node_blast_cats[node_idx]
+        _mahal_d2: Optional[float] = None
 
-        def _passes_blast_gate(apply_flag: bool) -> bool:
-            """Vérifie la porte biologique pour une méthode donnée."""
-            if not blast_filter_active or not apply_flag:
-                return True  # filtre inactif → porte toujours ouverte
-            if _blast_cat is None:
-                return True  # pas de score calculé → ne pas bloquer
-            return _blast_cat in bpf.allowed_categories
+        if node_blast_scores is not None:
+            _rank = _node_rank_map.get(int(node_id))
+            if _rank is not None:
+                _blast_score = float(node_blast_scores[_rank])
+                _blast_cat = (
+                    node_blast_cats[_rank] if node_blast_cats is not None else None
+                )
+                if node_d2_raw is not None:
+                    _mahal_d2 = float(node_d2_raw[_rank])
 
         # ── Méthode JF ────────────────────────────────────────────────
         is_mrd_jf = False
         if run_jf:
-            if (pct_sain_global < mrd_cfg.method_jf.max_normal_marrow_pct
-                    and pct_patho > mrd_cfg.method_jf.min_patho_cells_pct):
-                if _passes_blast_gate(bpf.apply_to_jf):
+            if (
+                pct_sain_global < mrd_cfg.method_jf.max_normal_marrow_pct
+                and pct_patho > mrd_cfg.method_jf.min_patho_cells_pct
+            ):
+                if _passes_blast_gate(bpf.apply_to_jf, _blast_score, _blast_cat, node_purity):
                     is_mrd_jf = True
                     mrd_cells_jf += n_patho
                     n_nodes_jf += 1
 
-        # ── Méthode Flo ───────────────────────────────────────────────
+        # ── Méthode Flo (ratio intra-cluster) ─────────────────────────
+        # CR-2 FIX : la méthode Flo mesure le déséquilibre DANS le nœud,
+        # pas entre % globaux (biaisé par le déséquilibre dataset NBM/Patho).
+        # Critère : pct_patho_intra > N × pct_sain_intra (ratio intra-cluster).
+        # Cas limite : nœud 100% patho (pct_sain=0) → MRD si min LOQ respecté.
         is_mrd_flo = False
         if run_flo:
-            threshold_flo = pct_sain * mrd_cfg.method_flo.normal_marrow_multiplier
-            if pct_patho > threshold_flo:
-                if _passes_blast_gate(bpf.apply_to_flo):
+            _flo_criterion = False
+            if pct_sain > 0:
+                _flo_criterion = pct_patho > pct_sain * mrd_cfg.method_flo.normal_marrow_multiplier
+            else:
+                # Nœud 100% pathologique : MRD si assez de cellules (robustesse LOQ)
+                _flo_criterion = n_patho >= mrd_cfg.eln_standards.min_cluster_events
+            if _flo_criterion:
+                if _passes_blast_gate(bpf.apply_to_flo, _blast_score, _blast_cat, node_purity):
                     is_mrd_flo = True
                     mrd_cells_flo += n_patho
                     n_nodes_flo += 1
 
-        # ── Méthode ELN (DfN + LOQ) ──────────────────────────────────
+        # ── Méthode ELN (DfN — Different from Normal, enrichissement intra-cluster)
+        # CR-2 FIX : le critère DfN ELN 2022 compare les proportions intra-cluster
+        # (pct_patho vs pct_sain DANS le nœud), pas les % globaux.
+        # Référence : Schuurhuis et al. Blood 2018 — "more patient than normal cells".
         is_mrd_eln = False
         if run_eln:
             if n_in_node >= mrd_cfg.eln_standards.min_cluster_events:
                 if pct_patho > pct_sain:
-                    if _passes_blast_gate(bpf.apply_to_eln):
+                    if _passes_blast_gate(bpf.apply_to_eln, _blast_score, _blast_cat, node_purity):
                         is_mrd_eln = True
                         mrd_cells_eln += n_patho
                         n_nodes_eln += 1
 
-        per_node.append(MRDClusterResult(
-            cluster_id=int(node_id),
-            n_cells_total=n_in_node,
-            n_cells_sain=n_sain,
-            n_cells_patho=n_patho,
-            pct_sain=pct_sain,
-            pct_patho=pct_patho,
-            pct_sain_global=pct_sain_global,
-            is_mrd_jf=is_mrd_jf,
-            is_mrd_flo=is_mrd_flo,
-            is_mrd_eln=is_mrd_eln,
-            blast_score=_blast_score,
-            blast_category=_blast_cat,
-        ))
+        per_node.append(
+            MRDClusterResult(
+                cluster_id=int(node_id),
+                n_cells_total=n_in_node,
+                n_cells_sain=n_sain,
+                n_cells_patho=n_patho,
+                pct_sain=pct_sain,
+                pct_patho=pct_patho,
+                pct_sain_global=pct_sain_global,
+                is_mrd_jf=is_mrd_jf,
+                is_mrd_flo=is_mrd_flo,
+                is_mrd_eln=is_mrd_eln,
+                blast_score=_blast_score,
+                blast_category=_blast_cat,
+                mahal_d2=_mahal_d2,
+                node_purity=node_purity,
+            )
+        )
 
     # MRD % = cellules MRD / dénominateur patho
     _denom_patho = total_patho_cd45pos if total_patho_cd45pos > 0 else 1
@@ -791,6 +1356,7 @@ def compute_mrd(
         n_patho_cd45pos=n_patho_cd45pos,
         n_patho_pre_cd45=total_patho,
         blast_filter_active=blast_filter_active,
+        blast_scoring_mode=_active_scoring_mode,
         mrd_cells_jf=mrd_cells_jf,
         mrd_pct_jf=mrd_pct_jf,
         n_nodes_mrd_jf=n_nodes_jf,
@@ -817,17 +1383,23 @@ def compute_mrd(
 
     _logger.info(
         "MRD JF : %d cellules patho dans %d nœuds SOM → MRD = %.4f%%%s",
-        mrd_cells_jf, n_nodes_jf, mrd_pct_jf,
+        mrd_cells_jf,
+        n_nodes_jf,
+        mrd_pct_jf,
         " [+porte biologique]" if blast_filter_active and bpf.apply_to_jf else "",
     )
     _logger.info(
         "MRD Flo: %d cellules patho dans %d nœuds SOM → MRD = %.4f%%%s",
-        mrd_cells_flo, n_nodes_flo, mrd_pct_flo,
+        mrd_cells_flo,
+        n_nodes_flo,
+        mrd_pct_flo,
         " [+porte biologique]" if blast_filter_active and bpf.apply_to_flo else "",
     )
     _logger.info(
         "MRD ELN: %d cellules patho dans %d nœuds SOM → MRD = %.4f%% — %s%s",
-        mrd_cells_eln, n_nodes_eln, mrd_pct_eln,
+        mrd_cells_eln,
+        n_nodes_eln,
+        mrd_pct_eln,
         "POSITIVE" if eln_positive else ("LOW-LEVEL" if eln_low_level else "NEGATIVE"),
         " [+porte biologique]" if blast_filter_active and bpf.apply_to_eln else "",
     )

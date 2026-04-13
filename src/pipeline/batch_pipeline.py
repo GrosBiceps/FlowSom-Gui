@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import copy
 import gc
+import threading
 import time
 import logging
 from pathlib import Path
@@ -70,6 +71,10 @@ _logger = get_logger("pipeline.batch")
 
 # Callback de progression : (index courant, total, nom du fichier)
 ProgressCallback = Callable[[int, int, str], None]
+
+# ARCH-4 FIX : verrou protégeant les listes globales gating_reports / gating_log_entries
+# contre les data races entre le thread GUI (lecture) et le worker batch (clear + écriture).
+_GATING_STATE_LOCK: threading.Lock = threading.Lock()
 
 
 class BatchPipeline:
@@ -260,8 +265,10 @@ class BatchPipeline:
         _logger.info("  %d fichier(s) NBM chargé(s)", len(raw_samples))
 
         gating_logger = GatingLogger()
-        gating_reports.clear()
-        gating_log_entries.clear()
+        # ARCH-4 FIX : lock pour éviter le data race GUI thread ↔ batch worker
+        with _GATING_STATE_LOCK:
+            gating_reports.clear()
+            gating_log_entries.clear()
 
         try:
             processed_nbm, _, _ = preprocess_combined(
@@ -345,8 +352,10 @@ class BatchPipeline:
         patho_config.pregate.singlets = False  # pas de gate G2 singlets
 
         gating_logger = GatingLogger()
-        gating_reports.clear()
-        gating_log_entries.clear()
+        # ARCH-4 FIX : lock pour éviter le data race GUI thread ↔ batch worker
+        with _GATING_STATE_LOCK:
+            gating_reports.clear()
+            gating_log_entries.clear()
 
         # ── 1. Chargement + preprocessing du FCS pathologique (sans gating) ──
         try:

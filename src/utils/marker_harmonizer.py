@@ -24,6 +24,14 @@ from flowsom_pipeline_pro.src.utils.logger import get_logger
 _logger = get_logger("utils.marker_harmonizer")
 
 
+def _extract_channel_suffix(name: str) -> Optional[str]:
+    """Return cytometry channel suffix if present (A/H), else None."""
+    m = re.search(r"-(A|H)\b", name, re.IGNORECASE)
+    if not m:
+        return None
+    return m.group(1).upper()
+
+
 def harmonize_marker_names(
     raw_columns: List[str],
     target_markers: List[str],
@@ -65,14 +73,42 @@ def harmonize_marker_names(
         # Passe 2 : matching regex
         if matched_target is None:
             for target in target_markers:
-                # Word boundary après le nom du marqueur pour éviter CD3 → CD33
-                pattern = re.compile(
-                    r"^" + re.escape(target) + r"(?:\s|$|[^a-zA-Z0-9])",
-                    re.IGNORECASE,
-                )
-                if pattern.match(raw_col):
-                    matched_target = target
-                    break  # Premier match wins ; l'ordre de target_markers compte
+                # Si la cible encode explicitement le canal (-A/-H), on impose
+                # le même suffixe dans la colonne brute.
+                if target.upper().endswith("-A") or target.upper().endswith("-H"):
+                    target_base = target[:-2]
+                    target_suffix = target[-1].upper()
+                    pattern = re.compile(
+                        r"^" + re.escape(target_base) + r"(?:\s|$|[^a-zA-Z0-9])",
+                        re.IGNORECASE,
+                    )
+                    if (
+                        pattern.match(raw_col)
+                        and _extract_channel_suffix(raw_col) == target_suffix
+                    ):
+                        matched_target = target
+                        break  # Premier match wins ; l'ordre de target_markers compte
+                else:
+                    # Word boundary après le nom du marqueur pour éviter CD3 → CD33
+                    pattern = re.compile(
+                        r"^" + re.escape(target) + r"(?:\s|$|[^a-zA-Z0-9])",
+                        re.IGNORECASE,
+                    )
+                    if pattern.match(raw_col):
+                        matched_target = target
+                        break  # Premier match wins ; l'ordre de target_markers compte
+
+        # Si la colonne brute porte un suffixe -A/-H, préférer une cible qui
+        # porte le même suffixe lorsqu'elle existe dans la liste des cibles.
+        if matched_target is not None:
+            raw_suffix = _extract_channel_suffix(raw_col)
+            if raw_suffix and not (
+                matched_target.upper().endswith("-A")
+                or matched_target.upper().endswith("-H")
+            ):
+                candidate = f"{matched_target}-{raw_suffix}"
+                if candidate in target_markers:
+                    matched_target = candidate
 
         if matched_target is None:
             _logger.debug(
@@ -93,9 +129,9 @@ def harmonize_marker_names(
         target_hit[matched_target] = raw_col
         rename_map[raw_col] = matched_target
 
-        # Log uniquement si le nom change réellement
+        # Log détaillé uniquement en debug pour éviter le spam en mode batch
         if raw_col != matched_target:
-            _logger.info(
+            _logger.debug(
                 "Harmonisation : La colonne '%s' a été identifiée et renommée "
                 "en '%s' par regex.",
                 raw_col,
@@ -166,8 +202,28 @@ if __name__ == "__main__":
     TARGET = ["CD45", "CD34", "CD13", "CD3", "CD19", "CD117"]
 
     # Simulation de colonnes $PnS lues depuis différents exports FCS
-    raw_cols_file_A = ["FSC-A", "SSC-A", "CD45 KO", "CD34 Cy55", "CD13 BV421", "CD3 FITC", "CD19 PE", "CD117 APC", "Time"]
-    raw_cols_file_B = ["FSC-A", "SSC-A", "CD45",    "CD34",       "CD13",       "CD3",      "CD19",    "CD117",      "Time"]
+    raw_cols_file_A = [
+        "FSC-A",
+        "SSC-A",
+        "CD45 KO",
+        "CD34 Cy55",
+        "CD13 BV421",
+        "CD3 FITC",
+        "CD19 PE",
+        "CD117 APC",
+        "Time",
+    ]
+    raw_cols_file_B = [
+        "FSC-A",
+        "SSC-A",
+        "CD45",
+        "CD34",
+        "CD13",
+        "CD3",
+        "CD19",
+        "CD117",
+        "Time",
+    ]
 
     print("\n--- Fichier A (avec fluorochromes) ---")
     mapping_A = harmonize_marker_names(raw_cols_file_A, TARGET)

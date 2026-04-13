@@ -119,6 +119,21 @@ import pandas as pd
 
 from flowsom_pipeline_pro.src.utils.logger import get_logger
 
+# Imports optionnels — dégradation gracieuse si scipy/sklearn absents
+try:
+    from scipy.linalg import pinv as _scipy_pinv
+
+    _HAS_SCIPY = True
+except ImportError:  # pragma: no cover
+    _HAS_SCIPY = False
+
+try:
+    from sklearn.covariance import MinCovDet as _MinCovDet
+
+    _HAS_SKLEARN = True
+except ImportError:  # pragma: no cover
+    _HAS_SKLEARN = False
+
 _logger = get_logger("analysis.blast_detection")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -135,7 +150,10 @@ BLAST_MODERATE_THRESHOLD = 2.0
 BLAST_WEAK_THRESHOLD = 0.0
 
 
-def build_blast_weights(marker_names: List[str]) -> Dict[str, float]:
+def build_blast_weights(
+    marker_names: List[str],
+    custom_weights: Optional[Dict[str, float]] = None,
+) -> Dict[str, float]:
     """
     Construit le dictionnaire de poids pour le scoring blast ELN 2022 / Ogata.
 
@@ -151,12 +169,17 @@ def build_blast_weights(marker_names: List[str]) -> Dict[str, float]:
       +0.5  CD13      — engagement myéloïde secondaire (ELN 2022 LAIP)
 
     Poids négatifs (morphologie / phénotype inverse — contribution si sous-exprimé) :
-      −2.0  CD45      — CD45-dim discrimine les blastes (score Ogata)
+      −1.0  CD45      — CD45-dim discrimine les blastes (score Ogata)
       −1.5  CD19/CD3  — marqueurs lymphoïdes → anti-blaste (frein biologique)
       −1.0  SSC       — faible granularité cytoplasmique = morphologie blaste (Ogata)
 
     Args:
         marker_names: Liste des noms de marqueurs présents dans le panel.
+        custom_weights: Dict optionnel {pattern: poids} chargé depuis mrd_config.yaml
+            (clé marker_weights). Les clés sont matchées par pattern insensible à la
+            casse sur le nom complet du marqueur (ex: "CD45" matche "CD45-PECY5").
+            Écrase les poids par défaut pour les marqueurs correspondants.
+            Si None, les poids hardcodés ci-dessus sont utilisés intégralement.
 
     Returns:
         Dict {nom_marqueur: poids_float} — poids = 0.0 pour les marqueurs
@@ -180,7 +203,7 @@ def build_blast_weights(marker_names: List[str]) -> Dict[str, float]:
         elif "CD45" in upper:
             # CD45-dim = signature blaste classique (score Ogata, axe CD45/SSC)
             # Poids négatif : contribue au score quand valeur < plancher référence
-            weights[name] = -2.0
+            weights[name] = -1.0
         elif "HLAD" in upper or "HLA-DR" in upper:
             # HLA-DR positif sur blaste myéloïde = LAIP ELN 2022
             weights[name] = +1.5
@@ -201,6 +224,15 @@ def build_blast_weights(marker_names: List[str]) -> Dict[str, float]:
         else:
             # Marqueur non reconnu — contribution nulle (neutre)
             weights[name] = 0.0
+
+    # Écrasement par les poids personnalisés (depuis mrd_config.yaml › marker_weights)
+    if custom_weights:
+        for marker_name in list(weights.keys()):
+            upper_name = marker_name.upper()
+            for pattern, value in custom_weights.items():
+                if pattern.upper() in upper_name:
+                    weights[marker_name] = float(value)
+                    break  # premier pattern gagnant — évite les collisions (ex: CD3 vs CD34)
 
     return weights
 
@@ -243,9 +275,9 @@ def score_nodes_for_blasts(
       3. Marqueurs de maturation à poids négatif (CD45, SSC) — PÉNALITÉ :
            → −points si z > 0 (surexpression = cellule mature normale).
            → Pénalité = |w| × max(0, z)
-           → Élimine les faux positifs : lymphocytes CD45-bright, granulocytes
-             SSC-high, monocytes accumuleraient sinon des points sur d'autres
-             marqueurs sans être punis par leur CD45/SSC normal.
+           → Élimine les faux positifs : monocytes HLA-DR+/CD33+ accumuleraient
+             des points sur d'autres marqueurs sans être punis par leur CD45/SSC
+             normal. La pénalité est nécessaire pour stopper ces faux positifs.
 
     ── Calibration attendue (arcsinh/5, référence NBM médiane+std) ─────────────
 
@@ -273,37 +305,42 @@ def score_nodes_for_blasts(
         Score ≈ 6–8 → signature blastique typique (CD34++ + CD117++ + CD45-dim).
 
     Example:
-        >>> ref_med, ref_std = compute_reference_stats(X_nbm, marker_names)
+        >>> ref_med, ref_std, inv_cov = compute_reference_stats(X_nbm)
         >>> X_zscore = (node_medians - ref_med) / ref_std
         >>> scores = score_nodes_for_blasts(X_zscore, marker_names)
     """
     if weights is None:
         weights = build_blast_weights(marker_names)
 
-    # Vecteur de poids aligné sur marker_names
-    W = np.array([weights.get(m, 0.0) for m in marker_names])
+    # Vecteur de poids aligné sur marker_names — (n_markers,)
+    W = np.array([weights.get(m, 0.0) for m in marker_names], dtype=float)
 
     # Dénominateur = somme des poids absolus (pour normaliser en /10)
-    max_theoretical = max(sum(abs(w) for w in weights.values() if w != 0), 1e-6)
+    max_theoretical = max(float(np.sum(np.abs(W[W != 0]))), 1e-6)
 
-    scores_raw = np.zeros(X_norm.shape[0])
+    # PERF-1 FIX : vectorisation complète — suppression de la boucle Python marker/marker.
+    # Toutes les opérations sont réduites à des produits matriciels vectorisés O(N×M).
+    #
+    # X_norm : (n_nodes, n_markers)
+    # W_pos  : poids positifs (CD34, CD117, HLA-DR…) — contribuent si z > +0.5
+    # W_neg  : valeurs absolues des poids négatifs (CD45, SSC)
+    #   → récompense si z < -0.5  (CD45-dim, SSC-bas = signature blaste)
+    #   → pénalité  si z >  0.0  (CD45-bright, SSC-haut = cellule mature)
 
-    for j, (marker, w) in enumerate(zip(marker_names, W)):
-        z = X_norm[:, j]
-        if w > 0:
-            # Baisse du seuil à 0.5 SD pour capter les blastes même s'ils sont peu brillants
-            scores_raw += w * np.maximum(0.0, z - 0.5)
+    W_pos = np.where(W > 0, W,  0.0)   # (n_markers,)
+    W_neg = np.where(W < 0, -W, 0.0)   # valeurs absolues des poids négatifs
 
-        elif w < 0:
-            # CD45-dim ou SSC-bas (z < -0.5) DONNE des points
-            scores_raw += (-w) * np.maximum(0.0, -z - 0.5)
+    # Contributions positives vectorisées : dot((z - 0.5)+, W_pos)
+    contrib_pos = np.dot(np.maximum(0.0, X_norm - 0.5), W_pos)          # (n_nodes,)
 
-            # PÉNALITÉ : CD45-bright ou SSC-haut (z > 0) RETIRE des points !
-            # Élimine les cellules matures (lymphocytes, monocytes, granulos normaux)
-            scores_raw -= (-w) * np.maximum(0.0, z)
+    # Récompense négative : dot((-z - 0.5)+, W_neg)
+    contrib_neg_reward = np.dot(np.maximum(0.0, -X_norm - 0.5), W_neg)  # (n_nodes,)
 
-    # Normalisation stricte pour éviter les scores négatifs
-    scores_raw = np.maximum(0.0, scores_raw)
+    # Pénalité : -dot(z+, W_neg)  — stoppe les monocytes/granulocytes
+    contrib_neg_penalty = -np.dot(np.maximum(0.0, X_norm), W_neg)        # (n_nodes,)
+
+    # Normalisation stricte : clamp à 0 avant normalisation /10
+    scores_raw = np.maximum(0.0, contrib_pos + contrib_neg_reward + contrib_neg_penalty)
     scores_10 = np.clip(scores_raw / max_theoretical * 10.0, 0.0, 10.0)
     return scores_10
 
@@ -435,10 +472,15 @@ def build_blast_score_dataframe(
 def compute_reference_stats(
     X_reference: np.ndarray,
     robust: bool = True,
-) -> Tuple[np.ndarray, np.ndarray]:
+    regularization: float = 1e-4,
+    max_samples_for_stats: int = 500000,
+    max_samples_for_covariance: int = 250000,
+    max_samples_for_mincovdet: int = 60000,
+    random_state: int = 42,
+) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """
     Calcule les statistiques de la population de référence (moelle normale / NBM)
-    nécessaires au z-scoring des nœuds SOM.
+    nécessaires au z-scoring et à la distance de Mahalanobis des nœuds SOM.
 
     ── Pourquoi le z-score plutôt que min-max ? ─────────────────────────────────
 
@@ -451,6 +493,30 @@ def compute_reference_stats(
     les blastes À L'EXTÉRIEUR de l'espace de référence (z > +1 ou z < −1),
     permettant à la logique directionnelle de score_nodes_for_blasts() de
     détecter les déviations phénotypiques ELN 2022 / Ogata.
+
+    ── Matrice de covariance inverse (Mahalanobis) ──────────────────────────────
+
+    La 3e valeur retournée, inv_cov, est l'inverse de la matrice de covariance
+    de la population NBM. Elle sert à score_nodes_mahalanobis() pour calculer :
+
+        D²(x) = (x - μ_NBM)ᵀ × Σ_NBM⁻¹ × (x - μ_NBM)
+
+    Stratégie de calcul :
+      • robust=True  : tente MinCovDet (sklearn) pour une estimation robuste de la
+                       covariance résistant aux outliers blastiques résiduels dans
+                       le pool NBM. Fallback sur np.cov standard si sklearn absent.
+      • robust=False : np.cov standard (plus rapide, moins robuste aux outliers).
+
+    Régularisation de Tikhonov (ridge) : on ajoute λ×I à la matrice de covariance
+    avant inversion, garantissant la non-singularité même si k ≈ n ou si des
+    marqueurs sont colinéaires. λ = regularization (défaut 1e-4, inoffensif).
+
+    Fallback hiérarchique si l'inversion échoue :
+      1. scipy.linalg.pinv (pseudo-inverse de Moore-Penrose — gère les matrices
+         singulières exactes, ex: marqueur constant dans le NBM).
+      2. np.linalg.pinv (si scipy absent).
+      3. Matrice diagonale 1/var(j) (distance euclidienne pondérée par la variance)
+         si toutes les méthodes d'inversion échouent.
 
     ── Validation sur BLAST110 ───────────────────────────────────────────────────
 
@@ -467,45 +533,171 @@ def compute_reference_stats(
                      Typiquement les nœuds SOM issus des fichiers NBM (moelle normale).
                      Doit être dans le même espace transformé que X_unknown
                      (ex: arcsinh cofactor=5).
-        robust: Si True (défaut), utilise la médiane + IQR/1.35 (pseudo-std robuste).
-                Plus résistant aux outliers que la moyenne + std.
+        robust: Si True (défaut), utilise la médiane + IQR/1.35 (pseudo-std robuste)
+                pour center/scale, et MinCovDet pour la covariance si sklearn disponible.
                 Si False, utilise la moyenne + std standard.
+        regularization: Terme de régularisation λ ajouté à la diagonale de la matrice
+                        de covariance avant inversion (défaut 1e-4). Augmenter à 1e-3
+                        si le nombre de nœuds NBM est proche du nombre de marqueurs.
+        max_samples_for_stats: Nombre maximum de lignes utilisées pour estimer
+                centre/échelle robustes (médiane + IQR). Accélère les très
+                grandes cohortes sans impacter significativement les médianes.
+        max_samples_for_covariance: Nombre maximum de lignes utilisées pour
+                l'estimation de covariance (Mahalanobis).
+        max_samples_for_mincovdet: Seuil au-delà duquel MinCovDet est désactivé
+                au profit de np.cov (beaucoup plus rapide).
+        random_state: Seed du sous-échantillonnage aléatoire reproductible.
 
     Returns:
-        Tuple (ref_center, ref_scale) :
+        Tuple (ref_center, ref_scale, inv_cov) :
           - ref_center : vecteur [n_markers] — médiane (ou moyenne) par marqueur.
           - ref_scale  : vecteur [n_markers] — IQR/1.35 (ou std), clampé à 0.01
                          pour éviter les divisions par zéro.
+          - inv_cov    : matrice [n_markers, n_markers] — inverse de la covariance NBM,
+                         ou None si X_reference contient moins de 2 lignes valides
+                         (impossible de calculer une covariance sur un seul point).
     """
-    # Utiliser les versions nan-safe pour gérer les marqueurs absents dans
-    # certains fichiers NBM (ex: CD34 absent d'un tube → NaN après concat)
-    if robust:
-        ref_center = np.nanmedian(X_reference, axis=0)
-        q75 = np.nanpercentile(X_reference, 75, axis=0)
-        q25 = np.nanpercentile(X_reference, 25, axis=0)
-        ref_scale = (q75 - q25) / 1.35  # pseudo-std robuste (IQR / 1.35 ≈ σ pour gaussienne)
-    else:
-        ref_center = np.nanmean(X_reference, axis=0)
-        ref_scale  = np.nanstd(X_reference, axis=0)
+    X = np.asarray(X_reference, dtype=float)
+    rng = np.random.default_rng(random_state)
 
-    # Eviter div/0 :
-    #   - marqueurs constants dans la référence (scale ≈ 0)
-    #   - marqueurs absents de tous les fichiers NBM (scale = NaN)
-    ref_scale = np.where(
-        np.isnan(ref_scale) | (ref_scale < 0.01),
-        0.01,
-        ref_scale,
-    )
-    # Centre NaN → remplacer par 0 (marqueur absent = pas de shift)
+    def _sample_rows(arr: np.ndarray, max_rows: int, purpose: str) -> np.ndarray:
+        if max_rows > 0 and arr.shape[0] > max_rows:
+            idx = rng.choice(arr.shape[0], size=max_rows, replace=False)
+            _logger.info(
+                "compute_reference_stats : sous-echantillonnage %s %d -> %d lignes.",
+                purpose,
+                arr.shape[0],
+                max_rows,
+            )
+            return arr[idx]
+        return arr
+
+    X_stats = _sample_rows(X, int(max_samples_for_stats), "stats")
+
+    # ── Centre et échelle (z-score 1D) ───────────────────────────────────────
+    if robust:
+        ref_center = np.nanmedian(X_stats, axis=0)
+        q75 = np.nanpercentile(X_stats, 75, axis=0)
+        q25 = np.nanpercentile(X_stats, 25, axis=0)
+        ref_scale = (q75 - q25) / 1.35  # pseudo-std robuste (IQR/1.35 ≈ σ gaussien)
+    else:
+        ref_center = np.nanmean(X_stats, axis=0)
+        ref_scale = np.nanstd(X_stats, axis=0)
+
+    # Éviter div/0 : marqueurs constants ou absents
+    ref_scale = np.where(np.isnan(ref_scale) | (ref_scale < 0.01), 0.01, ref_scale)
     ref_center = np.where(np.isnan(ref_center), 0.0, ref_center)
-    return ref_center, ref_scale
+
+    # ── Matrice de covariance inverse (Mahalanobis) ───────────────────────────
+    inv_cov: Optional[np.ndarray] = None
+
+    # CR-5 FIX : traçabilité complète — on log la taille AVANT et APRÈS
+    # le filtrage NaN pour identifier les datasets de mauvaise qualité.
+    n_total_rows = X.shape[0]
+    valid_mask = ~np.any(np.isnan(X), axis=1)
+    n_nan_rows = int((~valid_mask).sum())
+    X_valid = X[valid_mask]
+    n_samples_total, n_features = X_valid.shape
+
+    if n_nan_rows > 0:
+        _logger.warning(
+            "compute_reference_stats : %d/%d lignes contiennent des NaN "
+            "— exclues du calcul de covariance.",
+            n_nan_rows,
+            n_total_rows,
+        )
+
+    if n_samples_total < 2:
+        _logger.warning(
+            "compute_reference_stats : seulement %d ligne(s) valide(s) dans X_reference "
+            "— impossible de calculer la matrice de covariance. inv_cov = None.",
+            n_samples_total,
+        )
+        return ref_center, ref_scale, None
+
+    X_cov = _sample_rows(X_valid, int(max_samples_for_covariance), "covariance")
+    n_samples_cov = X_cov.shape[0]
+
+    try:
+        # Stratégie 1 : MinCovDet (robuste aux outliers) si sklearn disponible
+        if (
+            robust
+            and _HAS_SKLEARN
+            and n_samples_cov >= max(5 * n_features, 20)
+            and n_samples_cov <= max_samples_for_mincovdet
+        ):
+            # MinCovDet exige n_samples >> n_features (règle empirique : ≥5×)
+            mcd = _MinCovDet(support_fraction=0.75, random_state=42)
+            mcd.fit(X_cov)
+            cov = mcd.covariance_
+            _logger.debug(
+                "compute_reference_stats : covariance robuste MinCovDet calculée "
+                "(%d×%d, support_fraction=0.75).",
+                n_features,
+                n_features,
+            )
+        else:
+            # Stratégie 2 : covariance empirique standard
+            cov = np.cov(X_cov, rowvar=False)
+            if robust and n_samples_cov > max_samples_for_mincovdet:
+                _logger.info(
+                    "compute_reference_stats : MinCovDet desactive pour grand volume "
+                    "(%d lignes > seuil %d) — covariance empirique utilisee.",
+                    n_samples_cov,
+                    max_samples_for_mincovdet,
+                )
+            elif n_samples_cov < 5 * n_features and robust:
+                _logger.debug(
+                    "compute_reference_stats : MinCovDet ignoré (n_samples=%d < 5×n_feat=%d) "
+                    "— covariance empirique standard utilisée.",
+                    n_samples_cov,
+                    5 * n_features,
+                )
+
+        # Régularisation de Tikhonov pour garantir la non-singularité
+        cov_reg = cov + regularization * np.eye(n_features)
+
+        # Inversion : scipy pinv (robuste) → numpy pinv → fallback diagonal
+        try:
+            if _HAS_SCIPY:
+                inv_cov = _scipy_pinv(cov_reg)
+            else:
+                inv_cov = np.linalg.pinv(cov_reg)
+        except np.linalg.LinAlgError:
+            _logger.warning(
+                "compute_reference_stats : échec de pinv — fallback sur inverse diagonale "
+                "(distance euclidienne pondérée par la variance)."
+            )
+            # Fallback : matrice diagonale 1/variance (ignore les covariances)
+            variances = np.diag(cov_reg)
+            variances = np.where(variances < 1e-8, 1e-8, variances)
+            inv_cov = np.diag(1.0 / variances)
+
+        _logger.debug(
+            "compute_reference_stats : inv_cov calculée — shape %s, cond=%.2e",
+            inv_cov.shape,
+            float(np.linalg.cond(inv_cov)),
+        )
+
+    except Exception as exc:
+        _logger.warning(
+            "compute_reference_stats : erreur lors du calcul de inv_cov (%s) — "
+            "fallback diagonal.",
+            exc,
+        )
+        # Fallback diagonal si tout échoue
+        variances = ref_scale**2
+        variances = np.where(variances < 1e-8, 1e-8, variances)
+        inv_cov = np.diag(1.0 / variances)
+
+    return ref_center, ref_scale, inv_cov
 
 
 def compute_reference_normalization(
     X_unknown: np.ndarray,
     X_reference: np.ndarray,
     robust: bool = True,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """
     Normalise X_unknown en z-scores par rapport à la population de référence (NBM).
 
@@ -528,14 +720,247 @@ def compute_reference_normalization(
         robust: Utiliser médiane+IQR/1.35 (True, défaut) ou moyenne+std (False).
 
     Returns:
-        Tuple (X_zscore, ref_center, ref_scale) :
+        Tuple (X_zscore, ref_center, ref_scale, inv_cov) :
           - X_zscore   : z-scores [n_unknown, n_markers].
           - ref_center : vecteur des centres de référence par marqueur.
           - ref_scale  : vecteur des échelles de référence par marqueur.
+          - inv_cov    : matrice inverse de covariance [n_markers, n_markers]
+                         (None si X_reference trop petite pour calculer la covariance).
     """
-    ref_center, ref_scale = compute_reference_stats(X_reference, robust=robust)
+    ref_center, ref_scale, inv_cov = compute_reference_stats(X_reference, robust=robust)
     X_zscore = (X_unknown - ref_center) / ref_scale
-    return X_zscore, ref_center, ref_scale
+    return X_zscore, ref_center, ref_scale, inv_cov
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  §10.4c — Distance de Mahalanobis + Score Hybride (Stratégie A)
+#
+#  Résout le paradoxe des LAM matures (P25/P57 : CD34−/CD117−, CD45 brillant)
+#  sans réintroduire les faux positifs monocytaires (P105 + effet batch).
+#
+#  Principe :
+#    La somme pondérée de Z-scores (score_nodes_for_blasts) projette l'espace
+#    10D en un scalaire 1D — l'information de corrélation entre marqueurs est
+#    détruite. Un blaste mature et un monocyte+batch partagent le même vecteur
+#    de Z-scores individuels (CD34≈0, CD117≈0, CD45+brillant) mais occupent des
+#    régions DIFFÉRENTES de l'espace 10D.
+#
+#    D²(x) = (x - μ_NBM)ᵀ × Σ_NBM⁻¹ × (x - μ_NBM) capture cette différence :
+#      - Blaste mature : combinaison CD45+/HLA-DR+/CD33+/CD13+/FSC-SSC atypique
+#        → très loin de l'hyper-ellipse NBM en 10D → D² élevé.
+#      - Monocyte+batch : reste dans la "forme" du nuage NBM, juste décalé
+#        → D² faible, rejeté.
+#
+#  Modulation par la pureté topologique (Porte 1) :
+#    Le seuil de D² requis est abaissé quand le nœud est très pur (99.9%
+#    cellules patient) — la pureté topologique EST une information biologique.
+#    Inversement, un nœud mixte (60% patient) peut s'expliquer par l'effet
+#    batch → on exige une distance biologique plus forte.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def score_nodes_mahalanobis(
+    node_medians_raw: np.ndarray,
+    nbm_center: np.ndarray,
+    nbm_inv_cov: np.ndarray,
+    patho_purity: Optional[np.ndarray] = None,
+    purity_modulation_power: float = 0.5,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Calcule la distance de Mahalanobis de chaque nœud SOM au nuage NBM,
+    modulée optionnellement par la pureté topologique (Porte 1).
+
+    ── Formule ──────────────────────────────────────────────────────────────────
+
+        D²(i) = (x_i − μ_NBM)ᵀ × Σ_NBM⁻¹ × (x_i − μ_NBM)
+
+    Contrairement à la distance euclidienne, Σ_NBM⁻¹ tient compte des
+    corrélations entre marqueurs. Un nœud peut être "loin" en D² même si
+    ses Z-scores individuels sont proches de 0, parce que la COMBINAISON
+    de ses valeurs n'existe pas dans la moelle normale saine.
+
+    ── Modulation par la pureté topologique ────────────────────────────────────
+
+    Intuition clinique : si un nœud contient 99.9% de cellules patient (pureté
+    élevée), c'est une forte preuve topologique de MRD. On peut se permettre
+    d'accepter une distance biologique un peu moins extrême. Inversement, un
+    nœud avec 60% de cellules patient peut simplement refléter un effet batch
+    — la distance biologique doit alors être irréprochable.
+
+    La modulation amplifie D² pour les nœuds purs et l'atténue pour les nœuds
+    mixtes :
+
+        D²_modulé = D² × purity^power
+
+        power=0.5 (racine) : nœud 100% pur → ×1.0 ; 60% pur → ×0.77 ; 20% → ×0.45
+        power=1.0 (linéaire): nœud 100% pur → ×1.0 ; 60% pur → ×0.60 ; 20% → ×0.20
+        power=0.0           : pas de modulation (tous les nœuds traités également)
+
+    ── Distribution de référence (calibration des seuils) ──────────────────────
+
+    Sous H₀ (nœud issu du NBM), D² suit approximativement une loi χ²(k) où
+    k = nombre de marqueurs. Valeurs de référence pour calibration :
+        k=10 : χ²(10, p=0.95) ≈ 18.3  → d2_high_threshold ≈ 20
+               χ²(10, p=0.80) ≈ 13.4  → d2_moderate_threshold ≈ 12
+
+    ⚠  Ces seuils supposent la normalité multivariée — à calibrer sur cohorte
+       locale si la distribution des nœuds NBM est non-gaussienne.
+
+    Args:
+        node_medians_raw: Médianes brutes [n_nodes, n_markers] dans l'espace
+                          transformé (arcsinh/5). NE PAS utiliser les z-scores
+                          ici — la distance de Mahalanobis intègre sa propre
+                          normalisation via Σ_NBM⁻¹.
+        nbm_center: Vecteur [n_markers] — centre du nuage NBM (de
+                    compute_reference_stats, ref_center).
+        nbm_inv_cov: Matrice [n_markers, n_markers] — inverse de la covariance
+                     NBM (de compute_reference_stats, inv_cov).
+        patho_purity: Tableau [n_nodes] de proportions [0.0, 1.0] — fraction de
+                      cellules patient dans chaque nœud. None = pas de modulation.
+        purity_modulation_power: Exposant de la modulation par pureté (0.5 par
+                                  défaut). 0.0 désactive la modulation.
+
+    Returns:
+        Tuple (d2_raw, d2_modulated) :
+          - d2_raw      : np.ndarray [n_nodes] — distances D² brutes (non modulées).
+          - d2_modulated: np.ndarray [n_nodes] — distances D² après modulation
+                          par la pureté (= d2_raw si patho_purity is None).
+    """
+    X = np.asarray(node_medians_raw, dtype=float)
+    mu = np.asarray(nbm_center, dtype=float)
+    VI = np.asarray(nbm_inv_cov, dtype=float)
+
+    # Calcul vectorisé : D²(i) = diff_i @ VI @ diff_i
+    # diff : [n_nodes, n_markers]
+    diff = X - mu  # broadcast sur chaque nœud
+
+    # Forme quadratique vectorisée : (diff @ VI) elementwise diff, sommé sur markers
+    d2_raw = np.einsum("ij,jk,ik->i", diff, VI, diff)
+    d2_raw = np.maximum(0.0, d2_raw)  # garantir la positivité (erreurs numériques)
+
+    # Modulation par la pureté topologique
+    if patho_purity is not None and purity_modulation_power > 0.0:
+        purity_arr = np.clip(np.asarray(patho_purity, dtype=float), 0.0, 1.0)
+        modulation = np.power(purity_arr, purity_modulation_power)
+        d2_modulated = d2_raw * modulation
+    else:
+        d2_modulated = d2_raw.copy()
+
+    return d2_raw, d2_modulated
+
+
+def score_nodes_hybrid(
+    node_medians_raw: np.ndarray,
+    node_medians_zscore: np.ndarray,
+    nbm_center: np.ndarray,
+    nbm_inv_cov: np.ndarray,
+    marker_names: List[str],
+    patho_purity: Optional[np.ndarray] = None,
+    weights: Optional[Dict[str, float]] = None,
+    mahal_weight: float = 0.65,
+    linear_weight: float = 0.35,
+    d2_normalization: float = 20.0,
+    purity_modulation_power: float = 0.5,
+    mahal_boost_factor: float = 1.5,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Score blast hybride combinant la distance de Mahalanobis (géométrie 10D)
+    et le score linéaire ELN 2022 / Ogata (connaissance clinique directionnelle).
+
+    ── Philosophie ──────────────────────────────────────────────────────────────
+
+    Les deux composantes sont complémentaires :
+
+      Score de Mahalanobis (65% par défaut) :
+        Répond à "ce nœud est-il LOIN du nuage NBM dans l'espace 10D ?"
+        Capture les blastes matures (P25/P57) dont la COMBINAISON de marqueurs
+        est anormale même si les Z-scores individuels semblent normaux.
+
+      Score linéaire ELN 2022 / Ogata (35% par défaut) :
+        Répond à "ce nœud ressemble-t-il à la signature clinique d'un blaste ?"
+        Encode CD34+, CD117+, CD45-dim, SSC-bas — filtre les artefacts
+        purement techniques qui s'éloigneraient du NBM dans des directions
+        non-blastiques (ex: débris, agrégats).
+
+      Score hybride = α × Score_Mahal_normalisé + (1−α) × Score_linéaire
+
+    ── Calibration de mahal_weight ─────────────────────────────────────────────
+
+      mahal_weight → 1.0 : cohorte avec beaucoup de LAM matures CD34−/CD117−
+      mahal_weight → 0.5 : cohorte mixte, conserver l'apport ELN 2022
+      mahal_weight → 0.0 : fallback pur sur le score linéaire (comportement historique)
+
+    ── Normalisation de D² vers [0, 10] ────────────────────────────────────────
+
+    D² est normalisé par d2_normalization (≈ χ²(k, p=0.95) pour k marqueurs) :
+        Score_Mahal = clip(D²_modulé / d2_normalization × 10, 0, 10)
+
+    Un nœud NBM typique a D² < 18.3 (χ²(10, 0.95)) → Score_Mahal < 10.
+    Un blaste très atypique peut avoir D² >> 20 → Score_Mahal = 10 (clampé).
+
+    Args:
+        node_medians_raw: Médianes brutes [n_nodes, n_markers] (arcsinh/5).
+                          Utilisées pour la composante Mahalanobis.
+        node_medians_zscore: Médianes z-scorées [n_nodes, n_markers].
+                              Utilisées pour la composante linéaire ELN 2022.
+        nbm_center: Vecteur [n_markers] — centre NBM (de compute_reference_stats).
+        nbm_inv_cov: Matrice [n_markers, n_markers] — inverse covariance NBM.
+        marker_names: Noms des marqueurs (colonnes de node_medians_zscore).
+        patho_purity: Pureté topologique [n_nodes] ∈ [0, 1] (Porte 1 output).
+        weights: Poids du score linéaire (None = auto via build_blast_weights).
+        mahal_weight: Poids de la composante Mahalanobis [0, 1].
+        linear_weight: Poids de la composante linéaire [0, 1].
+                       La somme mahal_weight + linear_weight n'a pas besoin d'être
+                       exactement 1 — chaque composante est déjà dans [0, 10].
+        d2_normalization: Valeur D² correspondant à un score de 10/10.
+                          Défaut 20.0 ≈ χ²(10, p=0.95) + marge de sécurité.
+        purity_modulation_power: Exposant de modulation pureté (0.5 = racine carrée).
+        mahal_boost_factor: Facteur de boost appliqué au score linéaire quand D² brut
+                             est très élevé (> d2_threshold_high). Amplifie la détection
+                             des blastes atypiques géométriquement très anormaux (ex: P25).
+                             Défaut : 1.5.
+
+    Returns:
+        Tuple (scores_hybrid, d2_raw) :
+          - scores_hybrid : np.ndarray [n_nodes] dans [0.0, 10.0].
+          - d2_raw        : np.ndarray [n_nodes] distances D² brutes (pour debug).
+    """
+    # Composante 1 : Mahalanobis modulé par la pureté
+    d2_raw, d2_modulated = score_nodes_mahalanobis(
+        node_medians_raw,
+        nbm_center,
+        nbm_inv_cov,
+        patho_purity=patho_purity,
+        purity_modulation_power=purity_modulation_power,
+    )
+    scores_mahal = np.clip(d2_modulated / max(d2_normalization, 1e-6) * 10.0, 0.0, 10.0)
+
+    # Composante 2 : score linéaire ELN 2022 / Ogata
+    if weights is None:
+        weights = build_blast_weights(marker_names)
+    scores_linear = score_nodes_for_blasts(
+        np.asarray(node_medians_zscore, dtype=float),
+        marker_names,
+        weights,
+    )
+
+    # ── Boost géométrique ─────────────────────────────────────────────────────
+    #
+    # Bonus de rupture de corrélation : si D² est très élevé (> d2_normalization),
+    # la géométrie est franchement anormale → on booste la composante linéaire.
+    # Cela profite aux blastes atypiques (P25) dont le score CD33/HLA-DR est modeste
+    # mais dont la position dans l'espace 10D est clairement hors du nuage NBM.
+    boosted_linear = np.where(
+        d2_raw > d2_normalization,
+        scores_linear * mahal_boost_factor,
+        scores_linear,
+    )
+    boosted_linear = np.clip(boosted_linear, 0.0, 10.0)
+
+    # Combinaison pondérée (chaque composante est déjà dans [0, 10])
+    scores_hybrid = mahal_weight * scores_mahal + linear_weight * boosted_linear
+
+    return np.clip(scores_hybrid, 0.0, 10.0), d2_raw
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -625,12 +1050,38 @@ def trace_blast_cells_to_fcs_source(
                 source_col = col
                 break
     if source_col is None:
-        for candidate in ["File_Origin", "filename", "Filename", "sample_id", "SampleID"]:
+        for candidate in [
+            "File_Origin",
+            "filename",
+            "Filename",
+            "sample_id",
+            "SampleID",
+        ]:
             if candidate in obs_df.columns:
                 source_col = candidate
                 break
 
-    # ── Traçabilité nœud par nœud ─────────────────────────────────────────────
+    # ── PERF-4 FIX : Traçabilité vectorisée via groupby ──────────────────────
+    # Remplace la boucle iterrows() + masque booléen O(N) par nœud par un
+    # groupby unique O(N) sur tout le DataFrame — critique sur 500k+ cellules.
+
+    # Normaliser l'ID de nœud une seule fois
+    obs_df = obs_df.copy()
+    obs_df["_node_int"] = obs_df[clustering_col].astype(int)
+
+    # Pré-calculer les masques condition sur tout le DataFrame (vectorisé)
+    _has_cond_col = bool(condition_col and condition_col in obs_df.columns)
+    if _has_cond_col:
+        cond_upper = obs_df[condition_col].astype(str).str.upper()
+        obs_df["_is_patho"] = cond_upper.str.contains("PATHO|DIAG|DX|LAM|AML", na=False)
+        obs_df["_is_sain"]  = cond_upper.str.contains("SAIN|NORMAL|NBM|HEALTHY", na=False)
+    else:
+        obs_df["_is_patho"] = False
+        obs_df["_is_sain"]  = False
+
+    # Groupby unique sur tous les nœuds
+    grouped = obs_df.groupby("_node_int", sort=False)
+
     records: List[Dict] = []
 
     for _, row in df_trace.iterrows():
@@ -638,48 +1089,57 @@ def trace_blast_cells_to_fcs_source(
         blast_score = float(row["blast_score"])
         blast_category = str(row["blast_category"])
 
-        mask_node = obs_df[clustering_col].astype(int) == node_id
-        cells_in_node = obs_df[mask_node]
-        n_total = len(cells_in_node)
-
-        if n_total == 0:
+        if node_id not in grouped.groups:
             records.append({
-                "node_id": node_id, "blast_score": blast_score,
-                "blast_category": blast_category, "n_cells_total": 0,
-                "n_cells_patho": 0, "n_cells_sain": 0,
-                "pct_patho": 0.0, "source_files": "", "clinical_alert": False,
+                "node_id": node_id,
+                "blast_score": blast_score,
+                "blast_category": blast_category,
+                "n_cells_total": 0,
+                "n_cells_patho": 0,
+                "n_cells_sain": 0,
+                "pct_patho": 0.0,
+                "source_files": "",
+                "clinical_alert": False,
             })
             continue
 
-        n_patho = 0
-        n_sain = 0
-        if condition_col and condition_col in cells_in_node.columns:
-            cond_vals = cells_in_node[condition_col].astype(str).str.upper()
-            n_patho = int((cond_vals.str.contains("PATHO|DIAG|DX|LAM|AML", na=False)).sum())
-            n_sain  = int((cond_vals.str.contains("SAIN|NORMAL|NBM|HEALTHY", na=False)).sum())
+        cells_in_node = grouped.get_group(node_id)
+        n_total = len(cells_in_node)
+        n_patho = int(cells_in_node["_is_patho"].sum())
+        n_sain  = int(cells_in_node["_is_sain"].sum())
 
         pct_patho = n_patho / max(n_total, 1)
-        clinical_alert = (blast_category == "BLAST_HIGH") and (pct_patho >= alert_patho_threshold)
+        clinical_alert = (blast_category == "BLAST_HIGH") and (
+            pct_patho >= alert_patho_threshold
+        )
 
         if clinical_alert:
             _logger.warning(
                 "ALERTE CLINIQUE — Nœud %d (%s) : %.1f%% cellules Pathologiques (%d/%d)",
-                node_id, blast_category, 100.0 * pct_patho, n_patho, n_total,
+                node_id,
+                blast_category,
+                100.0 * pct_patho,
+                n_patho,
+                n_total,
             )
 
         source_files_str = ""
-        if source_col:
+        if source_col and source_col in cells_in_node.columns:
             src_counts = cells_in_node[source_col].value_counts()
             source_files_str = " | ".join(
                 f"{fname}({cnt})" for fname, cnt in src_counts.items()
             )
 
         records.append({
-            "node_id": node_id, "blast_score": blast_score,
-            "blast_category": blast_category, "n_cells_total": n_total,
-            "n_cells_patho": n_patho, "n_cells_sain": n_sain,
+            "node_id": node_id,
+            "blast_score": blast_score,
+            "blast_category": blast_category,
+            "n_cells_total": n_total,
+            "n_cells_patho": n_patho,
+            "n_cells_sain": n_sain,
             "pct_patho": round(pct_patho * 100.0, 1),
-            "source_files": source_files_str, "clinical_alert": clinical_alert,
+            "source_files": source_files_str,
+            "clinical_alert": clinical_alert,
         })
 
     result_df = (
@@ -691,7 +1151,8 @@ def trace_blast_cells_to_fcs_source(
     n_alerts = int(result_df["clinical_alert"].sum())
     _logger.info(
         "Traçabilité terminée: %d nœuds tracés, %d ALERTE(S) CLINIQUE(S)",
-        len(result_df), n_alerts,
+        len(result_df),
+        n_alerts,
     )
     return result_df
 

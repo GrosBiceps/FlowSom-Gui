@@ -397,7 +397,7 @@ class PopulationMappingService:
             X_unknown = node_mfi_aligned.iloc[unknown_node_ids].values.astype(float)
             X_reference = df_ref_raw.values.astype(float)
 
-            X_norm, _, _ = compute_reference_normalization(X_unknown, X_reference)
+            X_norm, _, _, _ = compute_reference_normalization(X_unknown, X_reference)
 
             marker_names = list(node_mfi_aligned.columns)
             weights = build_blast_weights(marker_names)

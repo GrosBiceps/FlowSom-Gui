@@ -30,6 +30,7 @@ Usage dans BatchPipeline :
 
 from __future__ import annotations
 
+import dataclasses
 import gc
 import hashlib
 import json
@@ -80,13 +81,25 @@ def _hash_files(file_paths: List[str]) -> str:
 
 
 def _hash_prep_config(config: PipelineConfig) -> str:
-    """Empreinte SHA256 (16 chars) des paramètres de preprocessing."""
+    """Empreinte SHA256 (16 chars) des paramètres de preprocessing.
+
+    ARCH-3 FIX : utilise dataclasses.asdict() au lieu de vars() pour garantir :
+      - compatibilité avec les dataclasses utilisant __slots__
+      - sérialisation correcte des sous-objets dataclass imbriqués
+      - comportement stable indépendant de l'implémentation interne Python
+    """
+    def _safe_asdict(obj: object) -> object:
+        """Convertit récursivement un dataclass en dict, fallback sur str."""
+        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+            return dataclasses.asdict(obj)
+        return str(obj)
+
     payload = {
-        "pregate": vars(config.pregate),
-        "transform": vars(config.transform),
-        "normalize": vars(config.normalize),
-        "markers": vars(config.markers),
-        "downsampling": vars(config.downsampling),
+        "pregate":     _safe_asdict(config.pregate),
+        "transform":   _safe_asdict(config.transform),
+        "normalize":   _safe_asdict(config.normalize),
+        "markers":     _safe_asdict(config.markers),
+        "downsampling": _safe_asdict(config.downsampling),
     }
     blob = json.dumps(payload, sort_keys=True, ensure_ascii=True, default=str)
     return hashlib.sha256(blob.encode()).hexdigest()[:16]

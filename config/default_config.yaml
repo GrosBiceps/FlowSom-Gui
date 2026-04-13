@@ -6,7 +6,7 @@ pipeline_version: "2.0"
 
 paths:
   healthy_folder: "F:/BLAST110/BLAST110/FCS/NBM/T1"
-  patho_folder: "F:/BLAST110/BLAST110/FCS/AML_Dx/T1"
+  patho_folder: "F:/BLAST110/BLAST110/FCS/Test 2"
   output_dir: "F:/BLAST110/Résults"
 
 analysis:
@@ -18,7 +18,7 @@ pregate:
   mode_blastes_vs_normal: true # true = gating asymétrique CD45 patho seulement
   viable: true               # true = appliquer gating débris de base (SSC-A vs FSC-A)
   singlets: true             # true = appliquer gating doublets de base (FSC-H vs FSC-A)
-  cd45: true # true = gating asymétrique CD45 patho seulement de base
+  cd45: true # true = gating symétrique CD45 pour exclure les cellules matures (bas = plus inclusif, haut = plus strict)
   cd34: false # false = pas de gating CD34 de base (optionnel, souvent peu fiable)
 
 pregate_advanced:
@@ -122,8 +122,8 @@ normalize:
   method: "zscore"    # zscore | minmax | none
 
 markers:
-  exclude_scatter: true # true = exclure les paramètres de diffusion (FSC/SSC) des marqueurs
-  exclude_additional: [] # Liste de marqueurs supplémentaires à exclure (ex: ["Time", "Event_length"])
+  exclude_scatter: false # true = exclure les paramètres de diffusion (FSC/SSC) des marqueurs
+  exclude_additional: ["TIME", "EVENT", "WIDTH", "HEIGHT"] # Liste de marqueurs supplémentaires à exclure (ex: ["Time", "Event_length"])
   keep_area_only: true    # Supprime les doublons -H (Height) ; garde -A (Area) + FSC/SSC/Time
   # Patterns toujours exclus du clustering FlowSOM (insensible à la casse)
   scatter_patterns: ["FSC", "SSC", "TIME", "EVENT", "WIDTH", "HEIGHT"]

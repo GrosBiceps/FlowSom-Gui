@@ -119,7 +119,9 @@ def stack_samples(
         Tuple (X_stacked [n_cells, n_markers], obs_metadata DataFrame).
     """
     all_X: List[np.ndarray] = []
-    all_obs: List[Dict] = []
+    # PERF-2 FIX : accumulation de DataFrames vectorisés (np.full) au lieu d'une
+    # boucle Python cellule par cellule — O(N) au lieu de O(N) appels Python.
+    all_obs: List[pd.DataFrame] = []
 
     for sample in samples:
         X_s = sample.matrix
@@ -142,19 +144,18 @@ def stack_samples(
 
         all_X.append(X_sel)
 
-        for _ in range(X_s.shape[0]):
-            all_obs.append(
-                {
-                    "condition": sample.condition,
-                    "file_origin": sample.name,
-                }
-            )
+        # PERF-2 : vectorisé — np.full évite la boucle Python sur chaque cellule
+        n = X_s.shape[0]
+        all_obs.append(pd.DataFrame({
+            "condition":   np.full(n, sample.condition, dtype=object),
+            "file_origin": np.full(n, sample.name,      dtype=object),
+        }))
 
     if not all_X:
         raise ValueError("Aucun échantillon valide à empiler")
 
     X = np.vstack(all_X)
-    obs = pd.DataFrame(all_obs)
+    obs = pd.concat(all_obs, ignore_index=True)
 
     # Vérification d'équilibre (info seulement — le déséquilibre Sain/Patho est voulu :
     # les NBM servent de référence calibrée et doivent dominer)
@@ -174,15 +175,17 @@ def stack_samples(
             )
 
     # Sous-échantillonnage global si nécessaire
+    # CR-4 FIX : capturer n_before AVANT de modifier X pour que le log soit correct.
     if max_cells_total and X.shape[0] > max_cells_total:
+        n_before = X.shape[0]
         rng = np.random.default_rng(seed)
-        idx = rng.choice(X.shape[0], size=max_cells_total, replace=False)
+        idx = rng.choice(n_before, size=max_cells_total, replace=False)
         X = X[idx]
         obs = obs.iloc[idx].reset_index(drop=True)
         _logger.info(
             "Matrice sous-échantillonnée à %d/%d cellules",
             max_cells_total,
-            X.shape[0] + max_cells_total,
+            n_before,  # taille originale, pas post-échantillonnage
         )
 
     # Contrôle NaN final

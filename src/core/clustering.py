@@ -415,11 +415,20 @@ class FlowSOMClusterer:
         if self.metacluster_assignments_ is None:
             raise RuntimeError("fit() doit être appelé avant get_mfi_matrix()")
 
+        # PERF-3 FIX : vectorisation par tri + découpage (np.split).
+        # Évite de créer un masque booléen O(N) pour chaque métacluster.
+        # Complexité : O(N log N) pour le tri, O(N) pour np.split et les médianes.
         unique_mc = np.unique(self.metacluster_assignments_)
+        sort_idx = np.argsort(self.metacluster_assignments_, kind="stable")
+        X_sorted = X[sort_idx]
+        labels_sorted = self.metacluster_assignments_[sort_idx]
+        # Points de coupure entre groupes consécutifs de métaclusters différents
+        split_pts = np.where(np.diff(labels_sorted))[0] + 1
+        chunks = np.split(X_sorted, split_pts)
+
         mfi = np.zeros((len(unique_mc), X.shape[1]))
-        for i, mc in enumerate(unique_mc):
-            cells_mc = X[self.metacluster_assignments_ == mc]
-            mfi[i] = np.median(cells_mc, axis=0)  # Médiane = MFI robuste
+        for i, chunk in enumerate(chunks):
+            mfi[i] = np.median(chunk, axis=0)  # Médiane = MFI robuste
 
         return mfi
 

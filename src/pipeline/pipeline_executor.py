@@ -1226,7 +1226,8 @@ class FlowSOMPipeline:
                         # stocké lors du gating asymétrique mode_blastes_vs_normal.
                         _combined_g3_event = next(
                             (
-                                e for e in self._gating_logger.events
+                                e
+                                for e in self._gating_logger.events
                                 if e.gate_name == "G3_cd45" and e.file == "COMBINED"
                             ),
                             None,
@@ -1246,7 +1247,9 @@ class FlowSOMPipeline:
                             # est déjà CD45+), et on surcharge n_patho_cd45pos
                             # et n_patho_pre_cd45 après coup avec les valeurs exactes.
                             _cd45_mask_mrd = np.ones(len(df_cells), dtype=bool)
-                            _n_patho_cd45_override: Optional[int] = int(_n_patho_post_cd45)
+                            _n_patho_cd45_override: Optional[int] = int(
+                                _n_patho_post_cd45
+                            )
                             _n_patho_pre_override: Optional[int] = (
                                 int(_n_patho_pre_cd45)
                                 if _n_patho_pre_cd45 is not None
@@ -1270,8 +1273,11 @@ class FlowSOMPipeline:
                         _n_patho_cd45_override = None
                         _n_patho_pre_override = None
                         _cd45_col = next(
-                            (c for c in df_cells.columns
-                             if c.upper() in ("CD45", "CD45-PECY5", "CD45-PC5")),
+                            (
+                                c
+                                for c in df_cells.columns
+                                if c.upper() in ("CD45", "CD45-PECY5", "CD45-PC5")
+                            ),
                             None,
                         )
                         if _cd45_col is not None:
@@ -1305,6 +1311,7 @@ class FlowSOMPipeline:
                     _marker_names_list: Optional[list] = None
                     _nbm_center: Optional[np.ndarray] = None
                     _nbm_scale: Optional[np.ndarray] = None
+                    _nbm_inv_cov: Optional[np.ndarray] = None
 
                     if mrd_cfg.blast_phenotype_filter.enabled:
                         try:
@@ -1323,21 +1330,27 @@ class FlowSOMPipeline:
                                     _pm_result.node_medians_norm, dtype=float
                                 )
                                 _marker_names_list = list(
-                                    getattr(_pm_result, "marker_names", node_mfi_matrix.columns)
+                                    getattr(
+                                        _pm_result,
+                                        "marker_names",
+                                        node_mfi_matrix.columns,
+                                    )
                                 )
                                 _logger.info(
                                     "Porte biologique Mode 1 : X_norm depuis "
                                     "population_mapping (%d noeuds, %d marqueurs)",
-                                    _x_norm_arr.shape[0], _x_norm_arr.shape[1],
+                                    _x_norm_arr.shape[0],
+                                    _x_norm_arr.shape[1],
                                 )
                             else:
                                 # Mode 2 : z-scoring contre les cellules NBM (Sain)
                                 # présentes dans df_cells (déjà transformées arcsinh)
                                 _marker_names_list = list(node_mfi_matrix.columns)
-                                _node_medians_arr  = node_mfi_matrix.values
+                                _node_medians_arr = node_mfi_matrix.values
 
                                 _sain_mask = (
-                                    df_cells["condition"].values == mrd_cfg.condition_sain
+                                    df_cells["condition"].values
+                                    == mrd_cfg.condition_sain
                                     if "condition" in df_cells.columns
                                     else None
                                 )
@@ -1345,28 +1358,41 @@ class FlowSOMPipeline:
                                     # Extraire les valeurs des marqueurs pour les
                                     # cellules saines (NBM) déjà transformées
                                     _cols_present = [
-                                        c for c in _marker_names_list
+                                        c
+                                        for c in _marker_names_list
                                         if c in df_cells.columns
                                     ]
                                     if _cols_present:
                                         _X_sain = df_cells.loc[
                                             _sain_mask, _cols_present
                                         ].values.astype(float)
-                                        _c, _s = compute_reference_stats(
-                                            _X_sain, robust=True
+                                        _t_stats0 = time.perf_counter()
+                                        _c, _s, _ic = compute_reference_stats(
+                                            _X_sain,
+                                            robust=True,
+                                            max_samples_for_stats=mrd_cfg.blast_phenotype_filter.nbm_stats_max_cells,
+                                            max_samples_for_covariance=mrd_cfg.blast_phenotype_filter.nbm_cov_max_cells,
+                                            max_samples_for_mincovdet=mrd_cfg.blast_phenotype_filter.nbm_mincovdet_max_cells,
                                         )
+                                        _t_stats_s = time.perf_counter() - _t_stats0
                                         # Aligner sur marker_names_list complet
                                         _nbm_center = np.zeros(len(_marker_names_list))
-                                        _nbm_scale  = np.ones(len(_marker_names_list))
+                                        _nbm_scale = np.ones(len(_marker_names_list))
                                         for _i, _m in enumerate(_marker_names_list):
                                             if _m in _cols_present:
                                                 _j = _cols_present.index(_m)
                                                 _nbm_center[_i] = _c[_j]
-                                                _nbm_scale[_i]  = _s[_j]
+                                                _nbm_scale[_i] = _s[_j]
+                                        # inv_cov est déjà dans l'espace des cols_present
+                                        # — on la stocke directement (même espace que node_medians)
+                                        _nbm_inv_cov = _ic
                                         _logger.info(
                                             "Porte biologique Mode 2 : z-scoring vs "
-                                            "NBM interne (%d cellules Sain, %d marqueurs)",
-                                            int(_sain_mask.sum()), len(_cols_present),
+                                            "NBM interne (%d cellules Sain, %d marqueurs) "
+                                            "[stats en %.1fs]",
+                                            int(_sain_mask.sum()),
+                                            len(_cols_present),
+                                            _t_stats_s,
                                         )
                                     else:
                                         _logger.warning(
@@ -1379,12 +1405,15 @@ class FlowSOMPipeline:
                                         "Porte biologique Mode 3 (dégradé) : "
                                         "pas assez de cellules Sain (%d) pour "
                                         "calculer les stats NBM — z-scoring intra-dataset.",
-                                        int(_sain_mask.sum()) if _sain_mask is not None else 0,
+                                        int(_sain_mask.sum())
+                                        if _sain_mask is not None
+                                        else 0,
                                     )
                         except Exception as _e:
                             _logger.warning(
                                 "Impossible de preparer les donnees pour le "
-                                "filtre phenotypique hybride : %s", _e
+                                "filtre phenotypique hybride : %s",
+                                _e,
                             )
 
                     mrd_result = compute_mrd(
@@ -1398,13 +1427,22 @@ class FlowSOMPipeline:
                         marker_names=_marker_names_list,
                         nbm_center=_nbm_center,
                         nbm_scale=_nbm_scale,
+                        nbm_inv_cov=_nbm_inv_cov,
                     )
 
                     # Override n_patho_cd45pos et n_patho_pre_cd45 avec les valeurs
                     # exactes du gating logger (gating combiné asymétrique).
-                    if mrd_result is not None and _n_patho_cd45_override is not None and _n_patho_cd45_override > 0:
+                    if (
+                        mrd_result is not None
+                        and _n_patho_cd45_override is not None
+                        and _n_patho_cd45_override > 0
+                    ):
                         mrd_result.n_patho_cd45pos = _n_patho_cd45_override
-                    if mrd_result is not None and _n_patho_pre_override is not None and _n_patho_pre_override > 0:
+                    if (
+                        mrd_result is not None
+                        and _n_patho_pre_override is not None
+                        and _n_patho_pre_override > 0
+                    ):
                         mrd_result.n_patho_pre_cd45 = _n_patho_pre_override
 
                     # ── Regénération QC Gate 3 KDE CD45 avec ratio MRD ────────
@@ -1419,9 +1457,13 @@ class FlowSOMPipeline:
                             from flowsom_pipeline_pro.src.core.gating import (
                                 PreGating as _PG_mrd,
                             )
+
                             _cd45_col_name = next(
-                                (c for c in df_cells.columns
-                                 if c.upper() in ("CD45", "CD45-PECY5", "CD45-PC5")),
+                                (
+                                    c
+                                    for c in df_cells.columns
+                                    if c.upper() in ("CD45", "CD45-PECY5", "CD45-PC5")
+                                ),
                                 None,
                             )
                             if _cd45_col_name is not None:
@@ -1534,7 +1576,9 @@ class FlowSOMPipeline:
                             )
                             if _fig_mrd_radar is not None:
                                 _plotly_figures["fig_mrd_blast_radar"] = _fig_mrd_radar
-                                _logger.info("Radar MRD blast (Porte 2) généré depuis pipeline principal.")
+                                _logger.info(
+                                    "Radar MRD blast (Porte 2) généré depuis pipeline principal."
+                                )
                         except Exception as _radar_exc:
                             _logger.warning(
                                 "Radar MRD blast (pipeline principal) échoué (non bloquant): %s",
@@ -1609,7 +1653,9 @@ class FlowSOMPipeline:
                     # Classification phénotypique blast des nœuds MRD
                     if mrd_result is not None and viz_save:
                         _export_png_blast = getattr(
-                            getattr(config, "visualization", None), "export_png_mrd", False
+                            getattr(config, "visualization", None),
+                            "export_png_mrd",
+                            False,
                         )
                         self._enqueue_plot(
                             plot_worker,
@@ -1619,8 +1665,12 @@ class FlowSOMPipeline:
                             "flowsom_pipeline_pro.src.visualization.flowsom_plots",
                             "plot_blast_mrd_classification",
                             mrd_result,
-                            output_dir / "plots" / f"blast_mrd_classification_{timestamp}.html",
-                            output_dir / "plots" / f"blast_mrd_classification_{timestamp}.png"
+                            output_dir
+                            / "plots"
+                            / f"blast_mrd_classification_{timestamp}.html",
+                            output_dir
+                            / "plots"
+                            / f"blast_mrd_classification_{timestamp}.png"
                             if _export_png_blast
                             else None,
                         )

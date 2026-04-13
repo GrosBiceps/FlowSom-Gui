@@ -14,6 +14,7 @@ Retourne une liste de FlowSample prêts pour le clustering FlowSOM.
 from __future__ import annotations
 
 import warnings
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -41,6 +42,27 @@ from flowsom_pipeline_pro.src.utils.validators import (
 )
 
 _logger = get_logger("services.preprocessing")
+
+
+def _canonical_marker_name(raw_name: str) -> str:
+    """
+    Extrait un nom canonique suffix-aware pour l'harmonisation inter-fichiers.
+
+    Exemples:
+      - "CD7+56 FITC-A" -> "CD7+56-A"
+      - "CD7+56 FITC-H" -> "CD7+56-H"
+      - "CD34 Cy55"     -> "CD34"
+      - "FSC-A"         -> "FSC-A"
+    """
+    raw = (raw_name or "").strip()
+    if not raw:
+        return raw
+
+    base = raw.split(" ")[0]
+    m = re.search(r"-(A|H)\b", raw, re.IGNORECASE)
+    if m and not (base.upper().endswith("-A") or base.upper().endswith("-H")):
+        return f"{base}-{m.group(1).upper()}"
+    return base
 
 
 def preprocess_sample(
@@ -224,11 +246,13 @@ def _apply_gating(
     """
     Applique le gating (auto ou manuel) sur la matrice.
 
-    Gating asymétrique (MODE_BLASTES_VS_NORMAL) :
-    - Sain / NBM : seuls G1 (débris) et G2 (singlets) sont appliqués.
-      G3 (CD45) et G4 (CD34) sont ignorés pour conserver les progéniteurs
-      normaux CD45− et les hématogones.
-    - Pathologique : gating complet G1→G4.
+    Gating :
+    - G1 (débris) et G2 (singlets) : appliqués à toutes les conditions.
+    - G3 (CD45) : SYMÉTRIQUE — appliqué à toutes les conditions, y compris Sain/NBM.
+      Le KDE calcule le seuil sur la distribution de l'échantillon en cours.
+      Cela garantit que le pool NBM est strictement composé de leucocytes CD45+.
+    - G4 (CD34) : asymétrique en mode_blastes_vs_normal — ignoré pour les sains
+      afin de ne pas exclure les progéniteurs CD34+ normaux.
 
     Args:
         condition: "Sain", "Pathologique" ou autre. Case-insensitive.
@@ -241,8 +265,7 @@ def _apply_gating(
     n_before = X.shape[0]
     combined_mask = np.ones(n_before, dtype=bool)
 
-    # Un échantillon sain ne doit pas subir le gating CD45/CD34 qui exclurait
-    # les progéniteurs et cellules CD45-dim (hématogones, plasmablastes...)
+    # is_sain est conservé pour le gating CD34 (asymétrique) uniquement.
     is_sain = mode_blastes_vs_normal and condition.lower() in (
         "sain",
         "normal",
@@ -299,53 +322,42 @@ def _apply_gating(
         )
         combined_mask &= mask
 
-    # Gate 3 – CD45 (ASYMÉTRIQUE : ignoré si échantillon sain)
+    # Gate 3 – CD45 (SYMÉTRIQUE : appliqué à toutes les conditions, y compris Sain/NBM)
+    # Le pool NBM doit être strictement composé de leucocytes CD45+.
+    # Le KDE calcule le seuil sur la distribution de l'échantillon en cours (sain ou patho).
     if getattr(pregate_cfg, "cd45", True):
-        if is_sain:
-            _logger.info(
-                "%s [%s]: G3_cd45 ignoré (gating asymétrique — progéniteurs conservés)",
-                file_name,
-                condition,
-            )
-            gating_logger.log(
-                file_name,
-                "G3_cd45",
-                int(combined_mask.sum()),
-                int(combined_mask.sum()),
-                method="skip_asymmetric",
+        if mode == "auto":
+            mask = AutoGating.auto_gate_cd45(
+                X,
+                var_names,
+                kde_seuil_relatif=getattr(pregate_cfg, "kde_cd45_seuil_relatif", 0.05),
+                kde_finesse=getattr(pregate_cfg, "kde_cd45_finesse", 0.6),
+                kde_sigma_smooth=getattr(pregate_cfg, "kde_cd45_sigma_smooth", 10),
+                kde_n_grid=getattr(pregate_cfg, "kde_cd45_n_grid", 1000),
+                kde_max_samples=getattr(pregate_cfg, "kde_cd45_max_samples", 10000),
+                threshold_percentile=getattr(
+                    pregate_cfg, "cd45_threshold_percentile", 5.0
+                ),
             )
         else:
-            if mode == "auto":
-                mask = AutoGating.auto_gate_cd45(
-                    X,
-                    var_names,
-                    kde_seuil_relatif=getattr(
-                        pregate_cfg, "kde_cd45_seuil_relatif", 0.05
-                    ),
-                    kde_finesse=getattr(pregate_cfg, "kde_cd45_finesse", 0.6),
-                    kde_sigma_smooth=getattr(pregate_cfg, "kde_cd45_sigma_smooth", 10),
-                    kde_n_grid=getattr(pregate_cfg, "kde_cd45_n_grid", 1000),
-                    kde_max_samples=getattr(pregate_cfg, "kde_cd45_max_samples", 10000),
-                    threshold_percentile=getattr(
-                        pregate_cfg, "cd45_threshold_percentile", 5.0
-                    ),
-                )
-            else:
-                mask = PreGating.gate_cd45_positive(
-                    X,
-                    var_names,
-                    threshold_percentile=getattr(
-                        pregate_cfg, "cd45_min_percentile", 5.0
-                    ),
-                )
-            gating_logger.log(
-                file_name,
-                "G3_cd45",
-                int(combined_mask.sum()),
-                int((combined_mask & mask).sum()),
-                method=mode,
+            mask = PreGating.gate_cd45_positive(
+                X,
+                var_names,
+                threshold_percentile=getattr(pregate_cfg, "cd45_min_percentile", 5.0),
             )
-            combined_mask &= mask
+        _logger.info(
+            "%s [%s]: G3_cd45 appliqué (gating symétrique — leucocytes CD45+ uniquement)",
+            file_name,
+            condition,
+        )
+        gating_logger.log(
+            file_name,
+            "G3_cd45",
+            int(combined_mask.sum()),
+            int((combined_mask & mask).sum()),
+            method=mode,
+        )
+        combined_mask &= mask
 
     # Gate 4 – CD34+ blastes (optionnel, ASYMÉTRIQUE : ignoré si échantillon sain)
     if getattr(pregate_cfg, "cd34", False):
@@ -460,9 +472,10 @@ def preprocess_all_samples(
 # =============================================================================
 # Dans le monolithe, le gating est appliqué sur la CONCATÉNATION de tous les
 # fichiers avant toute autre opération. Cela est crucial car :
-#  - Le KDE CD45 (pied du pic) est calibré sur la distribution combinée sain+patho :
-#    les cellules NBM (CD45-high) servent d'étalon pour le seuil CD45+/CD45-
-#    → les blastes AML (CD45-dim) ne sont pas éliminés par erreur.
+#  - Le KDE CD45 (pied du pic) est calculé séparément par condition (sain/patho) :
+#    chaque sous-population obtient un seuil adapté à sa propre distribution.
+#    Le gating CD45 est SYMÉTRIQUE : les cellules saines sont également filtrées
+#    → le pool NBM contient uniquement des leucocytes CD45+, médiane correcte.
 #  - Le RANSAC singlets est exécuté par fichier sur l'ensemble combiné.
 #  - Il n'y a AUCUN sous-échantillonnage avant le gating.
 # =============================================================================
@@ -485,10 +498,12 @@ def preprocess_combined(
     3. Applique le gating sur les données **combinées** :
        - Gate débris (GMM 2D FSC-A/SSC-A) sur toutes les cellules.
        - Gate singlets (RANSAC) par fichier sur les données combinées.
-       - Gate CD45 (si activé) : KDE pied du pic calibré par les cellules NBM → seuil
-         correct pour CD45-dim (blastes AML). Appliqué **uniquement aux patho**
-         si ``mode_blastes_vs_normal=True``.
-       - Gate CD34 (si activé) : même logique asymétrique.
+       - Gate CD45 (si activé) : KDE pied du pic SYMÉTRIQUE — appliqué à toutes
+         les conditions. En mode_blastes_vs_normal, le KDE est calculé séparément
+         par sous-population (sain/patho) pour calibrer le seuil sur chaque
+         distribution. Le pool NBM contiendra uniquement des leucocytes CD45+.
+       - Gate CD34 (si activé) : asymétrique — ignoré pour les sains afin de
+         conserver les progéniteurs CD34+ normaux.
     4. Filtre les marqueurs -H redondants (keep_area_only).
     5. Applique la transformation et la normalisation sur l'ensemble.
     6. Reconstruit la liste de :class:`FlowSample` par fichier d'origine.
@@ -535,31 +550,42 @@ def preprocess_combined(
     seen_raw: set = set()
     all_raw_unique = [m for m in all_raw if not (m in seen_raw or seen_raw.add(m))]  # type: ignore[func-returns-value]
 
-    # Extraire le préfixe canonique (avant le premier espace) de chaque nom brut
+    # Extraire le préfixe canonique (suffix-aware pour -A/-H) de chaque nom brut
     canonical_set: dict = {}  # canonical → premier nom brut rencontré
     for raw in all_raw_unique:
-        canon = raw.split(" ")[0]
+        canon = _canonical_marker_name(raw)
         if canon not in canonical_set:
             canonical_set[canon] = raw
     target_markers: List[str] = list(canonical_set.keys())
 
     # b) Harmoniser chaque sample EN PLACE
     n_harmonized_total = 0
+    # Cache par schéma de colonnes pour éviter de recalculer le regex mapping
+    # sur des panels identiques (cas typique en batch NBM/patho).
+    _rename_cache: Dict[Tuple[str, ...], Dict[str, str]] = {}
     for s in samples:
-        rename_map = harmonize_marker_names(s.var_names, target_markers)
+        schema_key = tuple(s.var_names)
+        if schema_key in _rename_cache:
+            rename_map = _rename_cache[schema_key]
+        else:
+            rename_map = harmonize_marker_names(s.var_names, target_markers)
+            _rename_cache[schema_key] = rename_map
         renames = {src: dst for src, dst in rename_map.items() if src != dst}
         if renames:
             s.data.rename(columns=renames, inplace=True)
             n_harmonized_total += len(renames)
             _logger.debug(
                 "%s : %d colonne(s) harmonisée(s) : %s",
-                s.name, len(renames), renames,
+                s.name,
+                len(renames),
+                renames,
             )
 
     if n_harmonized_total:
         _logger.info(
             "Harmonisation panel : %d renommage(s) effectué(s) sur %d fichiers.",
-            n_harmonized_total, len(samples),
+            n_harmonized_total,
+            len(samples),
         )
 
     # Intersection sur les noms harmonisés
@@ -1153,71 +1179,90 @@ def _apply_gating_combined(
     else:
         mask_singlets = np.ones(n_before, dtype=bool)
 
-    # ── Gate 3 : CD45 (asymétrique si mode_blastes_vs_normal) ────────────────
-    # CRUCIAL : le GMM est entraîné sur les données COMBINÉES (sain + patho).
-    # Les cellules NBM (CD45-high) étalonnent le seuil → les blastes AML
-    # (CD45-dim) passent la porte, contrairement au cas per-file.
+    # ── Gate 3 : CD45 (SYMÉTRIQUE — appliqué à toutes les conditions) ───────────
+    # Le gating CD45 s'applique à TOUTES les cellules (saines et pathologiques).
+    # Pour les données combinées (mode_blastes_vs_normal), le KDE est calculé
+    # séparément sur chaque sous-population afin que le seuil soit adapté à la
+    # distribution propre de chaque condition (sain : pic CD45+ très dominant ;
+    # patho : distribution potentiellement décalée vers CD45-dim).
+    # Résultat : le pool NBM ne contient que des leucocytes CD45+, ce qui garantit
+    # une médiane NBM correcte et des Z-scores CD45 valides.
     if getattr(pregate_cfg, "cd45", True):
         n_after_g1g2 = int(combined_mask.sum())
-        if mode_blastes_vs_normal:
-            _logger.info(
-                "Gate 3 — CD45 [%s] ASYMÉTRIQUE (KDE pied du pic, patho uniquement)",
-                mode,
-            )
-            # Gating CD45 sur les cellules patho uniquement (X[is_patho_vec])
-            # → évite le bug de broadcasting quand X.shape[0] != n_before
+        _logger.info(
+            "Gate 3 — CD45 [%s] SYMÉTRIQUE (KDE pied du pic sur chaque condition)",
+            mode,
+        )
+
+        _kde_kwargs = dict(
+            kde_seuil_relatif=getattr(pregate_cfg, "kde_cd45_seuil_relatif", 0.05),
+            kde_finesse=getattr(pregate_cfg, "kde_cd45_finesse", 0.6),
+            kde_sigma_smooth=getattr(pregate_cfg, "kde_cd45_sigma_smooth", 10),
+            kde_n_grid=getattr(pregate_cfg, "kde_cd45_n_grid", 1000),
+            kde_max_samples=getattr(pregate_cfg, "kde_cd45_max_samples", 10000),
+            threshold_percentile=getattr(pregate_cfg, "cd45_threshold_percentile", 5.0),
+        )
+        _pct_kwargs = dict(
+            threshold_percentile=getattr(pregate_cfg, "cd45_min_percentile", 5.0),
+        )
+
+        if mode_blastes_vs_normal and (is_sain_vec.any() and is_patho_vec.any()):
+            # Calcul du KDE séparé par condition pour calibrer le seuil sur
+            # la distribution propre à chaque sous-population.
+            mask_cd45 = np.zeros(n_before, dtype=bool)
+
+            X_sain = X[is_sain_vec]
+            if mode == "auto":
+                mask_cd45_sain = AutoGating.auto_gate_cd45(
+                    X_sain, var_names, **_kde_kwargs
+                )
+            else:
+                mask_cd45_sain = PreGating.gate_cd45_positive(
+                    X_sain, var_names, **_pct_kwargs
+                )
+            mask_cd45[is_sain_vec] = mask_cd45_sain
+
             X_patho = X[is_patho_vec]
             if mode == "auto":
                 mask_cd45_patho = AutoGating.auto_gate_cd45(
-                    X_patho,
-                    var_names,
-                    kde_seuil_relatif=getattr(
-                        pregate_cfg, "kde_cd45_seuil_relatif", 0.05
-                    ),
-                    kde_finesse=getattr(pregate_cfg, "kde_cd45_finesse", 0.6),
-                    kde_sigma_smooth=getattr(pregate_cfg, "kde_cd45_sigma_smooth", 10),
-                    kde_n_grid=getattr(pregate_cfg, "kde_cd45_n_grid", 1000),
-                    kde_max_samples=getattr(pregate_cfg, "kde_cd45_max_samples", 10000),
-                    threshold_percentile=getattr(
-                        pregate_cfg, "cd45_threshold_percentile", 5.0
-                    ),
+                    X_patho, var_names, **_kde_kwargs
                 )
             else:
                 mask_cd45_patho = PreGating.gate_cd45_positive(
-                    X_patho,
-                    var_names,
-                    threshold_percentile=getattr(
-                        pregate_cfg, "cd45_min_percentile", 5.0
-                    ),
+                    X_patho, var_names, **_pct_kwargs
                 )
-            # Appliquer CD45 UNIQUEMENT aux patho (identique au monolithe)
-            mask_cd45 = np.ones(n_before, dtype=bool)
             mask_cd45[is_patho_vec] = mask_cd45_patho
+
+            n_sain_pre = int((combined_mask & is_sain_vec).sum())
+            n_sain_post = int((combined_mask & mask_cd45 & is_sain_vec).sum())
+            n_patho_pre = int((combined_mask & is_patho_vec).sum())
+            n_patho_post = int((combined_mask & mask_cd45 & is_patho_vec).sum())
+            _logger.info(
+                "  Sain  CD45+ conservés: %d/%d (%.1f%%)",
+                n_sain_post,
+                n_sain_pre,
+                n_sain_post / max(n_sain_pre, 1) * 100,
+            )
+            _logger.info(
+                "  Patho CD45+ conservés: %d/%d (%.1f%%)",
+                n_patho_post,
+                n_patho_pre,
+                n_patho_post / max(n_patho_pre, 1) * 100,
+            )
+            _g3_extras: dict = {
+                "method": mode,
+                "n_sain_pre_cd45": n_sain_pre,
+                "n_sain_post_cd45": n_sain_post,
+                "n_patho_pre_cd45": n_patho_pre,
+                "n_patho_post_cd45": n_patho_post,
+            }
         else:
-            _logger.info("Gate 3 — CD45 [%s] sur toutes les cellules", mode)
+            # Pas de distinction sain/patho : KDE unique sur toutes les cellules.
             if mode == "auto":
-                mask_cd45 = AutoGating.auto_gate_cd45(
-                    X,
-                    var_names,
-                    kde_seuil_relatif=getattr(
-                        pregate_cfg, "kde_cd45_seuil_relatif", 0.05
-                    ),
-                    kde_finesse=getattr(pregate_cfg, "kde_cd45_finesse", 0.6),
-                    kde_sigma_smooth=getattr(pregate_cfg, "kde_cd45_sigma_smooth", 10),
-                    kde_n_grid=getattr(pregate_cfg, "kde_cd45_n_grid", 1000),
-                    kde_max_samples=getattr(pregate_cfg, "kde_cd45_max_samples", 10000),
-                    threshold_percentile=getattr(
-                        pregate_cfg, "cd45_threshold_percentile", 5.0
-                    ),
-                )
+                mask_cd45 = AutoGating.auto_gate_cd45(X, var_names, **_kde_kwargs)
             else:
-                mask_cd45 = PreGating.gate_cd45_positive(
-                    X,
-                    var_names,
-                    threshold_percentile=getattr(
-                        pregate_cfg, "cd45_min_percentile", 5.0
-                    ),
-                )
+                mask_cd45 = PreGating.gate_cd45_positive(X, var_names, **_pct_kwargs)
+            _g3_extras = {"method": mode}
 
         n_after_cd45 = int((combined_mask & mask_cd45).sum())
         _logger.info(
@@ -1226,21 +1271,6 @@ def _apply_gating_combined(
             n_after_g1g2,
             n_after_cd45 / max(n_after_g1g2, 1) * 100,
         )
-        if mode_blastes_vs_normal:
-            n_patho_pre = int((combined_mask & is_patho_vec).sum())
-            n_patho_post = int((combined_mask & mask_cd45 & is_patho_vec).sum())
-            n_sain_pre = int((combined_mask & is_sain_vec).sum())
-            _logger.info(
-                "  Patho CD45+ conservés: %d/%d (%.1f%%) | Sain conservés (100%%): %d",
-                n_patho_post,
-                n_patho_pre,
-                n_patho_post / max(n_patho_pre, 1) * 100,
-                n_sain_pre,
-            )
-        _g3_extras: dict = {"method": mode}
-        if mode_blastes_vs_normal:
-            _g3_extras["n_patho_pre_cd45"] = n_patho_pre
-            _g3_extras["n_patho_post_cd45"] = n_patho_post
         gating_logger.log(
             "COMBINED",
             "G3_cd45",
