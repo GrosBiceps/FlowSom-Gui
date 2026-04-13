@@ -216,7 +216,7 @@ class BatchWorker(QThread):
 
     def run(self) -> None:
         """Point d'entrée du thread batch."""
-        from flowsom_pipeline_pro.src.pipeline.pipeline_executor import BatchPipeline
+        from flowsom_pipeline_pro.src.pipeline.batch_pipeline import BatchPipeline
 
         root_logger = logging.getLogger()
         self._log_handler = LogCapture(self.log_message, progress_signal=None)

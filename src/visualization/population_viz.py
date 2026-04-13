@@ -431,6 +431,273 @@ def plot_blast_fcs_source(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  §10.4e — Radar MRD clinique (nœuds acceptés Porte 2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def plot_mrd_blast_radar(
+    blast_df: pd.DataFrame,
+    mrd_per_node: Optional[List[Any]] = None,
+    marker_cols: Optional[List[str]] = None,
+    max_nodes: int = 10,
+    title: str = "Radar MRD — Nœuds acceptés Porte 2 (BLAST_HIGH / BLAST_MODERATE)",
+    output_dir: Optional[Path] = None,
+    timestamp: str = "",
+) -> Optional["go.Figure"]:
+    """
+    Radar chart Plotly dédié aux nœuds SOM acceptés comme MRD par la Porte 2
+    (filtre biologique BLAST_HIGH / BLAST_MODERATE).
+
+    Contrairement à ``plot_blast_radar()`` qui génère des subplots par nœud,
+    cette fonction produit **un seul radar** avec une trace par nœud, toutes
+    activables/désactivables via la légende.  Un polygone de référence NBM
+    (z = 0, moelle saine) est affiché en fond, ainsi qu'une zone de tolérance
+    ±1 σ en gris translucide.
+
+    Chaque trace indique dans son label :
+      • L'ID du nœud (Nœud #45)
+      • Le blast_score et la catégorie (Score: 7.5/10 – BLAST_HIGH)
+      • Le pourcentage de pureté pathologique si disponible (95 % Patho)
+
+    Args:
+        blast_df: DataFrame produit par ``build_blast_score_dataframe()``.
+                  Colonnes requises : ``node_id``, ``blast_score``,
+                  ``blast_category``, plus les colonnes ``{marker}_M8``.
+        mrd_per_node: Liste de ``MRDClusterResult`` (optionnel).  Utilisée pour
+                      récupérer ``pct_patho`` par nœud.  Si ``None``, le
+                      pourcentage n'est pas affiché dans la légende.
+        marker_cols: Colonnes ``_M8`` à inclure (auto-détectées si ``None``).
+        max_nodes: Nombre max de nœuds à afficher, triés par ``blast_score``
+                   décroissant (défaut : 10).
+        title: Titre du graphique.
+        output_dir: Répertoire de sortie HTML (sous-dossier ``other/``).
+        timestamp: Suffixe ajouté au nom de fichier.
+
+    Returns:
+        Figure Plotly interactive, ou ``None`` si Plotly est absent ou si
+        aucun nœud MRD n'est éligible.
+    """
+    if not _PLOTLY_AVAILABLE:
+        return None
+
+    # ── 1. Filtrer les nœuds MRD acceptés (Porte 2) ──────────────────────────
+    mrd_categories = {"BLAST_HIGH", "BLAST_MODERATE"}
+    df_mrd = blast_df[blast_df["blast_category"].isin(mrd_categories)].copy()
+
+    if df_mrd.empty:
+        _logger.warning(
+            "plot_mrd_blast_radar: aucun nœud BLAST_HIGH/MODERATE dans blast_df."
+        )
+        return None
+
+    # ── 2. Détecter les colonnes de marqueurs ────────────────────────────────
+    if marker_cols is None:
+        marker_cols = [c for c in blast_df.columns if c.endswith("_M8")]
+
+    if not marker_cols:
+        _logger.warning("plot_mrd_blast_radar: aucune colonne marqueur _M8 trouvée.")
+        return None
+
+    # ── 3. Trier par blast_score décroissant, limiter à max_nodes ────────────
+    df_mrd = df_mrd.sort_values("blast_score", ascending=False).head(max_nodes).reset_index(drop=True)
+
+    # ── 4. Construire la table de pureté patho depuis mrd_per_node ───────────
+    pct_patho_map: Dict[int, float] = {}
+    if mrd_per_node is not None:
+        for node_res in mrd_per_node:
+            nid = getattr(node_res, "cluster_id", None)
+            pct = getattr(node_res, "pct_patho", None)
+            if nid is not None and pct is not None:
+                pct_patho_map[int(nid)] = float(pct)
+
+    # ── 5. Axes du radar ─────────────────────────────────────────────────────
+    marker_labels = [c.replace("_M8", "") for c in marker_cols]
+    # Fermer le polygone en répétant le premier axe
+    theta_closed = marker_labels + [marker_labels[0]]
+
+    fig = go.Figure()
+
+    # ── 6. Zone de tolérance NBM ±1 σ (gris très translucide) ────────────────
+    # Représente la variabilité intra-NBM : z ∈ [−1, +1] pour chaque axe.
+    # On construit un polygone extérieur (+1) et intérieur (−1) combinés
+    # via fillcolor pour créer la bande.
+    ones_outer = [1.0] * len(marker_labels) + [1.0]
+    ones_inner = [-1.0] * len(marker_labels) + [-1.0]
+
+    fig.add_trace(
+        go.Scatterpolar(
+            r=ones_outer,
+            theta=theta_closed,
+            fill="toself",
+            fillcolor="rgba(120,120,120,0.10)",
+            line=dict(color="rgba(180,180,180,0.0)", width=0),
+            name="NBM ±1σ (tolérance)",
+            hoverinfo="skip",
+            showlegend=True,
+            legendgroup="reference",
+        )
+    )
+    fig.add_trace(
+        go.Scatterpolar(
+            r=ones_inner,
+            theta=theta_closed,
+            fill="toself",
+            fillcolor="rgba(30,30,30,1.0)",  # masque l'intérieur pour créer la bande
+            line=dict(color="rgba(180,180,180,0.0)", width=0),
+            name=None,
+            hoverinfo="skip",
+            showlegend=False,
+            legendgroup="reference",
+        )
+    )
+
+    # ── 7. Polygone de référence NBM (z = 0 sur tous les axes) ───────────────
+    zeros = [0.0] * len(theta_closed)
+    fig.add_trace(
+        go.Scatterpolar(
+            r=zeros,
+            theta=theta_closed,
+            mode="lines+markers",
+            line=dict(color="rgba(100,200,100,0.9)", width=2, dash="dash"),
+            marker=dict(size=5, color="rgba(100,200,100,0.9)"),
+            fill=None,
+            name="Référence NBM (z = 0)",
+            hovertemplate="Référence NBM<br>%{theta}: z = 0<extra></extra>",
+            showlegend=True,
+            legendgroup="reference",
+        )
+    )
+
+    # ── 8. Traces des nœuds MRD ───────────────────────────────────────────────
+    color_map = {
+        "BLAST_HIGH": "#ef4444",      # rouge vif
+        "BLAST_MODERATE": "#f97316",  # orange
+    }
+    # Palette de nuances pour différencier plusieurs nœuds HIGH ou MODERATE
+    _shades_high = [
+        "#ef4444", "#dc2626", "#b91c1c", "#991b1b", "#7f1d1d",
+        "#f87171", "#fca5a5", "#fee2e2", "#fecaca", "#fde8e8",
+    ]
+    _shades_mod = [
+        "#f97316", "#ea580c", "#c2410c", "#9a3412", "#7c2d12",
+        "#fb923c", "#fdba74", "#fed7aa", "#ffedd5", "#fff7ed",
+    ]
+    _high_idx = 0
+    _mod_idx = 0
+
+    for _, row in df_mrd.iterrows():
+        node_id = int(row["node_id"])
+        score = float(row["blast_score"])
+        cat = str(row["blast_category"])
+        pct = pct_patho_map.get(node_id)
+
+        # Label de légende complet
+        pct_str = f" | {pct:.0f}% Patho" if pct is not None else ""
+        legend_label = f"Nœud #{node_id} | Score: {score:.1f}/10 – {cat}{pct_str}"
+
+        # Couleur individualisée par nœud pour lisibilité
+        if cat == "BLAST_HIGH":
+            color = _shades_high[_high_idx % len(_shades_high)]
+            _high_idx += 1
+        else:
+            color = _shades_mod[_mod_idx % len(_shades_mod)]
+            _mod_idx += 1
+
+        values = list(row[marker_cols].values.astype(float))
+        values_closed = values + [values[0]]
+
+        # Texte hover détaillé par axe
+        hover_parts = [
+            f"<b>Nœud #{node_id}</b><br>"
+            f"Score: {score:.1f}/10 – {cat}"
+            + (f"<br>Pureté patho: {pct:.0f}%" if pct is not None else "")
+            + f"<br>Marqueur: %{{theta}}<br>z-score: %{{r:.2f}}"
+        ] * len(theta_closed)
+
+        fig.add_trace(
+            go.Scatterpolar(
+                r=values_closed,
+                theta=theta_closed,
+                fill="toself",
+                fillcolor=color.replace(")", ", 0.15)").replace("rgb", "rgba")
+                if color.startswith("rgb")
+                else color + "26",  # hex + alpha 15%
+                line=dict(color=color, width=2.5),
+                mode="lines+markers",
+                marker=dict(size=6, color=color),
+                name=legend_label,
+                hovertemplate=hover_parts[0] + "<extra></extra>",
+                legendgroup=f"node_{node_id}",
+                showlegend=True,
+            )
+        )
+
+    # ── 9. Mise en page ───────────────────────────────────────────────────────
+    # Calcul de la plage radiale : max absolu des z-scores + marge
+    all_values = df_mrd[marker_cols].values.astype(float)
+    r_max = max(2.0, float(np.nanmax(np.abs(all_values))) + 0.5)
+
+    fig.update_layout(
+        title=dict(
+            text=title,
+            x=0.5,
+            font=dict(size=16),
+        ),
+        polar=dict(
+            bgcolor="rgba(20,20,30,0.9)",
+            radialaxis=dict(
+                visible=True,
+                range=[-r_max, r_max],
+                tickfont=dict(size=9, color="rgba(200,200,200,0.7)"),
+                gridcolor="rgba(100,100,100,0.3)",
+                tickvals=[-2, -1, 0, 1, 2],
+                ticktext=["-2σ", "-1σ", "NBM", "+1σ", "+2σ"],
+                showticklabels=True,
+            ),
+            angularaxis=dict(
+                tickfont=dict(size=11, color="white"),
+                gridcolor="rgba(100,100,100,0.4)",
+                linecolor="rgba(150,150,150,0.5)",
+            ),
+        ),
+        legend=dict(
+            title=dict(text="Nœuds MRD acceptés", font=dict(size=12)),
+            font=dict(size=10),
+            bgcolor="rgba(20,20,30,0.85)",
+            bordercolor="rgba(150,150,150,0.4)",
+            borderwidth=1,
+            itemclick="toggle",
+            itemdoubleclick="toggleothers",
+        ),
+        template="plotly_dark",
+        height=700,
+        margin=dict(l=80, r=80, t=100, b=60),
+        paper_bgcolor="rgba(10,10,20,0.95)",
+        annotations=[
+            dict(
+                text=(
+                    "Les valeurs sont des z-scores relatifs à la moelle saine de référence (NBM).<br>"
+                    "z > +1 = sur-expression | z < −1 = sous-expression | "
+                    "Zone grise = tolérance NBM ±1σ"
+                ),
+                xref="paper",
+                yref="paper",
+                x=0.5,
+                y=-0.07,
+                showarrow=False,
+                font=dict(size=9, color="rgba(180,180,180,0.7)"),
+                align="center",
+            )
+        ],
+    )
+
+    if output_dir is not None:
+        _save_html(fig, output_dir, f"mrd_blast_radar_{timestamp}.html")
+
+    return fig
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  §10.5 — MST interactif coloré par population
 # ─────────────────────────────────────────────────────────────────────────────
 

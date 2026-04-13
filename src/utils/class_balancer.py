@@ -90,6 +90,7 @@ def equilibrer_pool_flowsom(
     balance_conditions: bool = True,
     imbalance_ratio: float = 1.0,
     seed: int = 42,
+    allow_oversampling: bool = False,
 ) -> pd.DataFrame:
     """
     Crée un pool d'entraînement FlowSOM avec un déséquilibre maîtrisé.
@@ -122,6 +123,12 @@ def equilibrer_pool_flowsom(
             - 5.0 → 5 cellules saines pour 1 blaste (léger déséquilibre intentionnel)
         seed:
             Graine aléatoire pour la reproductibilité du .sample().
+        allow_oversampling:
+            Si True, le tirage par fichier NBM utilise replace=True quand les
+            cellules disponibles sont insuffisantes pour atteindre le quota.
+            Garantit le ratio cible même si le pool NBM est petit.
+            Si False (défaut), le tirage est limité aux cellules disponibles
+            et un WARNING est émis.
 
     Returns:
         DataFrame mélangé prêt à être ingéré par FlowSOM.
@@ -204,22 +211,30 @@ def equilibrer_pool_flowsom(
             )
             continue
 
-        # Sécurité min() : on ne peut pas tirer plus que ce qui est disponible
-        n_tirer = min(quota_par_fichier, n_dispo)
-
-        if n_tirer < quota_par_fichier:
-            _logger.warning(
-                "NBM '%s': seulement %d cellules disponibles (quota=%d) — tirage limité.",
-                nbm_id,
-                n_dispo,
-                quota_par_fichier,
+        rseed = int(rng.integers(0, 2**31))
+        if n_dispo >= quota_par_fichier:
+            # Cas normal : assez de cellules, tirage sans remplacement
+            echantillon = df_nbm_i.sample(n=quota_par_fichier, random_state=rseed)
+        elif allow_oversampling:
+            # Oversampling activé : tirage avec remplacement pour atteindre le quota
+            _logger.info(
+                "NBM '%s': oversampling %d → %d cellules (replace=True).",
+                nbm_id, n_dispo, quota_par_fichier,
             )
+            echantillon = df_nbm_i.sample(
+                n=quota_par_fichier, replace=True, random_state=rseed
+            )
+        else:
+            # Tirage limité au disponible, WARNING
+            _logger.warning(
+                "NBM '%s': seulement %d cellules disponibles (quota=%d) — tirage limité. "
+                "Activez allow_oversampling=true pour atteindre le ratio cible.",
+                nbm_id, n_dispo, quota_par_fichier,
+            )
+            echantillon = df_nbm_i.sample(n=n_dispo, random_state=rseed)
 
-        sous_echantillons.append(
-            df_nbm_i.sample(n=n_tirer, random_state=int(rng.integers(0, 2**31)))
-        )
-
-        _logger.debug("  NBM '%s': %d/%d cellules tirées.", nbm_id, n_tirer, n_dispo)
+        sous_echantillons.append(echantillon)
+        _logger.debug("  NBM '%s': %d/%d cellules tirées.", nbm_id, len(echantillon), n_dispo)
 
     if not sous_echantillons:
         raise ValueError(

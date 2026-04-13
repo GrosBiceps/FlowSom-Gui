@@ -110,6 +110,7 @@ _WIDE_KEYS = frozenset({
     "fig_som_combined", "fig_mrd_summary", "fig_grid_mc",
     "fig_heatmap", "fig_heatmap_clinical", "fig_radar", "fig_cluster_radar",
     "fig_cluster_radar_jf", "fig_cluster_radar_flo",
+    "fig_blast_mrd_classification",
 })
 
 # Ordre de rendu identique au rapport HTML
@@ -125,6 +126,8 @@ _FIG_ORDER = [
     "fig_cluster_radar_jf", "fig_cluster_radar_flo",
     "fig_patho_pct", "fig_cells_pct", "fig_patho_pct_som", "fig_cells_pct_som",
     "fig_som_combined", "fig_mrd_summary",
+    # Classification phénotypique blast — toujours après la MRD
+    "fig_blast_mrd_classification",
 ]
 
 

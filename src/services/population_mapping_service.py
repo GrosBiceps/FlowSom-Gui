@@ -448,6 +448,7 @@ class PopulationMappingService:
                 plot_blast_radar,
                 plot_blast_scores_bar,
                 plot_blast_fcs_source,
+                plot_mrd_blast_radar,
                 plot_lympho_verification,
                 plot_mst_interactive,
                 plot_som_grid_interactive,
@@ -497,6 +498,31 @@ class PopulationMappingService:
                 )
             except Exception as exc:
                 _logger.debug("[§10.4d] Source FCS chart échoué: %s", exc)
+
+        # ── §10.4e Radar MRD clinique (Porte 2) ───────────────────────────────
+        if (
+            result.blast_candidates_df is not None
+            and not result.blast_candidates_df.empty
+        ):
+            try:
+                # Récupérer les MRDClusterResult si disponibles
+                _mrd_per_node = getattr(result, "mrd_result", None)
+                _mrd_per_node_list = (
+                    getattr(_mrd_per_node, "per_node", None)
+                    if _mrd_per_node is not None
+                    else None
+                )
+                _fig_mrd_radar = plot_mrd_blast_radar(
+                    blast_df=result.blast_candidates_df,
+                    mrd_per_node=_mrd_per_node_list,
+                    output_dir=output_dir,
+                    timestamp=timestamp,
+                )
+                if _fig_mrd_radar is not None:
+                    result.figures_plotly["fig_mrd_blast_radar"] = _fig_mrd_radar
+                    _logger.info("[§10.4e] Radar MRD clinique généré.")
+            except Exception as exc:
+                _logger.debug("[§10.4e] Radar MRD clinique échoué: %s", exc)
 
         # ── §10.5 MST interactif ──────────────────────────────────────────────
         if best_mapping is not None and result.node_coords_df is not None:

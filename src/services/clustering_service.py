@@ -332,6 +332,7 @@ def run_clustering(
             balance_conditions=True,
             imbalance_ratio=sd_cfg.imbalance_ratio,
             seed=sd_cfg.seed,
+            allow_oversampling=getattr(sd_cfg, "allow_oversampling", False),
         )
 
         # Restaurer les données originales (sans la colonne temporaire _cell_idx)

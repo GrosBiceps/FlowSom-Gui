@@ -3398,3 +3398,342 @@ def plot_mrd_summary(
     except Exception as exc:
         _logger.error("Échec plot_mrd_summary: %s", exc)
         return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Classification Blast des Nœuds MRD — Visualisation Hybride
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def plot_blast_mrd_classification(
+    mrd_result: "Any",
+    output_html: Optional[Path | str] = None,
+    output_png: Optional[Path | str] = None,
+    *,
+    title: str = "Classification Phénotypique des Nœuds MRD (ELN 2022)",
+) -> Optional["Any"]:
+    """
+    Visualisation de la classification blast ELN 2022 sur tous les nœuds MRD positifs.
+
+    Produit un tableau interactif Plotly combiné à un bar chart coloré par
+    blast_category pour chaque nœud identifié pathologique (is_mrd_jf | is_mrd_flo |
+    is_mrd_eln). Permet de vérifier la cohérence entre la porte topologique
+    (mathématique) et la porte biologique (phénotypique).
+
+    Panneau supérieur — Bar chart :
+      Nœuds MRD (axe X) vs blast_score /10 (axe Y).
+      Coloré par blast_category : BLAST_HIGH (rouge), BLAST_MODERATE (orange),
+      BLAST_WEAK (jaune), NON_BLAST_UNK (gris).
+      Ligne de seuil BLAST_HIGH (6.0) et BLAST_MODERATE (3.0).
+
+    Panneau inférieur — Tableau récapitulatif :
+      node_id | méthode(s) MRD | n_cells_patho | pct_patho | blast_score | blast_category
+
+    Args:
+        mrd_result: MRDResult du module mrd_calculator (avec blast_score/blast_category
+                    dans per_node si blast_phenotype_filter a été utilisé).
+        output_html: Chemin HTML interactif (optionnel).
+        output_png: Chemin PNG statique (optionnel, nécessite kaleido).
+        title: Titre de la figure.
+
+    Returns:
+        go.Figure ou None si erreur.
+    """
+    try:
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+    except ImportError:
+        _logger.warning("plotly requis pour plot_blast_mrd_classification")
+        return None
+
+    try:
+        nodes = getattr(mrd_result, "per_node", [])
+        if not nodes:
+            _logger.warning("plot_blast_mrd_classification: aucun nœud dans MRDResult")
+            return None
+
+        # Filtre : nœuds MRD positifs dans au moins une méthode
+        mrd_nodes = [
+            n for n in nodes
+            if getattr(n, "is_mrd_jf", False)
+            or getattr(n, "is_mrd_flo", False)
+            or getattr(n, "is_mrd_eln", False)
+        ]
+        # Inclut aussi les nœuds rejetés par la porte biologique (blast_score présent
+        # mais is_mrd_* = False) pour montrer pourquoi ils ont été éliminés.
+        # On prend tous les nœuds avec un blast_score non nul ou pct_patho > 10.
+        candidate_nodes = [
+            n for n in nodes
+            if (getattr(n, "blast_score", None) is not None)
+            or getattr(n, "is_mrd_jf", False)
+            or getattr(n, "is_mrd_flo", False)
+            or getattr(n, "is_mrd_eln", False)
+        ]
+
+        if not candidate_nodes:
+            _logger.info("plot_blast_mrd_classification: aucun nœud candidat à afficher")
+            return None
+
+        # ── Palette catégories blast ──────────────────────────────────────────
+        _CAT_COLOR = {
+            "BLAST_HIGH":     "#f38ba8",   # rouge pastel
+            "BLAST_MODERATE": "#fab387",   # orange pastel
+            "BLAST_WEAK":     "#f9e2af",   # jaune pastel
+            "NON_BLAST_UNK":  "#585b70",   # gris
+            None:             "#45475a",   # non calculé
+        }
+        _CAT_LABEL = {
+            "BLAST_HIGH":     "BLAST_HIGH (≥6.0)",
+            "BLAST_MODERATE": "BLAST_MODERATE (≥3.0)",
+            "BLAST_WEAK":     "BLAST_WEAK (>0)",
+            "NON_BLAST_UNK":  "NON_BLAST_UNK",
+            None:             "Score non calculé",
+        }
+        _BG = "#1e1e2e"
+        _TEXT = "#e2e8f0"
+        _GRID = "#313244"
+
+        blast_filter_active = getattr(mrd_result, "blast_filter_active", False)
+
+        # ── Tri : BLAST_HIGH d'abord, puis score décroissant ─────────────────
+        _CAT_ORDER = {"BLAST_HIGH": 0, "BLAST_MODERATE": 1, "BLAST_WEAK": 2,
+                      "NON_BLAST_UNK": 3, None: 4}
+        candidate_nodes_sorted = sorted(
+            candidate_nodes,
+            key=lambda n: (
+                _CAT_ORDER.get(getattr(n, "blast_category", None), 4),
+                -(getattr(n, "blast_score", None) or 0.0),
+            ),
+        )
+
+        node_ids   = [str(n.cluster_id) for n in candidate_nodes_sorted]
+        scores     = [getattr(n, "blast_score", None) or 0.0 for n in candidate_nodes_sorted]
+        cats       = [getattr(n, "blast_category", None) for n in candidate_nodes_sorted]
+        bar_colors = [_CAT_COLOR.get(c, _CAT_COLOR[None]) for c in cats]
+
+        # Méthodes positives pour chaque nœud
+        def _methods(n) -> str:
+            parts = []
+            if getattr(n, "is_mrd_jf",  False): parts.append("JF")
+            if getattr(n, "is_mrd_flo", False): parts.append("Flo")
+            if getattr(n, "is_mrd_eln", False): parts.append("ELN")
+            return " · ".join(parts) if parts else "—"
+
+        methods_str = [_methods(n) for n in candidate_nodes_sorted]
+
+        # ── Hover text enrichi ────────────────────────────────────────────────
+        hover_texts = []
+        for n, cat, score, meth in zip(candidate_nodes_sorted, cats, scores, methods_str):
+            _pct_p = getattr(n, "pct_patho", 0.0)
+            _pct_s = getattr(n, "pct_sain", 0.0)
+            _n_p   = getattr(n, "n_cells_patho", 0)
+            _n_tot = getattr(n, "n_cells_total", 0)
+            _cat_lbl = _CAT_LABEL.get(cat, str(cat))
+            hover_texts.append(
+                f"<b>Nœud SOM #{n.cluster_id}</b><br>"
+                f"Blast score : <b>{score:.2f} / 10</b><br>"
+                f"Catégorie   : <b>{_cat_lbl}</b><br>"
+                f"Méthode MRD : <b>{meth}</b><br>"
+                f"Cellules    : {_n_p} patho / {_n_tot} total<br>"
+                f"% Patho dans nœud : {_pct_p:.1f}%<br>"
+                f"% Sain dans nœud  : {_pct_s:.1f}%"
+            )
+
+        # ── Layout subplots : bar chart (haut) + table (bas) ─────────────────
+        n_nodes = len(candidate_nodes_sorted)
+        fig = make_subplots(
+            rows=2, cols=1,
+            row_heights=[0.55, 0.45],
+            vertical_spacing=0.08,
+            specs=[[{"type": "bar"}], [{"type": "table"}]],
+        )
+
+        # ── Panneau 1 : bar chart blast score ─────────────────────────────────
+        # Une trace par catégorie pour la légende
+        seen_cats: set = set()
+        for cat in ["BLAST_HIGH", "BLAST_MODERATE", "BLAST_WEAK", "NON_BLAST_UNK", None]:
+            indices = [i for i, c in enumerate(cats) if c == cat]
+            if not indices:
+                continue
+            cat_label = _CAT_LABEL.get(cat, str(cat))
+            fig.add_trace(
+                go.Bar(
+                    x=[node_ids[i] for i in indices],
+                    y=[scores[i] for i in indices],
+                    name=cat_label,
+                    marker_color=_CAT_COLOR.get(cat, _CAT_COLOR[None]),
+                    marker_line_width=0,
+                    hovertext=[hover_texts[i] for i in indices],
+                    hoverinfo="text",
+                    legendgroup=str(cat),
+                    showlegend=(cat not in seen_cats),
+                ),
+                row=1, col=1,
+            )
+            seen_cats.add(cat)
+
+        # Lignes de seuil BLAST_HIGH et BLAST_MODERATE
+        for thresh, color, label in [
+            (6.0, "#f38ba8", "BLAST_HIGH (6.0)"),
+            (3.0, "#fab387", "BLAST_MODERATE (3.0)"),
+        ]:
+            fig.add_hline(
+                y=thresh,
+                line_dash="dash",
+                line_color=color,
+                line_width=1.5,
+                annotation_text=label,
+                annotation_position="top right",
+                annotation_font_color=color,
+                annotation_font_size=11,
+                row=1, col=1,
+            )
+
+        fig.update_yaxes(
+            title_text="Blast Score / 10",
+            range=[0, 10.5],
+            gridcolor=_GRID,
+            title_font_color=_TEXT,
+            tickfont_color=_TEXT,
+            row=1, col=1,
+        )
+        fig.update_xaxes(
+            title_text="Nœud SOM",
+            gridcolor=_GRID,
+            tickfont_color=_TEXT,
+            title_font_color=_TEXT,
+            row=1, col=1,
+        )
+
+        # ── Panneau 2 : tableau récapitulatif ─────────────────────────────────
+        tbl_node_ids   = [str(n.cluster_id) for n in candidate_nodes_sorted]
+        tbl_methods    = methods_str
+        tbl_n_patho    = [str(getattr(n, "n_cells_patho", 0)) for n in candidate_nodes_sorted]
+        tbl_pct_patho  = [f"{getattr(n, 'pct_patho', 0.0):.1f}%" for n in candidate_nodes_sorted]
+        tbl_score      = [
+            f"{getattr(n, 'blast_score', None):.2f}" if getattr(n, "blast_score", None) is not None
+            else "—"
+            for n in candidate_nodes_sorted
+        ]
+        tbl_category   = [
+            _CAT_LABEL.get(getattr(n, "blast_category", None), "—")
+            for n in candidate_nodes_sorted
+        ]
+        tbl_passes     = [
+            "✓ VALIDÉ" if (_methods(n) != "—") else "✗ REJETÉ (porte bio)"
+            for n in candidate_nodes_sorted
+        ]
+        tbl_pass_colors = [
+            "#a6e3a1" if "VALIDÉ" in p else "#f38ba8"
+            for p in tbl_passes
+        ]
+        tbl_cat_colors = [_CAT_COLOR.get(getattr(n, "blast_category", None), _CAT_COLOR[None])
+                          for n in candidate_nodes_sorted]
+
+        fig.add_trace(
+            go.Table(
+                header=dict(
+                    values=[
+                        "<b>Nœud SOM</b>",
+                        "<b>Méthode(s) MRD</b>",
+                        "<b>N cellules patho</b>",
+                        "<b>% Patho</b>",
+                        "<b>Blast Score /10</b>",
+                        "<b>Blast Catégorie</b>",
+                        "<b>Statut</b>",
+                    ],
+                    fill_color="#313244",
+                    font=dict(color=_TEXT, size=12),
+                    align="center",
+                    height=30,
+                ),
+                cells=dict(
+                    values=[
+                        tbl_node_ids,
+                        tbl_methods,
+                        tbl_n_patho,
+                        tbl_pct_patho,
+                        tbl_score,
+                        tbl_category,
+                        tbl_passes,
+                    ],
+                    fill_color=[
+                        [_BG] * n_nodes,
+                        [_BG] * n_nodes,
+                        [_BG] * n_nodes,
+                        [_BG] * n_nodes,
+                        tbl_cat_colors,
+                        tbl_cat_colors,
+                        tbl_pass_colors,
+                    ],
+                    font=dict(color=_TEXT, size=11),
+                    align=["center", "center", "right", "right", "center", "center", "center"],
+                    height=26,
+                ),
+            ),
+            row=2, col=1,
+        )
+
+        # ── Titre et mise en page ─────────────────────────────────────────────
+        _subtitle = (
+            "Filtre phénotypique hybride ACTIF — double porte Topologique × Biologique"
+            if blast_filter_active
+            else "Filtre phénotypique hybride INACTIF — scores calculés à titre informatif"
+        )
+        _n_mrd = len(mrd_nodes)
+        _n_cand = len(candidate_nodes_sorted)
+
+        fig.update_layout(
+            title=dict(
+                text=(
+                    f"<b>{title}</b><br>"
+                    f"<span style='font-size:13px; color:#a6adc8;'>{_subtitle}</span><br>"
+                    f"<span style='font-size:12px; color:#a6adc8;'>"
+                    f"{_n_mrd} nœud(s) MRD positifs · {_n_cand} candidats affichés</span>"
+                ),
+                x=0.5,
+                xanchor="center",
+                font=dict(color=_TEXT, size=16),
+            ),
+            paper_bgcolor=_BG,
+            plot_bgcolor=_BG,
+            font=dict(color=_TEXT, family="monospace"),
+            legend=dict(
+                bgcolor="#313244",
+                bordercolor="#45475a",
+                borderwidth=1,
+                font=dict(color=_TEXT, size=11),
+                title=dict(text="Catégorie blast", font=dict(color=_TEXT)),
+            ),
+            height=820,
+            margin=dict(t=120, b=40, l=60, r=40),
+            barmode="stack",
+        )
+
+        # ── Export HTML ───────────────────────────────────────────────────────
+        if output_html is not None:
+            out_html = Path(output_html)
+            out_html.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                import plotly.offline
+                plotly.offline.plot(fig, filename=str(out_html), auto_open=False)
+                _logger.info("Blast MRD classification (HTML): %s", out_html.name)
+            except Exception as _html_err:
+                _logger.warning("Export HTML blast MRD échoué: %s", _html_err)
+
+        # ── Export PNG ────────────────────────────────────────────────────────
+        if output_png is not None:
+            out_png = Path(output_png)
+            out_png.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                from flowsom_pipeline_pro.src.utils.kaleido_scope import write_image_fast
+                write_image_fast(fig, out_png, fmt="png", width=1800, height=900, scale=2)
+                _logger.info("Blast MRD classification (PNG): %s", out_png.name)
+            except Exception as _img_err:
+                _logger.warning("Export PNG blast MRD échoué (kaleido requis): %s", _img_err)
+
+        return fig
+
+    except Exception as exc:
+        _logger.error("Échec plot_blast_mrd_classification: %s", exc)
+        return None

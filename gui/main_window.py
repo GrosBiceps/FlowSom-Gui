@@ -1062,6 +1062,22 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.spin_jf_min_patho.setDecimals(1)
         grid.addWidget(self.spin_jf_min_patho, 9, 1)
 
+        # Filtre phénotypique hybride
+        hybrid_lbl = QLabel("── Filtre Phénotypique (Hybride) ──")
+        hybrid_lbl.setObjectName("subtitleLabel")
+        grid.addWidget(hybrid_lbl, 10, 0, 1, 2)
+
+        self.chk_blast_filter = QCheckBox("Porte biologique ELN 2022")
+        self.chk_blast_filter.setChecked(False)
+        self.chk_blast_filter.setToolTip(
+            "Active le filtre hybride à deux portes :\n"
+            "  1. Porte Topologique  : critère mathématique JF / Flo / ELN\n"
+            "  2. Porte Biologique   : blast_score ELN 2022 (BLAST_HIGH ou BLAST_MODERATE)\n\n"
+            "Un nœud ne passe qu'en satisfaisant les DEUX portes.\n"
+            "Réduit fortement les faux positifs liés à l'effet batch."
+        )
+        grid.addWidget(self.chk_blast_filter, 11, 0, 1, 2)
+
         return group
 
     def _build_stratified_ds_group(self) -> QGroupBox:
@@ -1080,6 +1096,15 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.spin_imbalance_ratio.setValue(2.0)
         self.spin_imbalance_ratio.setDecimals(1)
         grid.addWidget(self.spin_imbalance_ratio, 1, 1)
+
+        self.chk_allow_oversampling = QCheckBox("Oversampling NBM si quota non atteint")
+        self.chk_allow_oversampling.setChecked(False)
+        self.chk_allow_oversampling.setToolTip(
+            "Si activé, les fichiers NBM sont rééchantillonnés avec remplacement\n"
+            "pour atteindre le ratio cible quand les cellules disponibles sont\n"
+            "insuffisantes. Garantit le ratio exact mais introduit des doublons."
+        )
+        grid.addWidget(self.chk_allow_oversampling, 2, 0, 1, 2)
 
         return group
 
@@ -1703,6 +1728,9 @@ class FlowSomAnalyzerPro(QMainWindow):
             self.spin_imbalance_ratio.setValue(
                 getattr(c.stratified_downsampling, "imbalance_ratio", 2.0)
             )
+            self.chk_allow_oversampling.setChecked(
+                getattr(c.stratified_downsampling, "allow_oversampling", False)
+            )
 
     def _sync_ui_to_config(self) -> None:
         c = self._config
@@ -1762,6 +1790,9 @@ class FlowSomAnalyzerPro(QMainWindow):
             c.stratified_downsampling.imbalance_ratio = (
                 self.spin_imbalance_ratio.value()
             )
+            c.stratified_downsampling.allow_oversampling = (
+                self.chk_allow_oversampling.isChecked()
+            )
 
         self._sync_ui_to_mrd_config()
 
@@ -1786,6 +1817,8 @@ class FlowSomAnalyzerPro(QMainWindow):
         jf = params.get("method_jf", {})
         self.spin_jf_max_normal.setValue(float(jf.get("max_normal_marrow_pct", 0.1)))
         self.spin_jf_min_patho.setValue(float(jf.get("min_patho_cells_pct", 10.0)))
+        bpf = params.get("blast_phenotype_filter", {})
+        self.chk_blast_filter.setChecked(bool(bpf.get("enabled", False)))
 
     def _sync_ui_to_mrd_config(self) -> None:
         if not hasattr(self, "_mrd_raw"):
@@ -1805,6 +1838,9 @@ class FlowSomAnalyzerPro(QMainWindow):
             self.spin_jf_max_normal.value()
         )
         params["method_jf"]["min_patho_cells_pct"] = self.spin_jf_min_patho.value()
+        params.setdefault("blast_phenotype_filter", {})["enabled"] = (
+            self.chk_blast_filter.isChecked()
+        )
         try:
             import yaml
 

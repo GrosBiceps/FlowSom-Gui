@@ -517,6 +517,7 @@ class FlowSOMClusterer:
         ).astype(float)
 
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Optimisation multi-critères du nombre de clusters (3 phases)
 # ─────────────────────────────────────────────────────────────────────────────

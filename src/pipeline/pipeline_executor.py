@@ -296,6 +296,7 @@ class FlowSOMPipeline:
             "normalize": vars(cfg.normalize),
             "markers": vars(cfg.markers),
             "seed": int(cfg.flowsom.seed),
+            "condition_labels_v2": "Sain/Pathologique",
         }
         return cache.make_key("post_gating", payload)
 
@@ -1292,12 +1293,111 @@ class FlowSOMPipeline:
                                 "n_patho_cd45pos non disponible pour le toggle UI."
                             )
 
+                    # ── Données pour la porte biologique hybride ──────────────
+                    # Trois modes par ordre de précision décroissante :
+                    #   Mode 1 : X_norm (z-scores pré-calculés par population_mapping)
+                    #   Mode 2 : node_medians + nbm_center + nbm_scale
+                    #            → z-scoring à la volée contre les stats NBM
+                    #            → calculé ici depuis df_cells (cellules "Sain")
+                    #   Mode 3 : node_medians seul, z-scoring intra-dataset (dégradé)
+                    _node_medians_arr: Optional[np.ndarray] = None
+                    _x_norm_arr: Optional[np.ndarray] = None
+                    _marker_names_list: Optional[list] = None
+                    _nbm_center: Optional[np.ndarray] = None
+                    _nbm_scale: Optional[np.ndarray] = None
+
+                    if mrd_cfg.blast_phenotype_filter.enabled:
+                        try:
+                            from flowsom_pipeline_pro.src.analysis.blast_detection import (
+                                compute_reference_stats,
+                            )
+
+                            # Priorité 1 : X_norm depuis population_mapping
+                            _pm_result = population_mapping_result
+                            if (
+                                _pm_result is not None
+                                and hasattr(_pm_result, "node_medians_norm")
+                                and _pm_result.node_medians_norm is not None
+                            ):
+                                _x_norm_arr = np.asarray(
+                                    _pm_result.node_medians_norm, dtype=float
+                                )
+                                _marker_names_list = list(
+                                    getattr(_pm_result, "marker_names", node_mfi_matrix.columns)
+                                )
+                                _logger.info(
+                                    "Porte biologique Mode 1 : X_norm depuis "
+                                    "population_mapping (%d noeuds, %d marqueurs)",
+                                    _x_norm_arr.shape[0], _x_norm_arr.shape[1],
+                                )
+                            else:
+                                # Mode 2 : z-scoring contre les cellules NBM (Sain)
+                                # présentes dans df_cells (déjà transformées arcsinh)
+                                _marker_names_list = list(node_mfi_matrix.columns)
+                                _node_medians_arr  = node_mfi_matrix.values
+
+                                _sain_mask = (
+                                    df_cells["condition"].values == mrd_cfg.condition_sain
+                                    if "condition" in df_cells.columns
+                                    else None
+                                )
+                                if _sain_mask is not None and _sain_mask.sum() >= 100:
+                                    # Extraire les valeurs des marqueurs pour les
+                                    # cellules saines (NBM) déjà transformées
+                                    _cols_present = [
+                                        c for c in _marker_names_list
+                                        if c in df_cells.columns
+                                    ]
+                                    if _cols_present:
+                                        _X_sain = df_cells.loc[
+                                            _sain_mask, _cols_present
+                                        ].values.astype(float)
+                                        _c, _s = compute_reference_stats(
+                                            _X_sain, robust=True
+                                        )
+                                        # Aligner sur marker_names_list complet
+                                        _nbm_center = np.zeros(len(_marker_names_list))
+                                        _nbm_scale  = np.ones(len(_marker_names_list))
+                                        for _i, _m in enumerate(_marker_names_list):
+                                            if _m in _cols_present:
+                                                _j = _cols_present.index(_m)
+                                                _nbm_center[_i] = _c[_j]
+                                                _nbm_scale[_i]  = _s[_j]
+                                        _logger.info(
+                                            "Porte biologique Mode 2 : z-scoring vs "
+                                            "NBM interne (%d cellules Sain, %d marqueurs)",
+                                            int(_sain_mask.sum()), len(_cols_present),
+                                        )
+                                    else:
+                                        _logger.warning(
+                                            "Porte biologique Mode 3 (dégradé) : "
+                                            "aucun marqueur commun entre node_mfi_matrix "
+                                            "et df_cells — z-scoring intra-dataset."
+                                        )
+                                else:
+                                    _logger.warning(
+                                        "Porte biologique Mode 3 (dégradé) : "
+                                        "pas assez de cellules Sain (%d) pour "
+                                        "calculer les stats NBM — z-scoring intra-dataset.",
+                                        int(_sain_mask.sum()) if _sain_mask is not None else 0,
+                                    )
+                        except Exception as _e:
+                            _logger.warning(
+                                "Impossible de preparer les donnees pour le "
+                                "filtre phenotypique hybride : %s", _e
+                            )
+
                     mrd_result = compute_mrd(
                         df_cells,
                         clustering,
                         mrd_cfg,
                         cd45_autogating_mode=_cd45_autogating_mode,
                         cd45_mask=_cd45_mask_mrd,
+                        X_norm=_x_norm_arr,
+                        node_medians=_node_medians_arr,
+                        marker_names=_marker_names_list,
+                        nbm_center=_nbm_center,
+                        nbm_scale=_nbm_scale,
                     )
 
                     # Override n_patho_cd45pos et n_patho_pre_cd45 avec les valeurs
@@ -1447,6 +1547,25 @@ class FlowSOMPipeline:
                             method_label="Flo",
                         )
 
+                    # Classification phénotypique blast des nœuds MRD
+                    if mrd_result is not None and viz_save:
+                        _export_png_blast = getattr(
+                            getattr(config, "visualization", None), "export_png_mrd", False
+                        )
+                        self._enqueue_plot(
+                            plot_worker,
+                            "Classification Blast MRD",
+                            "fig_blast_mrd_classification",
+                            "plotly",
+                            "flowsom_pipeline_pro.src.visualization.flowsom_plots",
+                            "plot_blast_mrd_classification",
+                            mrd_result,
+                            output_dir / "plots" / f"blast_mrd_classification_{timestamp}.html",
+                            output_dir / "plots" / f"blast_mrd_classification_{timestamp}.png"
+                            if _export_png_blast
+                            else None,
+                        )
+
                     # Export JSON des résultats MRD
                     if mrd_result is not None:
                         try:
@@ -1594,6 +1713,7 @@ class FlowSOMPipeline:
                         "fig_patho_pct": "% Cellules Pathologiques par Cluster",
                         "fig_cells_pct": "% Cellules par Cluster (Distribution Globale)",
                         "fig_mrd_summary": "MRD Résiduelle — Nœuds SOM (JF / Flo + contrôles ELN)",
+                        "fig_blast_mrd_classification": "Classification Phénotypique des Nœuds MRD (ELN 2022)",
                     }
 
                     _patho_info = None

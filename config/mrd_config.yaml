@@ -1,13 +1,21 @@
 mrd_parameters:
+  blast_phenotype_filter:
+    allowed_categories:            # BLAST_MODERATE / BLAST_WEAK / BLAST_HIGH
+    - BLAST_HIGH
+    - BLAST_MODERATE
+    apply_to_eln: true
+    apply_to_flo: true
+    apply_to_jf: true
+    enabled: true
   condition_patho: Pathologique
   condition_sain: Sain
   eln_standards:
     clinical_positivity_pct: 0.1
     min_cluster_events: 50
   enabled: true
-  method: jf
+  method: all
   method_flo:
-    normal_marrow_multiplier: 2.0
+    normal_marrow_multiplier: 1.0
   method_jf:
     max_normal_marrow_pct: 0.1
     min_patho_cells_pct: 10.0

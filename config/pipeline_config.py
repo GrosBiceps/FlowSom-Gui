@@ -181,12 +181,17 @@ class StratifiedDownsamplingConfig:
             source de cellules saines. Si vide, tous les fichiers sains sont
             utilisés (réparti équitablement).
         seed: Graine aléatoire pour la reproductibilité.
+        allow_oversampling: Si True, le pool NBM est rééchantillonné avec
+            remplacement pour atteindre la cible quand les cellules disponibles
+            sont insuffisantes. Si False (défaut), le tirage est limité au
+            nombre de cellules disponibles et un WARNING est émis.
     """
 
     balance_conditions: bool = False
     imbalance_ratio: float = 2.0
     nbm_ids: List[str] = field(default_factory=list)
     seed: int = 42
+    allow_oversampling: bool = False
 
 
 @dataclass
@@ -583,6 +588,10 @@ class PipelineConfig:
                 cfg.stratified_downsampling.nbm_ids = list(sd["nbm_ids"] or [])
             if "seed" in sd:
                 cfg.stratified_downsampling.seed = int(sd["seed"])
+            if "allow_oversampling" in sd:
+                cfg.stratified_downsampling.allow_oversampling = bool(
+                    sd["allow_oversampling"]
+                )
 
         # Validation
         cfg._validate()
