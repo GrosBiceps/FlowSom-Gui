@@ -652,6 +652,16 @@ class FlowSOMPipeline:
             )  # fig_overview, fig_gate_*
             _plotly_figures: Dict[str, object] = {}
 
+            # ── Diagnostic Harmony (si disponible) ────────────────────────────
+            # _HARMONY_DIAG est rempli par _build_harmony_diag() dans
+            # clustering_service.run_clustering() — non bloquant, silencieux.
+            import flowsom_pipeline_pro.src.services.clustering_service as _cs_mod
+            _hd = _cs_mod._HARMONY_DIAG
+            if _hd.get("plotly") is not None:
+                _plotly_figures["fig_harmony_diag"] = _hd["plotly"]
+            if _hd.get("mpl") is not None:
+                _mpl_figures["fig_harmony_diag"] = _hd["mpl"]
+
             plot_cfg = dict(
                 getattr(config, "_extra", {}).get("plotting_worker", {}) or {}
             )
@@ -1809,6 +1819,7 @@ class FlowSOMPipeline:
                         "fig_comp": "Distribution Cellules par Métacluster",
                         "fig_umap": "UMAP — Coloré par Métacluster FlowSOM",
                         "fig_mst_static": "MST Statique — Topologie FlowSOM",
+                        "fig_harmony_diag": "Correction Harmony — PCA Avant / Après",
                         "fig_sankey": "Diagramme Sankey — Flux de Gating",
                         "fig_mst": "MST Interactif — Populations FlowSOM",
                         "fig_grid_mc": "Grille SOM ScatterGL",

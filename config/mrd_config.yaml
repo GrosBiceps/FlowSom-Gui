@@ -6,31 +6,32 @@ mrd_parameters:
     apply_to_eln: true
     apply_to_flo: true
     apply_to_jf: true
-    d2_normalization: 45.0
-    d2_threshold_high: 40.0
-    d2_threshold_moderate: 25.0
-    enabled: false
-    high_threshold: 4.0
-    linear_weight: 0.7
-    mahal_boost_factor: 1.5
-    mahal_weight: 0.3
+    d2_normalization: 109.28
+    d2_threshold_moderate: 19.03
+    d2_threshold_high: 25.8
+    enabled: true
+    high_threshold: 2.17
+    linear_weight: 0.17
+    mahal_boost_factor: 1.03
+    mahal_weight: 0.56
     marker_weights:
-      CD117: 2.5
-      CD13: 1.0
-      CD33: 1.5
-      CD34: 3.0
-      CD45: -1.0
-      HLA-DR: 2.0
-      SSC: -3.0
-    moderate_threshold: 0.5
+      CD117: 0.96
+      CD13: 0.78
+      CD33: 0.12
+      CD34: 1.34
+      CD45: -0.07
+      HLA-DR: 0.35
+      SSC: -3.01
+    moderate_threshold: 1.32
     nbm_cov_max_cells: 120000
     nbm_mincovdet_max_cells: 30000
     nbm_stats_max_cells: 250000
-    purity_modulation_power: 0.5
-    purity_relax_factor: 0.9
-    purity_strict_above: 0.85
+    purity_modulation_power: 0.11
+    purity_relax_factor: 0.08
+    purity_strict_above: 0.988
     purity_threshold_override: true
-    scoring_method: hybrid
+    scoring_method: linear
+    weak_threshold: 1.78
   condition_patho: Pathologique
   condition_sain: Sain
   eln_standards:
@@ -39,7 +40,7 @@ mrd_parameters:
   enabled: true
   method: all
   method_flo:
-    normal_marrow_multiplier: 3.0
+    normal_marrow_multiplier: 5.4
   method_jf:
-    max_normal_marrow_pct: 10.0
-    min_patho_cells_pct: 10.0
+    max_normal_marrow_pct: 0.10
+    min_patho_cells_pct: 9.2

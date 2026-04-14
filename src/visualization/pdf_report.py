@@ -118,6 +118,8 @@ _FIG_ORDER = [
     # QC Gating — matplotlib
     "fig_overview", "fig_gate_debris", "fig_gate_singlets",
     "fig_gate_cd45", "fig_gate_cd34", "fig_kde_debris", "fig_kde_cd45", "fig_cd45_count",
+    # Correction batch — Harmony diagnostic (Plotly ou Matplotlib)
+    "fig_harmony_diag",
     # Analyse — matplotlib
     "fig_heatmap", "fig_comp", "fig_umap", "fig_mst_static",
     "fig_star_chart", "fig_som_grid_static", "fig_barplots", "fig_heatmap_clinical",

@@ -28,6 +28,18 @@ try:
 except ImportError:
     _ANNDATA_AVAILABLE = False
 
+try:
+    import harmonypy
+
+    _HARMONY_AVAILABLE = True
+except ImportError:
+    _HARMONY_AVAILABLE = False
+    _logger_import = __import__("logging").getLogger("services.clustering")
+    _logger_import.warning(
+        "harmonypy non installé — intégration Harmony désactivée. "
+        "Installez-le avec : pip install harmonypy"
+    )
+
 from flowsom_pipeline_pro.config.pipeline_config import PipelineConfig
 from flowsom_pipeline_pro.config.constants import SCATTER_PATTERNS
 from flowsom_pipeline_pro.src.models.sample import FlowSample
@@ -45,6 +57,163 @@ from flowsom_pipeline_pro.src.utils.logger import get_logger
 from flowsom_pipeline_pro.src.utils.class_balancer import equilibrer_pool_flowsom
 
 _logger = get_logger("services.clustering")
+
+# ── Cache diagnostique Harmony ────────────────────────────────────────────────
+# Stocke les figures générées lors du dernier run_clustering pour injection
+# dans les rapports HTML/PDF sans modifier la signature de run_clustering.
+_HARMONY_DIAG: dict = {}   # {"plotly": go.Figure | None, "mpl": mpl.Figure | None}
+
+
+def _build_harmony_diag(
+    X_before: "np.ndarray",
+    X_after: "np.ndarray",
+    conditions: "np.ndarray",
+    n_sample: int = 5_000,
+) -> None:
+    """
+    Génère une visualisation PCA avant/après correction Harmony.
+
+    Utilise un sous-échantillon aléatoire (max *n_sample* cellules) et une PCA
+    à 2 composantes pour rester ultra-rapide (~0.2 s sur 50 k cellules).
+
+    Résultats stockés dans _HARMONY_DIAG["plotly"] et _HARMONY_DIAG["mpl"].
+    En cas d'erreur la fonction est silencieuse (non bloquante).
+    """
+    global _HARMONY_DIAG
+    _HARMONY_DIAG = {}
+    try:
+        import numpy as _np
+        from sklearn.decomposition import PCA as _PCA
+
+        n_total = X_before.shape[0]
+        rng = _np.random.default_rng(42)
+        idx = rng.choice(n_total, size=min(n_sample, n_total), replace=False)
+
+        Xb = X_before[idx].astype("float32")
+        Xa = X_after[idx].astype("float32")
+        conds = conditions[idx]
+        unique_conds = sorted(set(conds.tolist()))
+
+        # ── PCA commune (fit sur avant, transform avant + après) ──────────────
+        pca = _PCA(n_components=2, random_state=42)
+        pc_before = pca.fit_transform(Xb)
+        pc_after  = pca.transform(Xa)
+
+        var_exp = pca.explained_variance_ratio_
+        xlabel = f"PC1 ({var_exp[0]*100:.1f}%)"
+        ylabel = f"PC2 ({var_exp[1]*100:.1f}%)"
+
+        # ── Couleurs par condition ────────────────────────────────────────────
+        _PALETTE = [
+            "#667eea", "#f093fb", "#4facfe", "#43e97b", "#fa709a",
+            "#fee140", "#a18cd1", "#ffecd2", "#89f7fe", "#ff9a9e",
+        ]
+        color_map = {c: _PALETTE[i % len(_PALETTE)] for i, c in enumerate(unique_conds)}
+        colors_arr = _np.array([color_map[c] for c in conds])
+
+        # ── Figure Plotly ─────────────────────────────────────────────────────
+        try:
+            import plotly.graph_objects as _go
+            from plotly.subplots import make_subplots as _msp
+
+            fig_p = _msp(
+                rows=1, cols=2,
+                subplot_titles=("Avant correction Harmony", "Après correction Harmony"),
+                horizontal_spacing=0.08,
+            )
+            for cond in unique_conds:
+                mask = conds == cond
+                col_hex = color_map[cond]
+                shared = dict(
+                    mode="markers",
+                    name=str(cond),
+                    marker=dict(size=3, color=col_hex, opacity=0.55),
+                    legendgroup=str(cond),
+                )
+                fig_p.add_trace(
+                    _go.Scattergl(
+                        x=pc_before[mask, 0].tolist(),
+                        y=pc_before[mask, 1].tolist(),
+                        showlegend=True,
+                        **shared,
+                    ),
+                    row=1, col=1,
+                )
+                fig_p.add_trace(
+                    _go.Scattergl(
+                        x=pc_after[mask, 0].tolist(),
+                        y=pc_after[mask, 1].tolist(),
+                        showlegend=False,
+                        **shared,
+                    ),
+                    row=1, col=2,
+                )
+
+            fig_p.update_xaxes(title_text=xlabel)
+            fig_p.update_yaxes(title_text=ylabel)
+            fig_p.update_layout(
+                title_text=(
+                    f"Correction Harmony — PCA ({min(n_sample, n_total):,} cellules, "
+                    f"échantillon aléatoire)"
+                ),
+                height=480,
+                template="plotly_white",
+                legend_title_text="Condition",
+            )
+            _HARMONY_DIAG["plotly"] = fig_p
+        except Exception as _pe:
+            _logger.debug("Harmony diag Plotly: %s", _pe)
+            _HARMONY_DIAG["plotly"] = None
+
+        # ── Figure Matplotlib (fallback PDF) ─────────────────────────────────
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as _plt
+
+            fig_m, axes = _plt.subplots(1, 2, figsize=(12, 4.5),
+                                         facecolor="#1e1e2e")
+            for ax, (pc_data, title) in zip(
+                axes,
+                [(pc_before, "Avant correction Harmony"),
+                 (pc_after,  "Après correction Harmony")],
+            ):
+                ax.set_facecolor("#1e1e2e")
+                for cond in unique_conds:
+                    mask = conds == cond
+                    ax.scatter(
+                        pc_data[mask, 0], pc_data[mask, 1],
+                        s=1.5, alpha=0.5,
+                        color=color_map[cond],
+                        label=str(cond),
+                        rasterized=True,
+                    )
+                ax.set_title(title, color="#e2e8f0", fontsize=10)
+                ax.set_xlabel(xlabel, color="#e2e8f0", fontsize=8)
+                ax.set_ylabel(ylabel, color="#e2e8f0", fontsize=8)
+                ax.tick_params(colors="#e2e8f0")
+                for sp in ax.spines.values():
+                    sp.set_color("#45475a")
+
+            handles, labels = axes[0].get_legend_handles_labels()
+            fig_m.legend(
+                handles, labels, title="Condition",
+                loc="lower center", ncol=min(len(unique_conds), 5),
+                fontsize=7, framealpha=0.2,
+                labelcolor="#e2e8f0",
+            )
+            fig_m.suptitle(
+                f"Correction Harmony — PCA ({min(n_sample, n_total):,} cellules)",
+                color="#e2e8f0", fontsize=11,
+            )
+            fig_m.tight_layout(rect=[0, 0.08, 1, 1])
+            _HARMONY_DIAG["mpl"] = fig_m
+        except Exception as _me:
+            _logger.debug("Harmony diag Matplotlib: %s", _me)
+            _HARMONY_DIAG["mpl"] = None
+
+    except Exception as _exc:
+        _logger.debug("_build_harmony_diag échoué (non bloquant): %s", _exc)
 
 
 def select_markers_for_clustering(
@@ -433,6 +602,116 @@ def run_clustering(
         rlen=getattr(flowsom_cfg, "rlen", "auto"),
         use_gpu=getattr(config.gpu, "enabled", False),
     )
+
+    # ── Intégration Harmony (correction d'effet batch) ────────────────────────
+    # Aligne la distribution du patient sur celle de la NBM AVANT le SOM pour
+    # éviter les clusters isolés générés par les variations de laser/réactifs.
+    di_cfg = getattr(config, "data_integration", None)
+    if (
+        di_cfg is not None
+        and getattr(di_cfg, "enabled", False)
+        and getattr(di_cfg, "method", "harmony") == "harmony"
+    ):
+        if not _HARMONY_AVAILABLE:
+            _logger.warning(
+                "data_integration.enabled=True mais harmonypy est absent. "
+                "Le pipeline continue avec les données brutes (pas d'alignement Harmony)."
+            )
+        elif "condition" not in obs.columns:
+            _logger.warning(
+                "Colonne 'condition' absente dans obs — Harmony ne peut pas identifier "
+                "les batches. Le pipeline continue avec les données brutes."
+            )
+        else:
+            import time as _time
+
+            hp = getattr(di_cfg, "harmony_params", None)
+            harmony_sigma        = float(getattr(hp, "sigma",           0.05)) if hp else 0.05
+            harmony_nclust       = getattr(hp, "nclust",          30)          if hp else 30
+            harmony_block_size   = float(getattr(hp, "block_size",      0.20)) if hp else 0.20
+            harmony_max_iter     = int(getattr(hp, "max_iter",          10))   if hp else 10
+            harmony_max_iter_km  = int(getattr(hp, "max_iter_kmeans",   10))   if hp else 10
+            harmony_verbose      = bool(getattr(hp, "verbose",          False)) if hp else False
+            # nclust None = auto (N/30) — explicitement None si la config le dit
+            if harmony_nclust is not None:
+                harmony_nclust = int(harmony_nclust)
+
+            _logger.info(
+                "Harmony activé — %d cellules × %d marqueurs "
+                "(nclust=%s, sigma=%.3f, block_size=%.2f, max_iter=%d)...",
+                X.shape[0], X.shape[1],
+                harmony_nclust, harmony_sigma, harmony_block_size, harmony_max_iter,
+            )
+            _t0 = _time.perf_counter()
+
+            # Sélection device avec fallback CPU si OOM GPU
+            _device = None  # auto-détection (harmonypy choisit cuda si dispo)
+            _meta_df = pd.DataFrame({"condition": obs["condition"].values})
+
+            def _run_harmony_with_fallback(device_str):
+                return harmonypy.run_harmony(
+                    X,
+                    _meta_df,
+                    "condition",
+                    sigma=harmony_sigma,
+                    nclust=harmony_nclust,
+                    block_size=harmony_block_size,
+                    max_iter_harmony=harmony_max_iter,
+                    max_iter_kmeans=harmony_max_iter_km,
+                    verbose=harmony_verbose,
+                    device=device_str,
+                )
+
+            try:
+                ho = _run_harmony_with_fallback(_device)
+            except RuntimeError as _gpu_err:
+                _msg = str(_gpu_err).lower()
+                if "cuda" in _msg or "out of memory" in _msg or "device" in _msg:
+                    _logger.warning(
+                        "Harmony GPU erreur (%s) — reprise sur CPU.", _gpu_err
+                    )
+                    try:
+                        ho = _run_harmony_with_fallback("cpu")
+                    except Exception as _cpu_err:
+                        _logger.warning(
+                            "Harmony CPU également échoué (%s) — données brutes conservées.",
+                            _cpu_err,
+                        )
+                        ho = None
+                else:
+                    _logger.warning(
+                        "Harmony a échoué (%s) — données brutes conservées.", _gpu_err
+                    )
+                    ho = None
+            except Exception as _exc:
+                _logger.warning(
+                    "Harmony a échoué (%s) — données brutes conservées.", _exc
+                )
+                ho = None
+
+            if ho is not None:
+                # Z_corr retourne déjà [n_cells, n_markers] (propriété transpose en interne)
+                X_corrected = ho.Z_corr
+                if X_corrected.shape == X.shape:
+                    # ── Diagnostic avant/après (rapide, sous-échantillon) ─────
+                    _build_harmony_diag(
+                        X_before=X.copy(),
+                        X_after=X_corrected,
+                        conditions=obs["condition"].values,
+                    )
+                    X = X_corrected
+                    _logger.info(
+                        "Harmony terminé en %.1fs — données corrigées injectées dans FlowSOM.",
+                        _time.perf_counter() - _t0,
+                    )
+                else:
+                    _logger.warning(
+                        "Harmony a retourné une matrice de forme inattendue %s "
+                        "(attendu %s) — données brutes conservées.",
+                        X_corrected.shape,
+                        X.shape,
+                    )
+    # ── Fin intégration Harmony ───────────────────────────────────────────────
 
     _logger.info(
         "FlowSOM: grille %d×%d, %d métaclusters...",

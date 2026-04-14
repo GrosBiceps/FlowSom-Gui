@@ -2,12 +2,12 @@
 # Toutes les valeurs peuvent être surchargées par un fichier YAML utilisateur.
 # Toutes les constantes de config/constants.py sont exposées ici pour surcharge facile.
 
-pipeline_version: "2.0"
+pipeline_version: "4.0"
 
 paths:
-  healthy_folder: "F:/BLAST110/BLAST110/FCS/NBM/T1"
-  patho_folder: "F:/BLAST110/BLAST110/FCS/Test 2"
-  output_dir: "F:/BLAST110/Résults"
+  healthy_folder: "F:/Cohorte/NBM"  # Dossier contenant les fichiers FCS de moelle normale (NBM)
+  patho_folder: "F:/Cohorte/Patho trié"
+  output_dir: "F:/Cohorte/Résultats"
 
 analysis:
   compare_mode: true         # true = comparer Sain vs Pathologique (doit être true pour les analyses différentielles)
@@ -89,8 +89,8 @@ pregate_advanced:
   gmm_export_plot: true         # true = exporter un graphique des densités GMM (populations par cluster)
 
 flowsom:
-  xdim: 14             # Dimension X de la grille SOM (ex: 10, 15, 20, 25)
-  ydim: 14            # Dimension Y de la grille SOM (ex: 10, 15, 20, 25)
+  xdim: 10             # Dimension X de la grille SOM (ex: 10, 15, 20, 25)
+  ydim: 10            # Dimension Y de la grille SOM (ex: 10, 15, 20, 25)
   rlen: "auto"       # Nombre d'itérations d'apprentissage (ex: 10, 20, 50 ou "auto" pour adaptatif)
   n_metaclusters: 8   # Nombre de métaclusters pour la classification finale (ex: 5, 8, 10 ou "auto" pour sélection automatique)
   learning_rate: 0.05  # Taux d'apprentissage pour le SOM (ex: 0.01, 0.05, 0.1)

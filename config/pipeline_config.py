@@ -165,6 +165,25 @@ class DownsamplingConfig:
 
 
 @dataclass
+class HarmonyParamsConfig:
+    sigma: float = 0.05
+    nclust: Optional[int] = 30       # None = auto (N/30, très lent sur grands datasets)
+    block_size: float = 0.20         # Fraction de cellules par bloc (défaut harmonypy: 0.05 = 20 blocs)
+    max_iter: int = 10
+    max_iter_kmeans: int = 10        # Itérations K-means internes (défaut harmonypy: 20)
+    verbose: bool = False
+
+
+@dataclass
+class DataIntegrationConfig:
+    """Configuration de l'intégration de données (correction d'effet batch via Harmony)."""
+
+    enabled: bool = True
+    method: str = "harmony"  # "harmony" — extensible à "scanorama", "combat", etc.
+    harmony_params: HarmonyParamsConfig = field(default_factory=HarmonyParamsConfig)
+
+
+@dataclass
 class StratifiedDownsamplingConfig:
     """
     Déséquilibre Maîtrisé — rééquilibrage du pool d'entraînement FlowSOM.
@@ -333,6 +352,9 @@ class PipelineConfig:
     stratified_downsampling: StratifiedDownsamplingConfig = field(
         default_factory=StratifiedDownsamplingConfig
     )
+    data_integration: DataIntegrationConfig = field(
+        default_factory=DataIntegrationConfig
+    )
 
     # ------------------------------------------------------------------
     # Constructeurs alternatifs
@@ -394,6 +416,7 @@ class PipelineConfig:
             "batch",
             "export_mode",
             "stratified_downsampling",
+            "data_integration",
             "pipeline_version",
         }
         cfg._extra = {k: v for k, v in raw.items() if k not in _structured_keys}
@@ -592,6 +615,28 @@ class PipelineConfig:
                 cfg.stratified_downsampling.allow_oversampling = bool(
                     sd["allow_oversampling"]
                 )
+
+        di = raw.get("data_integration", {})
+        if di:
+            if "enabled" in di:
+                cfg.data_integration.enabled = bool(di["enabled"])
+            if "method" in di:
+                cfg.data_integration.method = str(di["method"])
+            hp = di.get("harmony_params", {})
+            if hp:
+                if "sigma" in hp:
+                    cfg.data_integration.harmony_params.sigma = float(hp["sigma"])
+                if "nclust" in hp:
+                    v = hp["nclust"]
+                    cfg.data_integration.harmony_params.nclust = int(v) if v is not None else None
+                if "block_size" in hp:
+                    cfg.data_integration.harmony_params.block_size = float(hp["block_size"])
+                if "max_iter" in hp:
+                    cfg.data_integration.harmony_params.max_iter = int(hp["max_iter"])
+                if "max_iter_kmeans" in hp:
+                    cfg.data_integration.harmony_params.max_iter_kmeans = int(hp["max_iter_kmeans"])
+                if "verbose" in hp:
+                    cfg.data_integration.harmony_params.verbose = bool(hp["verbose"])
 
         # Validation
         cfg._validate()

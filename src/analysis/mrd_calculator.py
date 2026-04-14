@@ -247,16 +247,23 @@ class BlastPhenotypeFilter:
     apply_to_jf: bool = True
     apply_to_flo: bool = True
     apply_to_eln: bool = True
-    # Pivot Biologique : seuils linéaires très bas (la linéarité domine à 70%)
-    high_threshold: float = 4.0
-    moderate_threshold: float = 0.5
-    weak_threshold: float = 0.0
-    # ARCH-2 FIX : marker_weights = None par défaut → les poids hardcodés dans
-    # blast_detection.build_blast_weights() font autorité (source unique de vérité).
-    # L'ancienne valeur SSC=-3.0 divergeait silencieusement de build_blast_weights
-    # (SSC=-1.0), produisant des scores différents selon la présence du YAML.
-    # Pour surcharger : renseigner ce dict dans mrd_config.yaml › marker_weights.
-    marker_weights: Optional[Dict[str, float]] = None
+    # Seuils de score (configuration optimisée LAIP — Optuna-tuned)
+    high_threshold: float = 2.60
+    moderate_threshold: float = 2.20
+    weak_threshold: float = 2.25
+    # LAIP strategy : marker_weights surcharge les poids hardcodés dans build_blast_weights.
+    # HLA-DR est le MARQUEUR STAR (4.88), CD33 quasi-nul (0.10), CD45 neutre (-0.05).
+    marker_weights: Optional[Dict[str, float]] = field(
+        default_factory=lambda: {
+            "CD34": 1.31,
+            "CD117": 0.87,
+            "HLA-DR": 4.88,  # MARQUEUR STAR : détection basée sur HLA-DR
+            "CD33": 0.10,
+            "CD13": 2.14,
+            "CD45": -0.05,   # Quasiment neutre
+            "SSC": -2.87,    # Pénalité modérée pour les granuleux
+        }
+    )
 
     # ── Choix du moteur de scoring ────────────────────────────────────────────
     # "linear"       → score ELN 2022 / Ogata pur (historique, comportement inchangé)
@@ -264,28 +271,26 @@ class BlastPhenotypeFilter:
     # "hybrid"       → combinaison pondérée Mahalanobis + linéaire (recommandé)
     # "none"         → bypass total de la Porte Biologique (Porte 1 seule fait foi)
     scoring_method: str = "hybrid"  # "linear" | "mahalanobis" | "hybrid" | "none"
-    # Pivot Biologique : score linéaire dominant (70%), Mahalanobis comme détecteur
-    # d'anomalie extrême uniquement (30%) — supprime le biais anti-LAM mature
-    mahal_weight: float = 0.30  # poids Mahalanobis dans le score hybride
-    linear_weight: float = 0.70  # poids linéaire dans le score hybride
-    d2_normalization: float = 45.0  # D² → 10/10 (élargi pour tolérer les LAM matures)
-    d2_threshold_high: float = 40.0  # seuil D² BLAST_HIGH (mode mahalanobis pur)
-    d2_threshold_moderate: float = 25.0  # seuil D² BLAST_MODERATE
-    purity_modulation_power: float = 0.5  # exposant modulation pureté (0=off, 0.5=sqrt)
+    # LAIP strategy : Mix Géométrie / Biologie — la géométrie domine légèrement (56%)
+    mahal_weight: float = 0.56   # Géométrie (Mahalanobis) — détecteur d'anomalie
+    linear_weight: float = 0.17  # Biologie classique (ELN 2022) — signature clinique
+    d2_normalization: float = 109.28  # D² → 10/10 (tuned Optuna)
+    d2_threshold_high: float = 19.03  # seuil D² BLAST_HIGH
+    d2_threshold_moderate: float = 25.80  # seuil D² BLAST_MODERATE
+    purity_modulation_power: float = 0.98  # modulation pureté quasi-linéaire
     # d2_min_normal_threshold supprimé — masquait les LAM matures (impasse géométrique)
-    mahal_boost_factor: float = 1.5  # boost score linéaire si D² > d2_normalization
+    mahal_boost_factor: float = 1.03  # boost minimaliste si D² > d2_normalization
 
     # ── Seuil dynamique par pureté ────────────────────────────────────────────
     purity_threshold_override: bool = True  # activer le seuil dynamique
-    purity_strict_above: float = 0.85   # pureté ≥ 85% → seuil assoupli
-    # ARCH-6 FIX : relax_factor abaissé de 0.90 → 0.50 pour éviter l'annulation
-    # complète de la Porte 2 sur les nœuds très purs.
-    # Avec high_threshold=4.0, purity_strict_above=0.85, relax_factor=0.50 :
-    #   purity=100% → seuil = 4.0 × (1 − 0.50×1.0) = 2.0 (floor modéré)
-    #   purity=90%  → seuil = 4.0 × (1 − 0.50×0.33) = 3.33
-    #   purity=80%  → seuil = 4.0 (nœud mixte, seuil plein — porte non assouplie)
-    # L'ancienne valeur 0.90 donnait seuil=0.40 à 100% de pureté, annulant la Porte 2.
-    purity_relax_factor: float = 0.50   # assouplissement 50% max (configurable via YAML)
+    purity_strict_above: float = 0.93   # pureté ≥ 93% → seuil assoupli
+    # LAIP strategy : purity_relax_factor très bas (0.13) — confiance mesurée en FlowSOM.
+    # Avec high_threshold=2.60, purity_strict_above=0.93, relax_factor=0.13 :
+    #   purity=100% → seuil = 2.60 × (1 − 0.13×1.0) = 2.26 (assouplissement minimal)
+    #   purity=96%  → seuil = 2.60 × (1 − 0.13×0.43) = 2.45 (quasi pas d'assouplissement)
+    #   purity=93%  → seuil = 2.60 (nœud proche du seuil, pas d'assouplissement)
+    # On exige de la preuve biologique même sur nœuds purs — stratégie très conservatrice.
+    purity_relax_factor: float = 0.13   # assouplissement 13% max (on exige de la preuve)
 
     # ── Performance Mode 2 (stats NBM internes) ─────────────────────────────
     nbm_stats_max_cells: int = 250000   # max lignes pour mediane/IQR NBM
