@@ -112,11 +112,14 @@ Références :
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import yaml
 
+from flowsom_pipeline_pro.src.exceptions import ClinicalMathError, PanelConfigError
 from flowsom_pipeline_pro.src.utils.logger import get_logger
 
 # Imports optionnels — dégradation gracieuse si scipy/sklearn absents
@@ -150,9 +153,89 @@ BLAST_MODERATE_THRESHOLD = 2.0
 BLAST_WEAK_THRESHOLD = 0.0
 
 
+def load_panel_weights(panel_path: str | Path) -> Dict[str, float]:
+    """
+    Charge les poids de marqueurs depuis un fichier YAML de configuration de panel.
+
+    Le fichier doit contenir une clé ``marker_weights`` mappant les patterns de
+    marqueurs à leurs poids (float). Les patterns sont matchés par substring
+    insensible à la casse sur le nom complet du marqueur.
+
+    Args:
+        panel_path: Chemin vers le fichier YAML du panel (ex: config/panels/aml_panel.yaml).
+
+    Returns:
+        Dict {pattern: poids_float} — utilisé comme ``custom_weights`` dans
+        ``build_blast_weights``.
+
+    Raises:
+        PanelConfigError: Si le fichier est absent, illisible ou ne contient
+            pas la clé ``marker_weights``.
+    """
+    path = Path(panel_path)
+    if not path.exists():
+        raise PanelConfigError(
+            message=(
+                f"Fichier de configuration du panel introuvable : '{path}'. "
+                "Vérifiez le chemin dans la configuration ou fournissez "
+                "un panel valide (ex: config/panels/aml_panel.yaml)."
+            ),
+            panel_path=str(path),
+        )
+
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except Exception as exc:
+        raise PanelConfigError(
+            message=f"Impossible de lire le fichier de panel YAML : {exc}",
+            panel_path=str(path),
+        ) from exc
+
+    if not isinstance(data, dict) or "marker_weights" not in data:
+        raise PanelConfigError(
+            message=(
+                f"Le fichier de panel '{path}' ne contient pas la clé 'marker_weights'. "
+                "Structure attendue : marker_weights:\n  CD34: 3.0\n  CD117: 2.5\n  ..."
+            ),
+            panel_path=str(path),
+        )
+
+    raw = data["marker_weights"]
+    if not isinstance(raw, dict) or not raw:
+        raise PanelConfigError(
+            message=(
+                f"La clé 'marker_weights' dans '{path}' est vide ou invalide. "
+                "Au moins un marqueur avec son poids doit être défini."
+            ),
+            panel_path=str(path),
+        )
+
+    weights: Dict[str, float] = {}
+    for pattern, value in raw.items():
+        try:
+            weights[str(pattern)] = float(value)
+        except (TypeError, ValueError) as exc:
+            raise PanelConfigError(
+                message=(
+                    f"Poids invalide pour le marqueur '{pattern}' dans '{path}' : "
+                    f"'{value}' ne peut pas être converti en float."
+                ),
+                panel_path=str(path),
+            ) from exc
+
+    _logger.info(
+        "load_panel_weights : %d poids chargés depuis '%s'",
+        len(weights),
+        path,
+    )
+    return weights
+
+
 def build_blast_weights(
     marker_names: List[str],
     custom_weights: Optional[Dict[str, float]] = None,
+    panel_path: Optional[str | Path] = None,
 ) -> Dict[str, float]:
     """
     Construit le dictionnaire de poids pour le scoring blast ELN 2022 / Ogata.
@@ -161,14 +244,20 @@ def build_blast_weights(
     Les valeurs sont calibrées selon leur importance diagnostique dans la LAM
     (cf. module docstring pour le rationnel clinique complet).
 
-    Hiérarchie des poids positifs (marqueurs progéniteurs / myéloïdes) :
+    Hiérarchie des sources de poids (priorité décroissante) :
+      1. ``panel_path`` : fichier YAML du panel (config/panels/aml_panel.yaml).
+         Fournit les poids spécifiques à la maladie. Prioritaire sur tout.
+      2. ``custom_weights`` : dict passé directement (depuis mrd_config.yaml).
+         Écrase les poids du panel ou les valeurs par défaut.
+      3. Valeurs par défaut internes : poids biologiques standards LAM.
+         Utilisés uniquement si ni panel_path ni custom_weights ne sont fournis.
+
+    Poids par défaut (LAM — utilisés si aucun panel n'est fourni) :
       +3.0  CD34      — progéniteur hématopoïétique (Ogata critère 1)
       +2.5  CD117     — c-Kit, progéniteur myéloïde (Ogata critère 2)
       +1.5  HLA-DR    — blaste myéloïde mature (ELN 2022 LAIP)
       +1.0  CD33      — engagement myéloïde (ELN 2022 LAIP)
       +0.5  CD13      — engagement myéloïde secondaire (ELN 2022 LAIP)
-
-    Poids négatifs (morphologie / phénotype inverse — contribution si sous-exprimé) :
       −1.0  CD45      — CD45-dim discrimine les blastes (score Ogata)
       −1.5  CD19/CD3  — marqueurs lymphoïdes → anti-blaste (frein biologique)
       −1.0  SSC       — faible granularité cytoplasmique = morphologie blaste (Ogata)
@@ -178,61 +267,73 @@ def build_blast_weights(
         custom_weights: Dict optionnel {pattern: poids} chargé depuis mrd_config.yaml
             (clé marker_weights). Les clés sont matchées par pattern insensible à la
             casse sur le nom complet du marqueur (ex: "CD45" matche "CD45-PECY5").
-            Écrase les poids par défaut pour les marqueurs correspondants.
-            Si None, les poids hardcodés ci-dessus sont utilisés intégralement.
+            Écrase les poids du panel ou les valeurs par défaut.
+        panel_path: Chemin optionnel vers un fichier YAML de panel
+            (ex: "config/panels/aml_panel.yaml"). Si fourni, charge les poids
+            depuis ce fichier en priorité. Lève PanelConfigError si absent.
 
     Returns:
         Dict {nom_marqueur: poids_float} — poids = 0.0 pour les marqueurs
         non reconnus (neutres, sans contribution au score).
 
+    Raises:
+        PanelConfigError: Si panel_path est fourni mais que le fichier est absent
+            ou invalide.
+
     Note:
         La correspondance est insensible à la casse et tolère les suffixes
         courants (ex: "CD34-FITC", "CD34_BV421", "CD117/PE").
     """
+    # ── Chargement des poids depuis le panel YAML (priorité maximale) ────────
+    panel_weights: Optional[Dict[str, float]] = None
+    if panel_path is not None:
+        # Lève PanelConfigError si le fichier est absent ou invalide
+        panel_weights = load_panel_weights(panel_path)
+
     weights: Dict[str, float] = {}
 
     for name in marker_names:
         upper = name.upper()
 
-        if "CD34" in upper:
-            # Progéniteur hématopoïétique — marqueur majeur LAIP (Ogata critère 1)
-            weights[name] = +3.0
-        elif "CD117" in upper or "CKIT" in upper:
-            # c-Kit / SCF receptor — progéniteur myéloïde (Ogata critère 2)
-            weights[name] = +2.5
-        elif "CD45" in upper:
-            # CD45-dim = signature blaste classique (score Ogata, axe CD45/SSC)
-            # Poids négatif : contribue au score quand valeur < plancher référence
-            weights[name] = -1.0
-        elif "HLAD" in upper or "HLA-DR" in upper:
-            # HLA-DR positif sur blaste myéloïde = LAIP ELN 2022
-            weights[name] = +1.5
-        elif "CD33" in upper:
-            # Antigène pan-myéloïde — LAIP ELN 2022 (co-expression anormale)
-            weights[name] = +1.0
-        elif "CD13" in upper:
-            # Amino-peptidase N — marqueur myéloïde secondaire (LAIP ELN 2022)
-            weights[name] = +0.5
-        elif "CD19" in upper or ("CD3" in upper and "CD34" not in upper):
-            # Marqueurs lymphoïdes B (CD19) et T (CD3) — frein anti-blaste
-            # Leur présence dans un nœud oriente vers une population normale
-            weights[name] = -1.5
-        elif "SSC" in upper:
-            # Faible granularité (SSC-bas) = morphologie de blaste (Ogata)
-            # Poids négatif : contribue quand valeur < plancher référence
-            weights[name] = -1.0
-        else:
-            # Marqueur non reconnu — contribution nulle (neutre)
-            weights[name] = 0.0
+        # ── Résolution du poids : panel → custom_weights → valeurs par défaut ─
+        resolved: Optional[float] = None
 
-    # Écrasement par les poids personnalisés (depuis mrd_config.yaml › marker_weights)
-    if custom_weights:
-        for marker_name in list(weights.keys()):
-            upper_name = marker_name.upper()
+        # 1. Panel YAML (si fourni)
+        if panel_weights:
+            for pattern, value in panel_weights.items():
+                if pattern.upper() in upper:
+                    resolved = value
+                    break
+
+        # 2. custom_weights (override depuis mrd_config.yaml)
+        if custom_weights:
             for pattern, value in custom_weights.items():
-                if pattern.upper() in upper_name:
-                    weights[marker_name] = float(value)
-                    break  # premier pattern gagnant — évite les collisions (ex: CD3 vs CD34)
+                if pattern.upper() in upper:
+                    resolved = float(value)
+                    break
+
+        # 3. Valeurs par défaut internes (si aucune source externe n'a fourni de poids)
+        if resolved is None:
+            if "CD34" in upper:
+                resolved = +3.0
+            elif "CD117" in upper or "CKIT" in upper:
+                resolved = +2.5
+            elif "CD45" in upper:
+                resolved = -1.0
+            elif "HLAD" in upper or "HLA-DR" in upper:
+                resolved = +1.5
+            elif "CD33" in upper:
+                resolved = +1.0
+            elif "CD13" in upper:
+                resolved = +0.5
+            elif "CD19" in upper or ("CD3" in upper and "CD34" not in upper):
+                resolved = -1.5
+            elif "SSC" in upper:
+                resolved = -1.0
+            else:
+                resolved = 0.0
+
+        weights[name] = resolved
 
     return weights
 
@@ -657,38 +758,58 @@ def compute_reference_stats(
         # Régularisation de Tikhonov pour garantir la non-singularité
         cov_reg = cov + regularization * np.eye(n_features)
 
-        # Inversion : scipy pinv (robuste) → numpy pinv → fallback diagonal
-        try:
-            if _HAS_SCIPY:
-                inv_cov = _scipy_pinv(cov_reg)
-            else:
-                inv_cov = np.linalg.pinv(cov_reg)
-        except np.linalg.LinAlgError:
-            _logger.warning(
-                "compute_reference_stats : échec de pinv — fallback sur inverse diagonale "
-                "(distance euclidienne pondérée par la variance)."
+        # ── Vérification du conditionnement AVANT inversion ───────────────────
+        # Un conditionnement > COND_THRESHOLD signifie que la matrice est
+        # quasi-singulière : l'inversion amplifierait le bruit numérique et
+        # produirait des distances de Mahalanobis non fiables cliniquement.
+        _COND_THRESHOLD = 1e12
+        cond_number = float(np.linalg.cond(cov_reg))
+        if cond_number > _COND_THRESHOLD:
+            raise ClinicalMathError(
+                message=(
+                    "La matrice de covariance NBM est mal conditionnée : "
+                    "les marqueurs du panel sont probablement colinéaires ou "
+                    "la population de référence contient trop peu de cellules. "
+                    "Le scoring de Mahalanobis ne peut pas être effectué de manière fiable. "
+                    "Vérifiez la qualité et la taille de l'échantillon NBM."
+                ),
+                condition_number=cond_number,
+                details=(
+                    f"n_samples={n_samples_cov}, n_features={n_features}, "
+                    f"regularization={regularization}"
+                ),
             )
-            # Fallback : matrice diagonale 1/variance (ignore les covariances)
-            variances = np.diag(cov_reg)
-            variances = np.where(variances < 1e-8, 1e-8, variances)
-            inv_cov = np.diag(1.0 / variances)
+
+        # Pseudo-inverse de Moore-Penrose — robuste aux matrices exactement singulières
+        # (marqueur constant dans le NBM, rang déficient) sans fallback silencieux.
+        if _HAS_SCIPY:
+            inv_cov = _scipy_pinv(cov_reg)
+        else:
+            inv_cov = np.linalg.pinv(cov_reg)
 
         _logger.debug(
             "compute_reference_stats : inv_cov calculée — shape %s, cond=%.2e",
             inv_cov.shape,
-            float(np.linalg.cond(inv_cov)),
+            cond_number,
         )
 
+    # ClinicalMathError se propage intentionnellement vers l'appelant (UI / pipeline).
+    # Les autres exceptions restent des erreurs imprévues à logger.
+    except ClinicalMathError:
+        raise
+
     except Exception as exc:
-        _logger.warning(
-            "compute_reference_stats : erreur lors du calcul de inv_cov (%s) — "
-            "fallback diagonal.",
+        _logger.error(
+            "compute_reference_stats : erreur inattendue lors du calcul de inv_cov : %s",
             exc,
         )
-        # Fallback diagonal si tout échoue
-        variances = ref_scale**2
-        variances = np.where(variances < 1e-8, 1e-8, variances)
-        inv_cov = np.diag(1.0 / variances)
+        raise ClinicalMathError(
+            message=(
+                "Erreur inattendue lors du calcul de la matrice de covariance NBM. "
+                "Le scoring de Mahalanobis est impossible."
+            ),
+            details=str(exc),
+        ) from exc
 
     return ref_center, ref_scale, inv_cov
 

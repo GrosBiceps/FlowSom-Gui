@@ -67,6 +67,7 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -75,6 +76,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from flowsom_pipeline_pro.src.exceptions import ClinicalMathError
 from flowsom_pipeline_pro.src.utils.logger import get_logger
 
 # ARCH-1 : imports au niveau du module (évite les imports différés dans les fonctions)
@@ -89,6 +91,29 @@ from flowsom_pipeline_pro.src.analysis.blast_detection import (
 
 _logger = get_logger("analysis.mrd_calculator")
 
+
+def _hash_yaml_file(yaml_path: str | Path | None) -> Optional[str]:
+    """
+    Calcule le hash SHA256 du contenu d'un fichier YAML de configuration.
+
+    Permet de tracer quelle version exacte des paramètres a été utilisée
+    pour un calcul MRD donné (audit trail clinique).
+
+    Returns:
+        Hash SHA256 hexadécimal (64 caractères) ou None si le fichier est absent.
+    """
+    if yaml_path is None:
+        return None
+    path = Path(yaml_path)
+    if not path.exists():
+        return None
+    try:
+        content = path.read_bytes()
+        return hashlib.sha256(content).hexdigest()
+    except Exception as exc:
+        _logger.debug("_hash_yaml_file : impossible de lire '%s' : %s", path, exc)
+        return None
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Config dataclasses
 # ─────────────────────────────────────────────────────────────────────────────
@@ -99,42 +124,46 @@ class MRDMethodJF:
     """
     Seuils pour la méthode JF (Jabbour-Faderl, adaptée cytométrie clinique).
 
-    Logique : un nœud SOM est MRD si et seulement si :
-      1. Il ne contient qu'une fraction infime de la moelle normale TOTALE
-         (pct_sain_global < max_normal_marrow_pct). Cela garantit que le cluster
-         n'est pas un compartiment normal sous-représenté.
-      2. Il est majoritairement composé de cellules pathologiques
-         (pct_patho > min_patho_cells_pct au sein du cluster).
+    Logique : un nœud SOM est MRD si et seulement si les deux critères sont remplis
+    dans cet ordre :
 
-    Les deux critères ensemble évitent les nœuds "mixtes" qui contiennent des
-    cellules normales et pathologiques en proportions comparables.
+      1. (min_patho_cells_pct) Le cluster est suffisamment dominé par les cellules
+         pathologiques : pct_patho_intra > min_patho_cells_pct.
+         Filtre préalable — si le cluster est trop peu patho, on n'évalue pas le
+         critère sain (évite les faux positifs sur clusters mixtes faiblement chargés).
+
+      2. (max_normal_marrow_pct) La fraction de cellules saines CONTENUES dans ce
+         cluster est infime par rapport au pool total de moelle normale :
+         n_sain_cluster / total_sain < max_normal_marrow_pct.
+         Exemple : 1 180 saines / 980 000 total = 0.12 % → rejeté si seuil = 0.10 %.
+
+    Ce double critère garantit que seuls les clusters très chargés en blastes ET
+    très peu représentés dans la moelle normale saine sont retenus comme MRD.
     """
 
-    max_normal_marrow_pct: float = (
-        2.0  # % max de moelle normale dans ce cluster / total sain
-    )
-    # ⚠  Valeur portée de 0.1 → 2.0 : FlowSOM génère inévitablement du bruit
-    # topologique (quelques cellules saines dans les nœuds de blastes massifs).
-    # À 0.1 %, un cluster de 80 % MRD contenant ~300 cellules saines "de bruit"
-    # dépassait ce seuil et était rejeté entièrement. La valeur 2.0 % est
-    # cohérente avec la résolution typique d'une grille SOM 10×10.
-    min_patho_cells_pct: float = 10.0  # % min de cellules patho DANS le cluster
+    max_normal_marrow_pct: float = 2.0  # % max : n_sain_cluster / total_sain_global
+    min_patho_cells_pct: float = 10.0   # % min de cellules patho DANS le cluster
 
 
 @dataclass
 class MRDMethodFlo:
     """
-    Seuils pour la méthode Flo (ratio intra-cluster).
+    Seuils pour la méthode Flo (ratio intra-cluster, corrigé du biais dataset).
 
     Logique : un nœud SOM est MRD si le % de cellules patho est supérieur à
-    normal_marrow_multiplier × % de cellules saines dans le même nœud.
+    multiplicateur_effectif × % de cellules saines dans le même nœud.
 
-    Avec normal_marrow_multiplier=2.0 : pct_patho > 2 × pct_sain.
-    Plus permissive que JF sur les clusters mixtes, mais exige un déséquilibre
-    significatif en faveur des cellules pathologiques.
+    Le multiplicateur effectif est calculé à l'exécution :
+        _flo_mult_eff = normal_marrow_multiplier × (total_sain / total_patho)
+
+    Cette correction compense le déséquilibre de composition du dataset.
+    Exemple avec normal_marrow_multiplier=2.0 et dataset 10× plus de sain :
+        _flo_mult_eff = 2.0 × 10 = 20 → pct_patho > 20 × pct_sain_intra.
+    Cela garantit qu'un cluster n'est MRD que s'il est enrichi en patho
+    au-delà de ce qu'attendrait le hasard pur (proportion dataset).
     """
 
-    normal_marrow_multiplier: float = 2.0  # ratio pct_patho / pct_sain minimum
+    normal_marrow_multiplier: float = 2.0  # ratio de base (ajusté par ratio dataset)
 
 
 @dataclass
@@ -313,6 +342,10 @@ class MRDConfig:
     condition_sain: str = "Sain"
     condition_patho: str = "Pathologique"
 
+    # ── Traçabilité — chemin du fichier YAML source (audit trail) ────────────
+    # Rempli automatiquement par load_mrd_config() avec le chemin résolu.
+    _config_file_path: Optional[str] = field(default=None, repr=False)
+
 
 def load_mrd_config(config_path: Optional[Path | str] = None) -> MRDConfig:
     """
@@ -485,6 +518,10 @@ def load_mrd_config(config_path: Optional[Path | str] = None) -> MRDConfig:
                 _logger.warning(
                     "Erreur lecture mrd_config.yaml (%s) — valeurs par défaut.", e
                 )
+
+    # Traçabilité : stocker le chemin résolu pour l'audit trail dans config_snapshot
+    if config_path is not None:
+        cfg._config_file_path = str(Path(config_path).resolve())
 
     return cfg
 
@@ -759,16 +796,20 @@ def _build_node_blast_scores(
         np.asarray(node_medians, dtype=float) if node_medians is not None else None
     )
 
-    # ── Fallback automatique si inv_cov absent ───────────────────────────────
+    # ── Vérification stricte : inv_cov obligatoire pour Mahalanobis / hybrid ─
+    # Plus de fallback silencieux sur le score linéaire : si l'appelant demande
+    # Mahalanobis et que la matrice est absente, c'est une erreur clinique.
     _effective_method = scoring_method
     if scoring_method in ("mahalanobis", "hybrid") and nbm_inv_cov is None:
-        _logger.warning(
-            "build_node_blast_scores : inv_cov absent — fallback automatique "
-            "sur moteur 'linear' (moteur '%s' ignoré). "
-            "Calculer nbm_inv_cov via compute_reference_stats() pour activer Mahalanobis.",
-            scoring_method,
+        raise ClinicalMathError(
+            message=(
+                f"Le moteur de scoring '{scoring_method}' requiert la matrice de covariance "
+                "inverse NBM (nbm_inv_cov), mais celle-ci est absente. "
+                "Vérifiez que compute_reference_stats() a été appelé avec suffisamment "
+                "de cellules NBM de référence."
+            ),
+            details=f"scoring_method={scoring_method}, nbm_inv_cov=None",
         )
-        _effective_method = "linear"
 
     # ── Routage vers le moteur ────────────────────────────────────────────────
     weights = build_blast_weights(marker_names, custom_weights=custom_weights)
@@ -848,6 +889,8 @@ def compute_mrd(
     nbm_center: Optional[np.ndarray] = None,
     nbm_scale: Optional[np.ndarray] = None,
     nbm_inv_cov: Optional[np.ndarray] = None,
+    mrd_config_path: Optional[str | Path] = None,
+    panel_config_path: Optional[str | Path] = None,
 ) -> MRDResult:
     """
     Calcule la MRD résiduelle selon les méthodes JF, Flo et/ou ELN.
@@ -1112,10 +1155,8 @@ def compute_mrd(
                     custom_weights=bpf.marker_weights,
                 )
 
-                # Si le routeur a rétrogradé en linéaire (inv_cov absent),
-                # mettre à jour le mode effectif pour la traçabilité.
-                if not _has_inv_cov and bpf.scoring_method not in ("linear", "none"):
-                    _active_scoring_mode = "linear"
+                # Le mode effectif est identique au mode demandé (plus de fallback silencieux).
+                # ClinicalMathError est levée en amont si inv_cov est absent pour mahal/hybrid.
 
                 node_blast_cats = [
                     categorize_blast_score(
@@ -1238,6 +1279,29 @@ def compute_mrd(
     _denom_sain   = total_sain  if total_sain  > 0 else 1
     _denom_patho_g = total_patho if total_patho > 0 else 1
 
+    # ── Multiplicateur Flo adapté au ratio dataset sain/patho ────────────────
+    # La méthode Flo compare pct_patho_intra vs pct_sain_intra (% dans le cluster).
+    # Ces % sont biaisés par le déséquilibre global du dataset : si le dataset
+    # contient 10× plus de cellules saines que patho, même un cluster MRD réel
+    # aura un pct_patho_intra faible par construction.
+    # Correction : on ajuste le multiplicateur par le ratio (total_sain/total_patho)
+    # pour que le critère soit équitable quelle que soit la composition du dataset.
+    # Exemple : ratio=10 (10× plus de sain), multiplier=2 → _flo_mult_eff = 2×10 = 20
+    # → pct_patho > 20 × pct_sain_intra, ce qui correspond à "cluster dominé patho
+    # au-delà de ce qu'on attendrait si les cellules étaient mélangées au hasard".
+    _dataset_ratio_sain_patho = total_sain / max(total_patho, 1)
+    # Floor à 1.0 : si sain ≪ patho (MRD très chargé ou dataset déséquilibré
+    # dans l'autre sens), on ne descend pas sous le multiplicateur de base.
+    _flo_mult_eff = mrd_cfg.method_flo.normal_marrow_multiplier * max(_dataset_ratio_sain_patho, 1.0)
+    _logger.info(
+        "Méthode Flo — ratio dataset sain/patho=%.2f → multiplicateur effectif=%.2f "
+        "(base=%s × ratio=%.2f)",
+        _dataset_ratio_sain_patho,
+        _flo_mult_eff,
+        mrd_cfg.method_flo.normal_marrow_multiplier,
+        _dataset_ratio_sain_patho,
+    )
+
     for node_id in unique_nodes:
         # ── Comptages vectorisés : lecture directe dans les tableaux bincount ──
         # node_id est l'index réel → pas de risque de désynchronisation
@@ -1278,27 +1342,34 @@ def compute_mrd(
                     _mahal_d2 = float(node_d2_raw[_rank])
 
         # ── Méthode JF ────────────────────────────────────────────────
+        # Critère 1 (min_patho_cells_pct) : le cluster doit être dominé par les
+        # cellules pathologiques (% intra-cluster). Si insuffisant, on stoppe.
+        # Critère 2 (max_normal_marrow_pct) : parmi toutes les cellules saines du
+        # pool de moelle normale (total_sain), la fraction contenue dans ce cluster
+        # doit être inférieure au seuil — i.e. n_sain_cluster / total_sain < seuil.
+        # Exemple : 1180 cellules saines / 980 000 total sain = 0.12 % → si seuil=0.10,
+        # le cluster est REJETÉ (0.12 > 0.10).
         is_mrd_jf = False
         if run_jf:
-            if (
-                pct_sain_global < mrd_cfg.method_jf.max_normal_marrow_pct
-                and pct_patho > mrd_cfg.method_jf.min_patho_cells_pct
-            ):
-                if _passes_blast_gate(bpf.apply_to_jf, _blast_score, _blast_cat, node_purity):
-                    is_mrd_jf = True
-                    mrd_cells_jf += n_patho
-                    n_nodes_jf += 1
+            if pct_patho > mrd_cfg.method_jf.min_patho_cells_pct:
+                if pct_sain_global < mrd_cfg.method_jf.max_normal_marrow_pct:
+                    if _passes_blast_gate(bpf.apply_to_jf, _blast_score, _blast_cat, node_purity):
+                        is_mrd_jf = True
+                        mrd_cells_jf += n_patho
+                        n_nodes_jf += 1
 
-        # ── Méthode Flo (ratio intra-cluster) ─────────────────────────
-        # CR-2 FIX : la méthode Flo mesure le déséquilibre DANS le nœud,
-        # pas entre % globaux (biaisé par le déséquilibre dataset NBM/Patho).
-        # Critère : pct_patho_intra > N × pct_sain_intra (ratio intra-cluster).
+        # ── Méthode Flo (ratio intra-cluster corrigé du biais dataset) ───────
+        # _flo_mult_eff = normal_marrow_multiplier × (total_sain / total_patho).
+        # Cette correction compense le déséquilibre de composition du dataset :
+        # si le dataset contient 10× plus de sain que de patho, un mélange aléatoire
+        # donnerait pct_sain_intra ≈ 10× pct_patho_intra → on rehausse le seuil
+        # d'autant pour ne valider que les clusters réellement dominés par le patho.
         # Cas limite : nœud 100% patho (pct_sain=0) → MRD si min LOQ respecté.
         is_mrd_flo = False
         if run_flo:
             _flo_criterion = False
             if pct_sain > 0:
-                _flo_criterion = pct_patho > pct_sain * mrd_cfg.method_flo.normal_marrow_multiplier
+                _flo_criterion = pct_patho > pct_sain * _flo_mult_eff
             else:
                 # Nœud 100% pathologique : MRD si assez de cellules (robustesse LOQ)
                 _flo_criterion = n_patho >= mrd_cfg.eln_standards.min_cluster_events
@@ -1375,14 +1446,44 @@ def compute_mrd(
         eln_low_level=eln_low_level,
         per_node=per_node,
         config_snapshot={
+            # ── Méthodes de détection ───────────────────────────────────────────
             "method": mrd_cfg.method,
             "jf_max_normal_pct": mrd_cfg.method_jf.max_normal_marrow_pct,
             "jf_min_patho_pct": mrd_cfg.method_jf.min_patho_cells_pct,
             "flo_multiplier": mrd_cfg.method_flo.normal_marrow_multiplier,
             "eln_min_events": mrd_cfg.eln_standards.min_cluster_events,
             "eln_positivity_pct": mrd_cfg.eln_standards.clinical_positivity_pct,
+
+            # ── Porte biologique (Porte 2) ─────────────────────────────────────
             "blast_filter_enabled": bpf.enabled,
             "blast_filter_categories": bpf.allowed_categories,
+
+            # ── Méthode de scoring utilisée EFFECTIVEMENT ─────────────────────
+            # Valeur reflétant le scoring réellement appliqué (pas la valeur demandée
+            # dans la config — capture les cas où le scoring a été modifié).
+            "scoring_method_effective": _active_scoring_mode,
+            "scoring_method_requested": bpf.scoring_method,
+            "mahal_weight": bpf.mahal_weight,
+            "linear_weight": bpf.linear_weight,
+            "d2_normalization": bpf.d2_normalization,
+
+            # ── Variables de pureté utilisées ─────────────────────────────────
+            # Capture les paramètres exacts de modulation par la pureté topologique.
+            "purity_modulation_power": bpf.purity_modulation_power,
+            "purity_strict_above": bpf.purity_strict_above,
+            "purity_relax_factor": bpf.purity_relax_factor,
+            "purity_threshold_override": bpf.purity_threshold_override,
+            "high_threshold": bpf.high_threshold,
+            "moderate_threshold": bpf.moderate_threshold,
+            "weak_threshold": bpf.weak_threshold,
+
+            # ── Traçabilité des fichiers de configuration YAML ────────────────
+            # Hash SHA256 des fichiers YAML utilisés : garantit la reproductibilité
+            # exacte du calcul et détecte les modifications non documentées.
+            "mrd_config_yaml_hash": _hash_yaml_file(mrd_config_path),
+            "panel_config_yaml_hash": _hash_yaml_file(panel_config_path),
+            "mrd_config_yaml_path": str(mrd_config_path) if mrd_config_path else None,
+            "panel_config_yaml_path": str(panel_config_path) if panel_config_path else None,
         },
     )
 

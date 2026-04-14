@@ -80,13 +80,58 @@ def _hash_files(file_paths: List[str]) -> str:
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
+def _hash_code_version() -> str:
+    """
+    Empreinte SHA256 (16 chars) des fichiers Python critiques du pipeline.
+
+    Invalide automatiquement le cache si le code de preprocessing ou de
+    clustering change — évite de recharger un cache calculé avec une ancienne
+    logique. Seuls les modules qui influencent le DataFrame NBM pré-processé
+    sont hashés (gating, transformers, normalizers, clustering, fcs_reader).
+
+    Fallback sur la chaîne "unknown" si les fichiers sont introuvables
+    (ex : exécution post-PyInstaller depuis un .exe).
+    """
+    _HERE = Path(__file__).parent
+    _SRC = _HERE.parent
+
+    # Modules qui, s'ils changent, invalident le résultat du preprocessing NBM
+    candidates = [
+        _SRC / "core" / "gating.py",
+        _SRC / "core" / "auto_gating.py",
+        _SRC / "core" / "transformers.py",
+        _SRC / "core" / "normalizers.py",
+        _SRC / "io" / "fcs_reader.py",
+        _SRC / "services" / "preprocessing_service.py",
+    ]
+
+    h = hashlib.sha256()
+    found_any = False
+    for path in candidates:
+        if path.exists():
+            try:
+                h.update(path.read_bytes())
+                found_any = True
+            except OSError:
+                pass
+
+    return h.hexdigest()[:16] if found_any else "unknown"
+
+
+# Calculé une seule fois au démarrage du processus — stable pour toute la session.
+_CODE_VERSION_HASH: str = _hash_code_version()
+
+
 def _hash_prep_config(config: PipelineConfig) -> str:
-    """Empreinte SHA256 (16 chars) des paramètres de preprocessing.
+    """Empreinte SHA256 (16 chars) des paramètres de preprocessing + version du code.
 
     ARCH-3 FIX : utilise dataclasses.asdict() au lieu de vars() pour garantir :
       - compatibilité avec les dataclasses utilisant __slots__
       - sérialisation correcte des sous-objets dataclass imbriqués
       - comportement stable indépendant de l'implémentation interne Python
+
+    Le hash intègre _CODE_VERSION_HASH pour invalider le cache si le code
+    de preprocessing ou de clustering change entre deux runs.
     """
     def _safe_asdict(obj: object) -> object:
         """Convertit récursivement un dataclass en dict, fallback sur str."""
@@ -95,11 +140,13 @@ def _hash_prep_config(config: PipelineConfig) -> str:
         return str(obj)
 
     payload = {
-        "pregate":     _safe_asdict(config.pregate),
-        "transform":   _safe_asdict(config.transform),
-        "normalize":   _safe_asdict(config.normalize),
-        "markers":     _safe_asdict(config.markers),
+        "pregate":      _safe_asdict(config.pregate),
+        "transform":    _safe_asdict(config.transform),
+        "normalize":    _safe_asdict(config.normalize),
+        "markers":      _safe_asdict(config.markers),
         "downsampling": _safe_asdict(config.downsampling),
+        # Invalide le cache si le code change
+        "_code_version": _CODE_VERSION_HASH,
     }
     blob = json.dumps(payload, sort_keys=True, ensure_ascii=True, default=str)
     return hashlib.sha256(blob.encode()).hexdigest()[:16]

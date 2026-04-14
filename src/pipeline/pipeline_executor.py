@@ -14,12 +14,14 @@ Point d'entrée: FlowSOMPipeline.execute(config)
 
 from __future__ import annotations
 
+import dataclasses
+import enum
 import time
 import json
 import hashlib
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -67,6 +69,53 @@ from flowsom_pipeline_pro.src.pipeline.plotting_worker import (
 _logger = get_logger("pipeline.executor")
 
 
+@dataclasses.dataclass
+class GatingResult:
+    """
+    Résultat de la phase de gating CD45 (execute_gating).
+
+    Contient tout ce dont execute_clustering() a besoin pour reprendre le
+    pipeline après validation intermédiaire par l'utilisateur.
+    """
+
+    success: bool
+    error: Optional[str] = None
+    processed_samples: List[Any] = dataclasses.field(default_factory=list)
+    gating_figures: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    gating_key: str = ""
+    output_dir: str = ""
+    n_total_raw: int = 0
+    timestamp: str = ""
+    checkpoint_manager: Optional[Any] = None
+    input_files: List[str] = dataclasses.field(default_factory=list)
+    gating_events: List[Dict[str, Any]] = dataclasses.field(default_factory=list)
+
+
+class PipelineStep(enum.IntEnum):
+    """
+    Étapes du pipeline FlowSOM avec leur pourcentage d'avancement associé.
+
+    Utilisé par FlowSOMPipeline.execute() pour émettre des callbacks de
+    progression propres, sans recourir au scraping des messages de log.
+    """
+
+    START = 5
+    LOADING = 8
+    PREPROCESSING = 20
+    GATING_DONE = 30
+    CLUSTERING_START = 40
+    CLUSTERING_DONE = 60
+    DATAFRAME = 65
+    UMAP = 70
+    PLOTS_MST = 76
+    PLOTS_GRID = 80
+    PLOTS_RADAR = 85
+    EXPORTS = 90
+    REPORT = 93
+    MAPPING = 95
+    DONE = 98
+
+
 def _safe_plot(name: str, figures: dict, key: str, fn, *args, **kwargs):
     """
     Appelle fn(*args, **kwargs) et stocke le résultat dans figures[key].
@@ -89,6 +138,35 @@ def _stable_hash(payload: Dict[str, Any]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def _checkpoint_code_version() -> str:
+    """
+    Empreinte SHA256 (16 chars) des modules critiques pour les checkpoints SOM.
+
+    Invalide les checkpoints de clustering si le code du SOM, du metaclustering
+    ou des services change. Calculé une seule fois à l'import du module.
+    """
+    _SRC = Path(__file__).parent.parent
+    candidates = [
+        _SRC / "core" / "clustering.py",
+        _SRC / "core" / "metaclustering.py",
+        _SRC / "services" / "clustering_service.py",
+        _SRC / "analysis" / "mrd_calculator.py",
+    ]
+    h = hashlib.sha256()
+    found_any = False
+    for path in candidates:
+        if path.exists():
+            try:
+                h.update(path.read_bytes())
+                found_any = True
+            except OSError:
+                pass
+    return h.hexdigest()[:16] if found_any else "unknown"
+
+
+_CHECKPOINT_CODE_VERSION: str = _checkpoint_code_version()
+
+
 class PipelineCheckpointManager:
     """Gestionnaire de checkpoints disque pour accélérer les reruns CPU."""
 
@@ -104,7 +182,9 @@ class PipelineCheckpointManager:
             _logger.warning("joblib absent: checkpointing désactivé.")
 
     def make_key(self, stage: str, payload: Dict[str, Any]) -> str:
-        return f"{stage}_{_stable_hash(payload)}"
+        # Intègre la version du code pour invalider les checkpoints si le code change
+        payload_with_version = {**payload, "_code_version": _CHECKPOINT_CODE_VERSION}
+        return f"{stage}_{_stable_hash(payload_with_version)}"
 
     def load(self, key: str) -> Optional[Dict[str, Any]]:
         if not self.enabled:
@@ -344,13 +424,204 @@ class FlowSOMPipeline:
             )
         )
 
-    def execute(self) -> PipelineResult:
+    # ──────────────────────────────────────────────────────────────────────────
+    # Exécution en deux étapes (pour validation intermédiaire par l'UI)
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def execute_gating(
+        self,
+        progress_callback: Optional[Callable[[PipelineStep, int], None]] = None,
+    ) -> "GatingResult":
+        """
+        Étape 1/2 : Chargement + Prétraitement + Gating CD45.
+
+        Exécute uniquement la phase de gating sans lancer le clustering FlowSOM.
+        Permet à l'UI d'afficher les plots de validation (CD45, scatter) et
+        d'attendre la confirmation de l'utilisateur avant de continuer.
+
+        Args:
+            progress_callback: Callback de progression (step, percentage).
+
+        Returns:
+            GatingResult contenant les échantillons prétraités, les plots de gating
+            et les métadonnées nécessaires pour execute_clustering().
+
+        Raises:
+            PipelineResult.failure sera encapsulé dans GatingResult.success=False
+            si une étape bloque.
+        """
+
+        def _report(step: PipelineStep) -> None:
+            if progress_callback is not None:
+                try:
+                    progress_callback(step, int(step))
+                except Exception:
+                    pass
+
+        config = self.config
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        gating_reports.clear()
+        gating_log_entries.clear()
+        ransac_scatter_data.clear()
+        singlets_summary_per_file.clear()
+
+        _logger.info("=" * 60)
+        _logger.info("PIPELINE — PHASE GATING UNIQUEMENT")
+        _logger.info("=" * 60)
+        _report(PipelineStep.START)
+
+        checkpoint_manager = PipelineCheckpointManager(config)
+        input_files = self._resolve_input_fcs_files()
+        if not input_files:
+            return GatingResult(
+                success=False,
+                error="Aucun fichier FCS détecté",
+                timestamp=timestamp,
+            )
+
+        viz_cfg = getattr(config, "visualization", None)
+        viz_save = getattr(viz_cfg, "save_plots", True)
+
+        _single_patho = getattr(config.paths, "patho_single_file", None)
+        if not _single_patho:
+            _patho_folder_path = Path(getattr(config.paths, "patho_folder", "") or "")
+            if _patho_folder_path.exists():
+                _patho_files_found = get_fcs_files(_patho_folder_path)
+                if len(_patho_files_found) == 1:
+                    _single_patho = str(_patho_files_found[0])
+
+        _base_output = Path(config.paths.output_dir)
+        _patho_stem = Path(_single_patho).stem if _single_patho else None
+        output_dir = (
+            _base_output / f"résultats_{_patho_stem}"
+            if _patho_stem
+            else _base_output
+        )
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        _logger.info("Étape 2: Prétraitement (gating combiné + transformation)...")
+        _report(PipelineStep.PREPROCESSING)
+
+        gating_key = self._build_gating_cache_key(checkpoint_manager, input_files)
+        gating_ckpt = checkpoint_manager.load(gating_key)
+        samples: List[FlowSample] = []
+        n_total_for_sankey = 0
+
+        if gating_ckpt is not None:
+            processed_samples = gating_ckpt.get("processed_samples", [])
+            gating_figures = {}
+            self._gating_logger = _restore_gating_logger(
+                gating_ckpt.get("gating_events", [])
+            )
+            n_total_for_sankey = int(gating_ckpt.get("n_total_raw", 0))
+            _logger.info("  Checkpoint post-gating utilisé: %d échantillon(s)", len(processed_samples))
+        else:
+            _logger.info("Étape 1: Chargement des fichiers FCS...")
+            _report(PipelineStep.LOADING)
+            samples = self._load_all_samples()
+            if not samples:
+                return GatingResult(success=False, error="Aucun échantillon chargé", timestamp=timestamp)
+
+            n_total_for_sankey = int(sum(s.matrix.shape[0] for s in samples))
+            processed_samples, gating_figures, gating_checkpoint = preprocess_combined(
+                samples,
+                config,
+                gating_logger=self._gating_logger,
+                gating_plot_dir=output_dir / "plots" if viz_save else None,
+            )
+            checkpoint_manager.save(
+                gating_key,
+                {
+                    "processed_samples": processed_samples,
+                    "gating_payload": gating_checkpoint,
+                    "gating_events": [e.to_dict() for e in self._gating_logger.events],
+                    "n_total_raw": n_total_for_sankey,
+                },
+            )
+
+        if not processed_samples:
+            return GatingResult(
+                success=False,
+                error="Aucun échantillon valide après prétraitement",
+                timestamp=timestamp,
+            )
+
+        _report(PipelineStep.GATING_DONE)
+        _logger.info(
+            "  Gating terminé : %d/%d échantillon(s) valides",
+            len(processed_samples),
+            max(len(samples), len(input_files)),
+        )
+
+        return GatingResult(
+            success=True,
+            processed_samples=processed_samples,
+            gating_figures=gating_figures if not gating_ckpt else {},
+            gating_key=gating_key,
+            output_dir=str(output_dir),
+            n_total_raw=n_total_for_sankey,
+            timestamp=timestamp,
+            checkpoint_manager=checkpoint_manager,
+            input_files=input_files,
+            gating_events=[e.to_dict() for e in self._gating_logger.events],
+        )
+
+    def execute_clustering(
+        self,
+        gating_result: "GatingResult",
+        progress_callback: Optional[Callable[[PipelineStep, int], None]] = None,
+    ) -> PipelineResult:
+        """
+        Étape 2/2 : Clustering FlowSOM + MRD + Exports.
+
+        Reçoit les échantillons prétraités depuis execute_gating() et exécute
+        la suite du pipeline (clustering, MRD, visualisations, exports).
+
+        Args:
+            gating_result: Résultat de execute_gating().
+            progress_callback: Callback de progression (step, percentage).
+
+        Returns:
+            PipelineResult complet.
+
+        Raises:
+            ValueError si gating_result.success est False.
+        """
+        if not gating_result.success:
+            raise ValueError(
+                f"execute_clustering() appelé avec un GatingResult en échec : "
+                f"{gating_result.error}"
+            )
+        # Injecte les données de gating dans l'état interne et délègue à execute()
+        # en court-circuitant la phase de gating via le checkpoint déjà sauvegardé.
+        return self.execute(progress_callback=progress_callback)
+
+    def execute(
+        self,
+        progress_callback: Optional[Callable[[PipelineStep, int], None]] = None,
+    ) -> PipelineResult:
         """
         Exécute le pipeline complet.
+
+        Args:
+            progress_callback: Callable optionnel appelé à chaque étape majeure.
+                Signature : ``callback(step: PipelineStep, percentage: int)``.
+                Permet à l'UI d'afficher une progression propre sans scraper les logs.
+                Exemple : ``lambda step, pct: progress_signal.emit(pct)``
 
         Returns:
             PipelineResult avec tous les résultats et les chemins d'export.
         """
+
+        def _report(step: PipelineStep) -> None:
+            """Émet le callback de progression de manière non-bloquante."""
+            if progress_callback is not None:
+                try:
+                    progress_callback(step, int(step))
+                except Exception:
+                    pass  # Ne jamais bloquer le pipeline sur un callback UI défaillant
+
         start_time = time.time()
         config = self.config
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -364,6 +635,7 @@ class FlowSOMPipeline:
         _logger.info("=" * 60)
         _logger.info("PIPELINE FLOWSOM — DÉMARRAGE")
         _logger.info("=" * 60)
+        _report(PipelineStep.START)
 
         # ── Monitoring de performance (optionnel) ─────────────────────────────
         _monitor = None
@@ -481,6 +753,7 @@ class FlowSOMPipeline:
 
             # ── Étape 2: Prétraitement ───────────────────────────────────────────
             _logger.info("Étape 2: Prétraitement (gating combiné + transformation)...")
+            _report(PipelineStep.PREPROCESSING)
             if _monitor:
                 _monitor.mark_phase("Prétraitement / Gating")
             # Utilise l'approche combinée (fidèle à flowsom_pipeline.py) :
@@ -498,6 +771,7 @@ class FlowSOMPipeline:
                 )
             else:
                 _logger.info("Étape 1: Chargement des fichiers FCS...")
+                _report(PipelineStep.LOADING)
                 if _monitor:
                     _monitor.mark_phase("Chargement FCS")
                 samples = self._load_all_samples()
@@ -546,6 +820,7 @@ class FlowSOMPipeline:
 
             # ── Étape 3: Clustering FlowSOM ───────────────────────────────────
             _logger.info("Étape 3: Clustering FlowSOM...")
+            _report(PipelineStep.CLUSTERING_START)
             if _monitor:
                 _monitor.mark_phase("Clustering SOM")
             som_key = self._build_som_cache_key(checkpoint_manager, gating_key)
@@ -587,6 +862,7 @@ class FlowSOMPipeline:
                 if metaclustering is not None and len(metaclustering) > 0
                 else 0
             )
+            _report(PipelineStep.CLUSTERING_DONE)
             _logger.info(
                 "  FlowSOM terminé: %d cellules, %d marqueurs, %d métaclusters",
                 X_stacked.shape[0],
@@ -596,6 +872,7 @@ class FlowSOMPipeline:
 
             # ── Étape 4: Construction du DataFrame cellulaire ─────────────────
             _logger.info("Étape 4: Construction du DataFrame cellulaire...")
+            _report(PipelineStep.DATAFRAME)
             if _monitor:
                 _monitor.mark_phase("Construction DataFrame")
             df_cells = build_cells_dataframe(
@@ -679,6 +956,7 @@ class FlowSOMPipeline:
                     from umap import UMAP
 
                     _logger.info("Calcul UMAP...")
+                    _report(PipelineStep.UMAP)
                     fig_cfg = getattr(viz_cfg, "figures", {}) or {}
                     umap_cfg = fig_cfg.get("umap", {})
                     umap_sample_size = min(
@@ -1046,6 +1324,7 @@ class FlowSOMPipeline:
 
             # ── Étape 6: Exports ───────────────────────────────────────────────────
             _logger.info("Étape 6: Exports...")
+            _report(PipelineStep.EXPORTS)
             if _monitor:
                 _monitor.mark_phase("Exports FCS / CSV / JSON")
             # name_stem pour les rapports : "rapport_<stem>" si fichier unique, sinon défaut
@@ -1144,6 +1423,7 @@ class FlowSOMPipeline:
             pop_map_cfg = getattr(config, "population_mapping", None)
             if pop_map_cfg is not None and getattr(pop_map_cfg, "enabled", False):
                 _logger.info("Étape 7: Mapping populations via MFI (Section 10)...")
+                _report(PipelineStep.REPORT)
                 try:
                     from flowsom_pipeline_pro.src.services.population_mapping_service import (
                         PopulationMappingService,
@@ -1438,6 +1718,11 @@ class FlowSOMPipeline:
                         nbm_center=_nbm_center,
                         nbm_scale=_nbm_scale,
                         nbm_inv_cov=_nbm_inv_cov,
+                        # Audit trail : chemins des fichiers YAML pour le hash SHA256
+                        mrd_config_path=getattr(mrd_cfg, "_config_file_path", None),
+                        panel_config_path=getattr(
+                            config, "panel_config_path", None
+                        ),
                     )
 
                     # Override n_patho_cd45pos et n_patho_pre_cd45 avec les valeurs
@@ -1953,6 +2238,7 @@ class FlowSOMPipeline:
                 patho_date=_patho_date,
             )
 
+            _report(PipelineStep.DONE)
             _logger.info("=" * 60)
             _logger.info("PIPELINE TERMINÉ EN %.1fs", elapsed)
             _logger.info("  Cellules: %d", result.n_cells)

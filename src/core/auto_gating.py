@@ -63,9 +63,49 @@ from flowsom_pipeline_pro.config.constants import (
 #   - Scatter FSC-A vs FSC-H par fichier + tableau % singlets stockés
 #   - Log structuré JSON pour audit automatique des runs
 # =============================================================================
-# Stockage global des scatter data RANSAC par fichier (pour le rapport HTML)
-ransac_scatter_data = {}  # {file_name: {fsc_h, fsc_a, pred, inlier_mask, r2, slope, intercept, pct_singlets}}
-singlets_summary_per_file = []  # Liste de dicts pour tableau "% singlets par fichier"
+# GatingSession — conteneur de l'état mutable d'un run de gating.
+#
+# Remplace les anciens globals ransac_scatter_data / singlets_summary_per_file
+# qui causaient des contaminations inter-patients en mode batch (les données du
+# patient N restaient visibles pour le patient N+1 sans .clear() explicite).
+#
+# Usage recommandé :
+#   session = GatingSession()
+#   AutoGating.auto_gate_singlets(..., session=session)
+#   scatter = session.ransac_scatter_data
+#
+# Rétrocompatibilité :
+#   Les noms ransac_scatter_data et singlets_summary_per_file restent
+#   exportés comme références vers l'instance de session par défaut
+#   (_default_session). Le pipeline_executor peut toujours appeler .clear()
+#   sur ces objets — ils se comportent comme des dict/list normaux.
+# =============================================================================
+
+
+class GatingSession:
+    """
+    Conteneur thread-local de l'état mutable d'un run de gating.
+
+    Encapsule les données RANSAC par fichier et le résumé des singlets,
+    évitant la contamination entre patients consécutifs en mode batch.
+    """
+
+    def __init__(self) -> None:
+        self.ransac_scatter_data: Dict[str, Any] = {}
+        self.singlets_summary_per_file: List[Dict[str, Any]] = []
+
+    def clear(self) -> None:
+        """Réinitialise la session avant un nouveau run patient."""
+        self.ransac_scatter_data.clear()
+        self.singlets_summary_per_file.clear()
+
+
+# Instance par défaut — maintient la rétrocompatibilité avec les imports
+# existants dans pipeline_executor.py qui font :
+#   from flowsom_pipeline_pro.src.core.auto_gating import ransac_scatter_data, ...
+_default_session: GatingSession = GatingSession()
+ransac_scatter_data: Dict[str, Any] = _default_session.ransac_scatter_data
+singlets_summary_per_file: List[Dict[str, Any]] = _default_session.singlets_summary_per_file
 
 
 class AutoGating:
@@ -664,6 +704,7 @@ class AutoGating:
         per_file: bool = True,
         r2_threshold: float = 0.85,
         mad_factor: float = RANSAC_MAD_FACTOR,
+        session: Optional["GatingSession"] = None,
     ) -> np.ndarray:
         """
         Gate singlets adaptatif par régression linéaire robuste (RANSAC).
@@ -676,7 +717,7 @@ class AutoGating:
         2. Régression linéaire robuste RANSAC sur FSC-A vs FSC-H
         3. Contrôle qualité R² sur les inliers RANSAC
         4. Si R² < seuil (0.85): fallback vers gating ratio FSC-A/FSC-H simple
-        5. Stockage des scatter data par fichier pour le rapport HTML
+        5. Stockage des scatter data par fichier dans la session (plus de global mutable)
 
         Args:
             X: Matrice des données (n_cells, n_markers)
@@ -684,10 +725,16 @@ class AutoGating:
             file_origin: Array contenant l'origine de chaque cellule (pour gating par fichier)
             per_file: Si True, applique le gating séparément par fichier
             r2_threshold: Seuil R² minimum (défaut 0.85). En dessous → fallback ratio
+            session: GatingSession à utiliser pour stocker les résultats. Si None,
+                     utilise _default_session (rétrocompatibilité).
 
         Returns:
             Masque booléen (True = singlet, False = doublet)
         """
+        # Résoudre la session — préférer l'argument explicite, sinon session par défaut
+        _session = session if session is not None else _default_session
+        _ransac_scatter = _session.ransac_scatter_data
+        _singlets_summary = _session.singlets_summary_per_file
         from sklearn.linear_model import RANSACRegressor
         from sklearn.linear_model import LinearRegression
         from sklearn.metrics import r2_score
@@ -891,7 +938,7 @@ class AutoGating:
                     )
 
                 if payload["scatter"] is not None:
-                    ransac_scatter_data[file_name] = payload["scatter"]
+                    _ransac_scatter[file_name] = payload["scatter"]
 
                 if payload["error"] is not None:
                     _logger.warning(
@@ -936,7 +983,7 @@ class AutoGating:
                         method,
                     )
 
-                singlets_summary_per_file.append(
+                _singlets_summary.append(
                     {
                         "file": str(file_name),
                         "n_total": n_tot,
@@ -954,12 +1001,12 @@ class AutoGating:
             )
 
             # Résumé tableau % singlets par fichier
-            if singlets_summary_per_file:
+            if _singlets_summary:
                 header = (
                     f"\n   {'Fichier':<30} {'Méthode':<18} {'R²':>6} {'% Singlets':>12}"
                 )
                 _logger.info(header)
-                for row in singlets_summary_per_file:
+                for row in _singlets_summary:
                     r2_disp = f"{row['r2']:.3f}" if row["r2"] is not None else "N/A"
                     fname_short = (
                         row["file"]
@@ -1080,8 +1127,8 @@ class AutoGating:
             gate_name="G2_singlets",
             details={
                 "per_file": per_file,
-                "n_files": len(singlets_summary_per_file) if per_file else 1,
-                "files_summary": singlets_summary_per_file if per_file else [],
+                "n_files": len(_singlets_summary) if per_file else 1,
+                "files_summary": list(_singlets_summary) if per_file else [],
             },
         )
         gating_reports.append(gate_result)

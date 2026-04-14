@@ -22,6 +22,10 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
+# Silencer les loggers DEBUG verbeux des bibliothèques tierces
+for _noisy_logger in ("numba", "numba.core", "pynndescent", "umap"):
+    logging.getLogger(_noisy_logger).setLevel(logging.WARNING)
+
 
 def get_logger(name: str = "flowsom_pipeline") -> logging.Logger:
     """Retourne un logger nommé pour le module appelant."""

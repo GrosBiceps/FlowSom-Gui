@@ -1,0 +1,69 @@
+# ============================================================
+# aml_panel.yaml — Panel de marqueurs LAM (Leucémie Aiguë Myéloïde)
+#
+# Poids de scoring blast ELN 2022 / Score d'Ogata.
+# Ces valeurs sont des HEURISTIQUES calibrées sur cohorte LAM.
+# Elles doivent être ajustées via analyse ROC sur cohorte locale
+# avant utilisation en routine diagnostique.
+#
+# Références :
+#   Ogata et al., Blood 2006 ; Sandes et al., Cytometry B 2013
+#   Schuurhuis et al., Blood 2018 ; Heuser et al., Leukemia 2022
+# ============================================================
+
+panel:
+  name: "AML Standard Panel"
+  disease: "AML"  # Acute Myeloid Leukemia / Leucémie Aiguë Myéloïde
+  version: "1.0.0"
+  description: >
+    Panel de détection des blastes LAM conforme aux recommandations ELN 2022.
+    Combinaison des critères Ogata (CD34, CD117, CD45-dim, SSC-bas) et des
+    LAIPs ELN 2022 (HLA-DR, CD33, CD13).
+
+# ── Poids des marqueurs ──────────────────────────────────────────────────────
+#
+# Logique directionnelle (cf. score_nodes_for_blasts) :
+#   • Poids positif (>0) : contribue si valeur normalisée > plancher NBM
+#     (surexpression = signature blastique)
+#   • Poids négatif (<0) : contribue si valeur normalisée < plancher NBM
+#     (sous-expression = morphologie blaste : CD45-dim, SSC-bas)
+#   • Poids = 0 : marqueur ignoré (absent du panel ou non pertinent)
+#
+# Les clés sont matchées par substring insensible à la casse sur le nom
+# complet du marqueur (ex: "CD34" matche "CD34-FITC", "CD34-PE", etc.).
+# ────────────────────────────────────────────────────────────────────────────
+marker_weights:
+
+  # ── Marqueurs progéniteurs (Score d'Ogata, critères 1 & 2) ──────────────
+  CD34: +3.0      # Cellule souche hématopoïétique / progéniteur immature.
+                  # Surexprimé dans les LAM à progéniteurs. Poids fort.
+
+  CD117: +2.5     # c-Kit, récepteur SCF. Progéniteur myéloïde précoce (CFU-GM).
+                  # Complémentaire à CD34 dans les LAM CD34−.
+
+  # ── Marqueurs myéloïdes LAIPs (ELN 2022) ────────────────────────────────
+  HLA-DR: +1.5    # Blaste myéloïde mature (monocytaire ou granulocytaire).
+                  # Fortement exprimé sur les blastes LAM M4/M5.
+
+  CD33: +1.0      # Antigène pan-myéloïde. Co-expression anormale = LAIP ELN.
+
+  CD13: +0.5      # Amino-peptidase N. Souvent co-exprimé avec CD33.
+
+  # ── Marqueurs morphologiques (Score d'Ogata, critères 3 & 4) ────────────
+  CD45: -1.0      # CD45-dim discrimine les blastes (zone "blasts gate" CD45/SSC).
+                  # Contribution NÉGATIVE quand sous-exprimé (valeur < plancher NBM).
+
+  SSC: -1.0       # Faible granularité cytoplasmique = morphologie blaste.
+                  # Contribution NÉGATIVE quand sous-exprimé.
+
+  # ── Marqueurs frein (marqueurs lymphoïdes — freins anti-blaste) ─────────
+  CD19: -1.5      # Marqueur lymphoïde B. Présence → population normale ou non-LAM.
+  CD3: -1.5       # Marqueur lymphoïde T. Présence → population normale ou non-LAM.
+
+# ── Seuils de catégorisation ─────────────────────────────────────────────────
+# Ces seuils peuvent être surchargés par blast_phenotype_filter dans mrd_config.yaml.
+# Valeurs heuristiques — calibrer via ROC sur cohorte locale.
+thresholds:
+  blast_high: 6.0      # ≥ 2 anomalies phénotypiques majeures (LAIP fort)
+  blast_moderate: 2.0  # 1 anomalie majeure ou combinaison d'anomalies mineures
+  blast_weak: 0.0      # Signal positif minimal

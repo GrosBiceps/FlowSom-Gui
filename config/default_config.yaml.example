@@ -5,9 +5,9 @@
 pipeline_version: "4.0"
 
 paths:
-  healthy_folder: ""  # Dossier contenant les fichiers FCS de moelle normale (NBM) — à définir
-  patho_folder: ""    # Dossier contenant les fichiers FCS pathologiques — à définir
-  output_dir: ""      # Dossier de sortie des résultats — à définir
+  healthy_folder: "F:/Cohorte/NBM"  # Dossier contenant les fichiers FCS de moelle normale (NBM)
+  patho_folder: "F:/Cohorte/PoolTest"
+  output_dir: "F:/Cohorte/Résultats"
 
 analysis:
   compare_mode: true         # true = comparer Sain vs Pathologique (doit être true pour les analyses différentielles)
@@ -136,15 +136,12 @@ downsampling:
 # Intégration de données (correction d'effet batch)
 # Désactivée par défaut pour éviter toute correction Harmony non souhaitée.
 data_integration:
-  enabled: true          # false = Harmony désactivé par défaut (recommandé).
-                          # Activer uniquement si vous avez plusieurs acquisitions avec un effet
-                          # batch technique avéré. Ne jamais aligner des marqueurs biologiques
-                          # discriminants (CD34, CD45, CD117) — cela efface le signal MRD.
+  enabled: true           # true = active Harmony pendant le clustering
   method: "harmony"        # harmony (autres méthodes possibles à terme)
   harmony_params:
-    # Aligner UNIQUEMENT les canaux purement techniques (scatter).
-    # NE PAS inclure CD45-A ou tout marqueur biologique — risque de faux négatifs MRD.
-    markers_to_align: ["FSC-A", "SSC-A"]
+    # Liste vide = alignement Harmony sur tous les marqueurs.
+    # Recommandé biology-first: aligner seulement les canaux techniques.
+    markers_to_align: ["FSC-A", "SSC-A", "CD45-A"]
     sigma: 0.05
     nclust: 30              # null = auto (plus lent)
     block_size: 0.20
@@ -230,7 +227,7 @@ export_cluster_distribution:
 
 population_mapping:
   enabled: false
-  ref_mfi_dir: ""  # Dossier contenant les MFI de référence — à définir
+  ref_mfi_dir: "C:\\Users\\Florian Travail\\Documents\\FlowSom\\Data\\Ref MFI"
   cache_dir: "output/ref_mfi_parquet_cache"
   distance_percentile: 60 # Percentile de distance pour le mapping (ex: 50, 60, 75)
   include_scatter: true # true = inclure les paramètres de diffusion (FSC/SSC) dans le calcul de distance pour le mapping, false = ne pas les inclure

@@ -39,12 +39,19 @@ Thumbs.db
 
 # ─── Output / données patient (confidentialité) ───────────────────────────────
 results/
+Results/
+Résults/
 résultats_*/
 output/
 *.fcs
 *.FCS
 patient_*.json
 .flowsom_patients/
+
+# ─── Bases de données et caches (données locales / potentiellement patient) ────
+*.db
+*.pkl
+*.pickle
 
 # ─── Jupyter checkpoints ──────────────────────────────────────────────────────
 .ipynb_checkpoints/
@@ -58,6 +65,10 @@ runtime_hook_debug.py
 # ─── Claude Code (outils dev locaux, pas nécessaires au projet) ───────────────
 .claude/
 
+# ─── Configuration locale (chemins absolus machine-spécifiques) ──────────────
+# Copier default_config.yaml.example → default_config.yaml et adapter les chemins.
+config/default_config.yaml
+
 # ─── Scripts locaux / expérimentaux (ne jamais pusher) ───────────────────────
 analyze_results.py
 benchmark_tmp.py
@@ -68,5 +79,4 @@ optimize_hyperparameters.py
 optimize_hyperparameters_v4.py
 results_grid_search_v4.csv
 
-# ─── Résultats Optuna (données locales lourdes) ───────────────────────────────
-Résults/Optuna_MRD/
+# (Results/ et Résults/ déjà couverts dans la section "Output / données patient" ci-dessus)

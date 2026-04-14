@@ -1,0 +1,38 @@
+# ============================================================
+# requirements-gpu.txt — Dépendances GPU et scRNA-seq optionnelles
+# Python 3.11+
+#
+# Installe les dépendances lourdes (PyTorch CUDA, scanpy, Jupyter)
+# qui ne sont PAS nécessaires en mode CPU standard.
+#
+# Prérequis :
+#   pip install -r requirements.txt   (base CPU d'abord)
+#   pip install -r requirements-gpu.txt
+#
+# Choisissez la variante CUDA correspondant à votre driver :
+#   CUDA 12.6  (RTX 30xx/40xx, driver ≥ 525) :
+#     pip install torch --index-url https://download.pytorch.org/whl/cu126
+#   CUDA 11.8  (driver ≥ 450) :
+#     pip install torch --index-url https://download.pytorch.org/whl/cu118
+#   CPU uniquement (désactive l'accélération GPU mais reste fonctionnel) :
+#     pip install torch --index-url https://download.pytorch.org/whl/cpu
+# ============================================================
+
+# ── Métriques GPU NVIDIA ─────────────────────────────────────
+GPUtil>=1.4.0                # monitoring GPU (optionnel, ne bloque pas si absent)
+
+# ── GPU — PyTorch CUDA ───────────────────────────────────────
+# Version actuelle de référence : torch==2.10.0+cu126 (CUDA 12.6)
+# Remplacez par la variante adaptée à votre installation CUDA (voir ci-dessus).
+torch==2.10.0
+
+# ── Scanpy — pipeline scRNA-seq (optionnel) ──────────────────
+# Requis uniquement si vous utilisez les outils sc.pp / sc.tl pour
+# l'analyse des données de single-cell. Non nécessaire pour la MRD FlowSOM.
+scanpy==1.11.5
+
+# ── Notebooks Jupyter (développement / exploration) ──────────
+# Non requis pour l'application GUI ou le CLI.
+ipykernel==6.30.0
+ipywidgets==8.1.7
+tqdm==4.66.4

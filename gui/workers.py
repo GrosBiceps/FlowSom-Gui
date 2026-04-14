@@ -3,75 +3,38 @@
 workers.py — QThread workers pour FlowSomAnalyzerPro.
 
 Exécute le pipeline FlowSOM dans un thread séparé pour garder l'UI fluide.
-Capture les logs via un handler logging dédié et les transmet en temps réel.
+Capture les logs via un QueueHandler thread-safe et les transmet en temps réel
+sans détournement de sys.stdout ni scraping des messages de log.
 """
 
 from __future__ import annotations
 
 import logging
-import time
+import logging.handlers
+import queue
 import traceback
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional
 
 if TYPE_CHECKING:
     from flowsom_pipeline_pro.config.pipeline_config import PipelineConfig
 
-from PyQt5.QtCore import QThread, pyqtSignal
-
-# Carte de progression : (fragment de message log → % avancement)
-_PIPELINE_PROGRESS_MAP: List[Tuple[str, int]] = [
-    ("Étape 1:", 8),
-    ("Sain (NBM):", 10),
-    ("Pathologique:", 12),
-    ("Étape 2:", 20),
-    ("Gating combiné", 25),
-    ("après prétraitement", 30),
-    ("Étape 3:", 40),
-    ("FlowSOM terminé:", 60),
-    ("Étape 4:", 65),
-    ("DataFrame FCS complet", 67),
-    ("Calcul UMAP", 70),
-    ("UMAP sauvegardé", 73),
-    ("MST statique sauvegardé", 76),
-    ("MST Plotly sauvegardé", 78),
-    ("SOM Grid Plotly sauvegardé", 80),
-    ("Star Chart", 82),
-    ("Grille SOM statique sauvegardée", 84),
-    ("Radar métaclusters sauvegardé", 85),
-    ("Bar chart", 86),
-    ("Vue combinée nœuds SOM", 87),
-    ("Étape 6:", 88),
-    ("Distribution Sain/Patho exportee", 90),
-    ("Exports terminés:", 91),
-    ("Étape 7:", 93),
-    ("Mapping populations OK", 95),
-    ("Génération du rapport HTML", 96),
-    ("Rapport HTML:", 97),
-    ("PIPELINE TERMINÉ", 98),
-]
+from PyQt5.QtCore import QThread, QTimer, pyqtSignal
 
 
-class LogCapture(logging.Handler):
-    """Handler logging qui émet chaque message via un signal Qt et infère la progression.
+class _QtLogHandler(logging.handlers.QueueHandler):
+    """
+    Handler thread-safe qui place les LogRecord dans une queue interne.
+    Un QTimer dans le thread principal draine la queue et émet les signaux Qt.
 
-    Optimisations :
-    - Le scan des patterns de progression est ignoré pour les messages DEBUG
-      (très fréquents pendant le prétraitement) → réduit le overhead CPU.
-    - Throttling : le signal progress n'est émis qu'une fois par seconde maximum
-      pour éviter de saturer la queue d'événements Qt.
+    Avantages par rapport à l'approche directe :
+    - Aucun appel Qt depuis un thread secondaire (évite segfaults).
+    - Aucun blocage sur l'Event Loop Qt en cas de burst de messages.
+    - QueueHandler est conçu exactement pour cet usage (stdlib Python).
     """
 
-    _PROGRESS_THROTTLE_S = 1.0  # émission progress au plus toutes les 1 s
-
-    def __init__(
-        self, log_signal: pyqtSignal, progress_signal: Optional[pyqtSignal] = None
-    ) -> None:
-        super().__init__()
-        self._log_signal = log_signal
-        self._progress_signal = progress_signal
-        self._last_progress = 0
-        self._last_progress_time: float = 0.0
+    def __init__(self) -> None:
+        self._queue: queue.SimpleQueue = queue.SimpleQueue()
+        super().__init__(self._queue)
         self.setFormatter(
             logging.Formatter(
                 "[%(asctime)s] %(levelname)-8s %(message)s",
@@ -79,39 +42,103 @@ class LogCapture(logging.Handler):
             )
         )
 
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            msg = self.format(record)
-            self._log_signal.emit(msg)
-            # Infère la progression uniquement sur les messages INFO et au-dessus
-            # (les DEBUG sont trop fréquents et ne contiennent jamais de jalons)
-            if self._progress_signal is not None and record.levelno >= logging.INFO:
-                now = time.monotonic()
-                if now - self._last_progress_time >= self._PROGRESS_THROTTLE_S:
-                    raw_msg = record.getMessage()
-                    for pattern, pct in _PIPELINE_PROGRESS_MAP:
-                        if pattern in raw_msg and pct > self._last_progress:
-                            self._last_progress = pct
-                            self._last_progress_time = now
-                            self._progress_signal.emit(pct)
-                            break
-        except Exception:
-            pass
+
+class LogCapture:
+    """
+    Capture de logs thread-safe pour l'UI PyQt5.
+
+    Installe un QueueHandler sur le logger root depuis le thread secondaire,
+    puis draine la queue via un QTimer dans le thread principal (sans appel
+    Qt cross-thread).
+
+    Usage :
+        capture = LogCapture(log_signal)
+        capture.install()          # depuis le thread worker (avant pipeline)
+        capture.start_drain()      # depuis le thread principal (après démarrage worker)
+        ...
+        capture.stop_drain()       # depuis le thread principal (après fin worker)
+        capture.uninstall()        # depuis le thread principal (cleanup)
+    """
+
+    # Loggers tiers verbeux à silencer — produisent des milliers de messages
+    # DEBUG lors de la compilation JIT (Numba) ou du calcul KNN (pynndescent),
+    # ce qui sature la SimpleQueue et freeze l'UI.
+    _NOISY_LOGGERS = ("numba", "numba.core", "pynndescent", "umap")
+
+    def __init__(self, log_signal: pyqtSignal) -> None:
+        self._log_signal = log_signal
+        self._handler = _QtLogHandler()
+        self._handler.setLevel(logging.INFO)
+        self._timer: Optional[QTimer] = None
+        self._root_logger = logging.getLogger()
+
+    # ── Gestion du handler ─────────────────────────────────────────────────
+
+    def install(self) -> None:
+        """Ajoute le handler au logger root. Appelé depuis le thread worker."""
+        # Ne pas forcer DEBUG sur le root — cela ouvre les vannes de tous les
+        # loggers tiers (numba, pynndescent…) et sature la queue.
+        if self._root_logger.level == logging.NOTSET:
+            self._root_logger.setLevel(logging.INFO)
+        for name in self._NOISY_LOGGERS:
+            logging.getLogger(name).setLevel(logging.WARNING)
+        self._root_logger.addHandler(self._handler)
+
+    def uninstall(self) -> None:
+        """Retire le handler. Appelé depuis le thread principal après la fin."""
+        self._root_logger.removeHandler(self._handler)
+        self._drain_once()  # Vide les derniers messages
+
+    # ── Drainage de la queue vers l'UI ────────────────────────────────────
+
+    def start_drain(self) -> None:
+        """
+        Démarre un QTimer dans le thread principal qui draine la queue toutes
+        les 100 ms. Doit être appelé depuis le thread principal.
+        """
+        self._timer = QTimer()
+        self._timer.setInterval(100)
+        self._timer.timeout.connect(self._drain_once)
+        self._timer.start()
+
+    def stop_drain(self) -> None:
+        """Arrête le timer de drainage. Doit être appelé depuis le thread principal."""
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+        self._drain_once()  # Dernier vidage
+
+    def _drain_once(self) -> None:
+        """Draine au plus 50 messages par tick pour ne pas bloquer l'UI."""
+        q = self._handler._queue
+        for _ in range(50):
+            try:
+                record = q.get_nowait()
+                msg = self._handler.format(record)
+                self._log_signal.emit(msg)
+            except Exception:
+                break
 
 
 class PipelineWorker(QThread):
     """
     Thread dédié à l'exécution du pipeline FlowSOM complet.
 
+    La progression est émise via un progress_callback propre transmis à
+    FlowSOMPipeline.execute(), sans scraping des messages de log.
+
     Signaux :
         log_message  — chaque ligne de log (str)
         progress     — pourcentage estimé 0–100 (int)
+        gating_done  — résultats du pre-gating prêts pour validation UI
+                       (dict avec clés : n_kept, n_total, pct_kept, fallbacks)
         finished     — résultat PipelineResult (ou None si échec)
         error        — message d'erreur (str)
     """
 
     log_message = pyqtSignal(str)
     progress = pyqtSignal(int)
+    gating_done = pyqtSignal(dict)
     finished = pyqtSignal(object)
     error = pyqtSignal(str)
 
@@ -122,42 +149,52 @@ class PipelineWorker(QThread):
     ) -> None:
         super().__init__(parent)
         self._config = config
-        self._log_handler: Optional[LogCapture] = None
+        self._log_capture = LogCapture(self.log_message)
 
     # ------------------------------------------------------------------
     def run(self) -> None:
         """Point d'entrée du thread — exécute FlowSOMPipeline.execute()."""
-        from flowsom_pipeline_pro.config.pipeline_config import PipelineConfig
-        from flowsom_pipeline_pro.src.pipeline.pipeline_executor import FlowSOMPipeline
+        from flowsom_pipeline_pro.src.pipeline.pipeline_executor import (
+            FlowSOMPipeline,
+            PipelineStep,
+        )
 
-        # Installe le handler de log pour capturer les messages ET la progression
-        root_logger = logging.getLogger()
-        root_logger.setLevel(logging.DEBUG)  # Garantit que INFO/DEBUG passent en mode frozen
-        self._log_handler = LogCapture(self.log_message, progress_signal=self.progress)
-        self._log_handler.setLevel(logging.DEBUG)
-        root_logger.addHandler(self._log_handler)
-
-        # Redirige stdout/stderr via logging pour capturer les print()
-        stdout_logger = _StdoutToSignal(self.log_message)
+        # Installe le handler de log (thread-safe via QueueHandler)
+        self._log_capture.install()
 
         try:
             self.log_message.emit("═══ Démarrage du pipeline FlowSOM ═══")
-            self.progress.emit(5)
 
             pipeline = FlowSOMPipeline(self._config)
+            _gating_emitted = False
 
-            import sys
+            def _on_progress(step: PipelineStep, pct: int) -> None:
+                """Callback appelé par le pipeline à chaque étape majeure."""
+                nonlocal _gating_emitted
+                self.progress.emit(pct)
+                # Émettre le résumé de gating une seule fois dès que GATING_DONE
+                if not _gating_emitted and pct >= PipelineStep.GATING_DONE:
+                    _gating_emitted = True
+                    try:
+                        from flowsom_pipeline_pro.src.models.gate_result import gating_reports
+                        if gating_reports:
+                            n_kept = sum(g.n_kept for g in gating_reports)
+                            n_total = gating_reports[0].n_total if gating_reports else 0
+                            fallbacks = [
+                                g.gate_name for g in gating_reports
+                                if g.warnings or (g.method and "fallback" in g.method.lower())
+                            ]
+                            self.gating_done.emit({
+                                "n_kept": int(n_kept),
+                                "n_total": int(n_total),
+                                "pct_kept": round(n_kept / max(n_total, 1) * 100, 1),
+                                "n_gates": len(gating_reports),
+                                "fallbacks": fallbacks,
+                            })
+                    except Exception:
+                        pass  # Non bloquant
 
-            old_stdout = sys.stdout
-            old_stderr = sys.stderr
-            sys.stdout = stdout_logger
-            sys.stderr = stdout_logger
-
-            try:
-                result = pipeline.execute()
-            finally:
-                sys.stdout = old_stdout
-                sys.stderr = old_stderr
+            result = pipeline.execute(progress_callback=_on_progress)
 
             self.progress.emit(100)
 
@@ -181,8 +218,7 @@ class PipelineWorker(QThread):
             self.finished.emit(None)
 
         finally:
-            if self._log_handler is not None:
-                root_logger.removeHandler(self._log_handler)
+            self._log_capture.uninstall()
 
 
 class BatchWorker(QThread):
@@ -212,37 +248,20 @@ class BatchWorker(QThread):
     ) -> None:
         super().__init__(parent)
         self._config = config
-        self._log_handler: Optional[LogCapture] = None
+        self._log_capture = LogCapture(self.log_message)
 
     def run(self) -> None:
         """Point d'entrée du thread batch."""
         from flowsom_pipeline_pro.src.pipeline.batch_pipeline import BatchPipeline
 
-        root_logger = logging.getLogger()
-        self._log_handler = LogCapture(self.log_message, progress_signal=None)
-        self._log_handler.setLevel(logging.DEBUG)
-        root_logger.addHandler(self._log_handler)
-
-        stdout_logger = _StdoutToSignal(self.log_message)
+        self._log_capture.install()
 
         try:
             self.log_message.emit("═══ Démarrage du mode Batch ═══")
             self.progress.emit(2)
 
-            import sys
-            old_stdout, old_stderr = sys.stdout, sys.stderr
-            sys.stdout = stdout_logger
-            sys.stderr = stdout_logger
-
             batch = BatchPipeline(self._config)
-
-            try:
-                summary = batch.execute(
-                    progress_callback=self._on_file_progress
-                )
-            finally:
-                sys.stdout = old_stdout
-                sys.stderr = old_stderr
+            summary = batch.execute(progress_callback=self._on_file_progress)
 
             self.progress.emit(100)
             n_ok = sum(
@@ -256,7 +275,6 @@ class BatchWorker(QThread):
             self.finished.emit(summary)
 
         except Exception as exc:
-            import traceback
             tb = traceback.format_exc()
             self.log_message.emit(f"[ERREUR BATCH] {exc}")
             self.log_message.emit(tb)
@@ -264,8 +282,7 @@ class BatchWorker(QThread):
             self.finished.emit(None)
 
         finally:
-            if self._log_handler is not None:
-                root_logger.removeHandler(self._log_handler)
+            self._log_capture.uninstall()
 
     def _on_file_progress(self, current: int, total: int, filename: str) -> None:
         """Appelé par BatchPipeline entre chaque fichier."""
@@ -351,33 +368,3 @@ class SpiderPlotWorker(QThread):
             self.figure_ready.emit(fig)
         except Exception as exc:
             self.error.emit(str(exc))
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Utilitaire interne
-# ──────────────────────────────────────────────────────────────────────
-
-
-class _StdoutToSignal:
-    """Redirige les appels write() vers un pyqtSignal(str)."""
-
-    def __init__(self, signal: pyqtSignal) -> None:
-        self._signal = signal
-        self._buffer = ""
-
-    def write(self, text: str) -> None:
-        if not text:
-            return
-        self._buffer += text
-        while "\n" in self._buffer:
-            line, self._buffer = self._buffer.split("\n", 1)
-            if line.strip():
-                self._signal.emit(line)
-
-    def flush(self) -> None:
-        if self._buffer.strip():
-            self._signal.emit(self._buffer.strip())
-            self._buffer = ""
-
-    def isatty(self) -> bool:
-        return False

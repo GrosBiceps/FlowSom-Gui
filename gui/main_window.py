@@ -18,6 +18,7 @@ Design :
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import webbrowser
@@ -220,6 +221,20 @@ class DropZoneLabel(QLabel):
         self.setObjectName("dropZoneOk")
         self.style().unpolish(self)
         self.style().polish(self)
+        # Notifier la fenêtre principale pour rafraîchir la prévisualisation FCS
+        mw = self._find_main_window()
+        if mw and hasattr(mw, "_refresh_fcs_preview"):
+            mw._refresh_fcs_preview()
+
+    def _find_main_window(self) -> Optional[Any]:
+        """Remonte la hiérarchie de parents pour trouver FlowSomAnalyzerPro."""
+        p = self.parent()
+        while p is not None:
+            # Vérification par nom de classe pour éviter l'import circulaire
+            if type(p).__name__ == "FlowSomAnalyzerPro":
+                return p
+            p = p.parent() if hasattr(p, "parent") else None
+        return None
 
     @property
     def path(self) -> Optional[str]:
@@ -429,6 +444,7 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         self._init_ui()
         self._load_default_config()
+        self._restore_session()
         self.statusBar().showMessage("Étape 1 / 5 — Accueil")
 
     # ------------------------------------------------------------------
@@ -713,6 +729,48 @@ class FlowSomAnalyzerPro(QMainWindow):
         )
 
         layout.addLayout(grid)
+
+        # ── Prévisualisation des fichiers FCS détectés ────────────────
+        preview_sep = QFrame()
+        preview_sep.setFrameShape(QFrame.HLine)
+        layout.addWidget(preview_sep)
+
+        preview_header = QHBoxLayout()
+        lbl_preview = QLabel("APERÇU DES FICHIERS FCS DÉTECTÉS")
+        lbl_preview.setObjectName("cardLabel")
+        preview_header.addWidget(lbl_preview)
+        preview_header.addStretch()
+        self.btn_refresh_preview = QPushButton("  Actualiser")
+        self.btn_refresh_preview.setObjectName("ghostBtn")
+        ico_ref = _icon("fa5s.sync-alt", "#89b4fa")
+        if ico_ref:
+            self.btn_refresh_preview.setIcon(ico_ref)
+        self.btn_refresh_preview.clicked.connect(self._refresh_fcs_preview)
+        preview_header.addWidget(self.btn_refresh_preview)
+        layout.addLayout(preview_header)
+
+        self.fcs_preview_table = QTableWidget()
+        self.fcs_preview_table.setColumnCount(4)
+        self.fcs_preview_table.setHorizontalHeaderLabels(
+            ["Fichier", "Condition", "Cellules", "Marqueurs"]
+        )
+        self.fcs_preview_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.fcs_preview_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.fcs_preview_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.fcs_preview_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.fcs_preview_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.fcs_preview_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.fcs_preview_table.setMaximumHeight(200)
+        self.fcs_preview_table.setMinimumHeight(100)
+        layout.addWidget(self.fcs_preview_table)
+
+        self.lbl_preview_summary = QLabel(
+            "Sélectionnez les dossiers FCS pour afficher un aperçu."
+        )
+        self.lbl_preview_summary.setStyleSheet(
+            "color: #6c7086; font-size: 9.5pt; padding: 2px 0;"
+        )
+        layout.addWidget(self.lbl_preview_summary)
 
         # Bouton suivant
         layout.addStretch()
@@ -1260,6 +1318,41 @@ class FlowSomAnalyzerPro(QMainWindow):
         abl.addWidget(btn_back3)
 
         layout.addWidget(action_bar)
+
+        # ── Bandeau avertissement clinique (P3.6) ─────────────────────
+        clinical_warning = QWidget()
+        clinical_warning.setObjectName("clinicalWarningBanner")
+        clinical_warning.setStyleSheet(
+            "QWidget#clinicalWarningBanner {"
+            "background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            "stop:0 rgba(243,139,168,0.12), stop:1 rgba(250,179,135,0.08));"
+            "border-bottom: 1px solid rgba(243,139,168,0.22);"
+            "}"
+        )
+        cw_layout = QHBoxLayout(clinical_warning)
+        cw_layout.setContentsMargins(16, 7, 16, 7)
+        cw_layout.setSpacing(10)
+
+        ico_warn = _icon("fa5s.exclamation-triangle", "#f38ba8")
+        if ico_warn:
+            lbl_ico = QLabel()
+            lbl_ico.setPixmap(ico_warn.pixmap(14, 14))
+            lbl_ico.setStyleSheet("background: transparent;")
+            cw_layout.addWidget(lbl_ico)
+
+        lbl_warn = QLabel(
+            "<b style='color:#f38ba8;'>OUTIL DE RECHERCHE — USAGE NON CLINIQUE</b>"
+            "  <span style='color:#bac2de;'>Ce logiciel est une aide à l'analyse et à la visualisation."
+            " Il ne remplace pas l'interprétation d'un expert biologiste ou médecin,"
+            " ni les procédures AQ du laboratoire."
+            " Les seuils de scoring blastique sont des heuristiques non validées cliniquement.</span>"
+        )
+        lbl_warn.setTextFormat(Qt.RichText)
+        lbl_warn.setWordWrap(True)
+        lbl_warn.setStyleSheet("background: transparent; font-size: 9pt;")
+        cw_layout.addWidget(lbl_warn, 1)
+
+        layout.addWidget(clinical_warning)
 
         # Onglets résultats
         self.tabs = QTabWidget()
@@ -1861,6 +1954,7 @@ class FlowSomAnalyzerPro(QMainWindow):
         )
         if path:
             self.drop_healthy.set_path(path)
+            self._refresh_fcs_preview()
 
     def _select_patho_folder(self) -> None:
         path = QFileDialog.getExistingDirectory(
@@ -1868,6 +1962,7 @@ class FlowSomAnalyzerPro(QMainWindow):
         )
         if path:
             self.drop_patho.set_path(path)
+            self._refresh_fcs_preview()
 
     def _select_output_folder(self) -> None:
         path = QFileDialog.getExistingDirectory(
@@ -1875,6 +1970,113 @@ class FlowSomAnalyzerPro(QMainWindow):
         )
         if path:
             self.drop_output.set_path(path)
+
+    def _refresh_fcs_preview(self) -> None:
+        """
+        Lit les métadonnées FCS (sans charger les données) depuis les dossiers
+        sain et patho et peuple la table de prévisualisation.
+
+        Utilise flowio.FlowData pour lire uniquement le header FCS (rapide).
+        Fallback sur le comptage de lignes si flowio n'est pas disponible.
+        """
+        if not hasattr(self, "fcs_preview_table"):
+            return
+
+        rows: List[tuple] = []  # (filepath, condition, n_events, n_markers)
+        folder_conditions = []
+        if self.drop_healthy.path and Path(self.drop_healthy.path).is_dir():
+            folder_conditions.append((self.drop_healthy.path, "Sain"))
+        if self.drop_patho.path and Path(self.drop_patho.path).is_dir():
+            folder_conditions.append((self.drop_patho.path, "Pathologique"))
+
+        if not folder_conditions:
+            self.lbl_preview_summary.setText(
+                "Sélectionnez les dossiers FCS pour afficher un aperçu."
+            )
+            self.fcs_preview_table.setRowCount(0)
+            return
+
+        for folder, condition in folder_conditions:
+            fcs_files = sorted(
+                [p for p in Path(folder).iterdir()
+                 if p.suffix.lower() == ".fcs"]
+            )
+            for fcs_path in fcs_files:
+                n_events, n_markers = self._read_fcs_header(fcs_path)
+                rows.append((fcs_path.name, condition, n_events, n_markers))
+
+        self.fcs_preview_table.setRowCount(len(rows))
+        for i, (fname, cond, n_ev, n_mk) in enumerate(rows):
+            self.fcs_preview_table.setItem(i, 0, QTableWidgetItem(fname))
+            cond_item = QTableWidgetItem(cond)
+            cond_item.setForeground(
+                QColor("#a6e3a1") if cond == "Sain" else QColor("#f38ba8")
+            )
+            self.fcs_preview_table.setItem(i, 1, cond_item)
+            ev_item = QTableWidgetItem(
+                f"{n_ev:,}" if isinstance(n_ev, int) else str(n_ev)
+            )
+            ev_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.fcs_preview_table.setItem(i, 2, ev_item)
+            mk_item = QTableWidgetItem(str(n_mk))
+            mk_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.fcs_preview_table.setItem(i, 3, mk_item)
+
+        total_sain = sum(r[2] for r in rows if r[1] == "Sain" and isinstance(r[2], int))
+        total_patho = sum(r[2] for r in rows if r[1] == "Pathologique" and isinstance(r[2], int))
+        n_sain_files = sum(1 for r in rows if r[1] == "Sain")
+        n_patho_files = sum(1 for r in rows if r[1] == "Pathologique")
+        summary_parts = []
+        if n_sain_files:
+            summary_parts.append(
+                f"NBM : {n_sain_files} fichier(s) — {total_sain:,} cellules"
+            )
+        if n_patho_files:
+            summary_parts.append(
+                f"Patho : {n_patho_files} fichier(s) — {total_patho:,} cellules"
+            )
+        self.lbl_preview_summary.setText(
+            "  ".join(summary_parts) if summary_parts else "Aucun fichier FCS trouvé."
+        )
+
+    @staticmethod
+    def _read_fcs_header(fcs_path: Path) -> tuple:
+        """
+        Lit uniquement le header FCS pour obtenir le nombre d'événements
+        et le nombre de paramètres. Ne charge pas les données en mémoire.
+
+        Returns:
+            (n_events, n_markers) ou ("?", "?") en cas d'erreur.
+        """
+        try:
+            import flowio
+            fcs = flowio.FlowData(str(fcs_path))
+            n_events = int(fcs.event_count)
+            n_markers = int(fcs.channel_count)
+            return n_events, n_markers
+        except Exception:
+            pass
+        # Fallback : tenter de lire le TEXT segment minimal
+        try:
+            with open(fcs_path, "rb") as f:
+                header = f.read(58)
+                text_start = int(header[10:18].strip())
+                text_end = int(header[18:26].strip())
+                f.seek(text_start)
+                text_raw = f.read(text_end - text_start + 1).decode(
+                    "latin-1", errors="replace"
+                )
+                delimiter = chr(text_raw[0]) if text_raw else "/"
+                pairs = text_raw[1:].split(delimiter)
+                meta = {
+                    pairs[i].strip().upper(): pairs[i + 1].strip()
+                    for i in range(0, len(pairs) - 1, 2)
+                }
+                n_events = int(meta.get("$TOT", "0"))
+                n_par = int(meta.get("$PAR", "0"))
+                return n_events, n_par
+        except Exception:
+            return "?", "?"
 
     # ==================================================================
     # Exécution du pipeline
@@ -1943,14 +2145,19 @@ class FlowSomAnalyzerPro(QMainWindow):
             self._worker.finished.connect(self._on_batch_finished)
             self._worker.error.connect(self._on_pipeline_error)
             self._worker.start()
+            # Démarre le drainage de la queue de logs depuis le thread principal
+            self._worker._log_capture.start_drain()
             self.statusBar().showMessage(" Batch en cours d'exécution…")
         else:
             self._worker = PipelineWorker(self._config, parent=self)
             self._worker.log_message.connect(self._on_log_message)
             self._worker.progress.connect(self._on_progress)
+            self._worker.gating_done.connect(self._on_gating_done)
             self._worker.finished.connect(self._on_pipeline_finished)
             self._worker.error.connect(self._on_pipeline_error)
             self._worker.start()
+            # Démarre le drainage de la queue de logs depuis le thread principal
+            self._worker._log_capture.start_drain()
             self.statusBar().showMessage(" Pipeline en cours d'exécution…")
 
     def _stop_pipeline(self) -> None:
@@ -1983,9 +2190,55 @@ class FlowSomAnalyzerPro(QMainWindow):
     def _on_progress(self, value: int) -> None:
         self.progress_bar.setValue(value)
 
+    def _on_gating_done(self, info: dict) -> None:
+        """Affiche un résumé de pré-gating non bloquant après l'étape de gating."""
+        n_kept = info.get("n_kept", 0)
+        n_total = info.get("n_total", 0)
+        pct = info.get("pct_kept", 0.0)
+        n_gates = info.get("n_gates", 0)
+        fallbacks = info.get("fallbacks", [])
+
+        lines = [
+            f"<b>Pré-gating terminé</b> ({n_gates} gate(s))",
+            f"Cellules conservées : <b>{n_kept:,} / {n_total:,}</b> ({pct:.1f} %)",
+        ]
+        if fallbacks:
+            names = ", ".join(fallbacks[:3])
+            if len(fallbacks) > 3:
+                names += f" +{len(fallbacks) - 3}"
+            lines.append(
+                f"<span style='color:#f38ba8;'>⚠ Fallbacks : {names}</span>"
+            )
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Validation pré-gating")
+        msg.setIcon(QMessageBox.Information)
+        msg.setText("<br>".join(lines))
+        msg.setStandardButtons(QMessageBox.Ok)
+        msg.setWindowModality(Qt.NonModal)
+
+        # Style Catppuccin Mocha
+        msg.setStyleSheet(
+            "QMessageBox { background-color: #1e1e2e; color: #cdd6f4; }"
+            "QLabel { color: #cdd6f4; }"
+            "QPushButton { background-color: #313244; color: #cdd6f4; "
+            "border: 1px solid #45475a; border-radius: 4px; padding: 4px 12px; }"
+            "QPushButton:hover { background-color: #45475a; }"
+        )
+        msg.show()
+
+        # Log également dans le panneau de logs
+        self._log(
+            f"[GATING] {n_kept:,}/{n_total:,} cellules ({pct:.1f} %)"
+            + (f" — fallbacks: {', '.join(fallbacks)}" if fallbacks else "")
+        )
+
     def _on_pipeline_finished(self, result: Any) -> None:
         self.btn_run_step3.setEnabled(True)
         self.btn_stop.setEnabled(False)
+        # Arrête le drainage de la queue de logs et vide les derniers messages
+        if self._worker is not None and hasattr(self._worker, "_log_capture") and self._worker._log_capture is not None:
+            self._worker._log_capture.stop_drain()
         self._result = result
 
         if result is not None and result.success:
@@ -2019,6 +2272,8 @@ class FlowSomAnalyzerPro(QMainWindow):
             self._log("═══ Pipeline terminé avec des erreurs — vérifiez les logs ═══")
 
     def _on_pipeline_error(self, msg: str) -> None:
+        if self._worker is not None and hasattr(self._worker, "_log_capture") and self._worker._log_capture is not None:
+            self._worker._log_capture.stop_drain()
         self._sidebar.set_error(3)
         self.statusBar().showMessage(f" Erreur : {msg[:80]}")
 
@@ -2035,6 +2290,8 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.btn_run_step3.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.progress_bar.setValue(100)
+        if self._worker is not None and hasattr(self._worker, "_log_capture") and self._worker._log_capture is not None:
+            self._worker._log_capture.stop_drain()
 
         if summary is None:
             self._sidebar.set_error(3)
@@ -3160,6 +3417,142 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         except Exception as e:
             self._log(f"Erreur plot FCS : {e}")
+
+    # ==================================================================
+    # Persistance de session (P3.4)
+    # ==================================================================
+
+    _SESSION_FILE = Path.home() / ".flowsom_session.json"
+
+    def _save_session(self) -> None:
+        """Sauvegarde les chemins et paramètres UI dans ~/.flowsom_session.json."""
+        try:
+            data: Dict[str, Any] = {
+                # Chemins
+                "healthy_folder": self.drop_healthy.path or "",
+                "patho_folder": self.drop_patho.path or "",
+                # SOM
+                "xdim": self.spin_xdim.value(),
+                "ydim": self.spin_ydim.value(),
+                "metaclusters": self.spin_metaclusters.value(),
+                "seed": self.spin_seed.value(),
+                "lr": self.spin_lr.value(),
+                "sigma": self.spin_sigma.value(),
+                "auto_clustering": self.chk_auto_clustering.isChecked(),
+                # Preprocessing
+                "cofactor": self.spin_cofactor.value(),
+                # Gating
+                "pregate": self.chk_pregate.isChecked(),
+                "viable": self.chk_viable.isChecked(),
+                "singlets": self.chk_singlets.isChecked(),
+                "mode_blastes": self.chk_mode_blastes.isChecked(),
+                # Options
+                "umap": self.chk_umap.isChecked(),
+                "compare": self.chk_compare.isChecked(),
+                "downsampling": self.chk_downsampling.isChecked(),
+                "max_cells": self.spin_max_cells.value(),
+                "batch": self.chk_batch.isChecked(),
+                "balance_conditions": self.chk_balance_conditions.isChecked(),
+                "imbalance_ratio": self.spin_imbalance_ratio.value(),
+                "allow_oversampling": self.chk_allow_oversampling.isChecked(),
+                # MRD
+                "mrd_method": self.combo_mrd_method.currentText(),
+                "eln_min_events": self.spin_eln_min_events.value(),
+                "eln_positivity": self.spin_eln_positivity.value(),
+                "flo_multiplier": self.spin_flo_multiplier.value(),
+                "jf_max_normal": self.spin_jf_max_normal.value(),
+                "jf_min_patho": self.spin_jf_min_patho.value(),
+                "blast_filter": self.chk_blast_filter.isChecked(),
+            }
+            with open(self._SESSION_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass  # Session non critique — ne jamais bloquer la fermeture
+
+    def _restore_session(self) -> None:
+        """Restaure les chemins et paramètres UI depuis ~/.flowsom_session.json."""
+        if not self._SESSION_FILE.exists():
+            return
+        try:
+            with open(self._SESSION_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return
+
+        # Chemins (uniquement si les dossiers existent encore)
+        healthy = data.get("healthy_folder", "")
+        if healthy and Path(healthy).is_dir():
+            self.drop_healthy.set_path(healthy)
+
+        patho = data.get("patho_folder", "")
+        if patho and Path(patho).is_dir():
+            self.drop_patho.set_path(patho)
+
+        # Rafraîchit l'aperçu FCS si au moins un dossier est présent
+        if healthy or patho:
+            self._refresh_fcs_preview()
+
+        # Spinboxes / ComboBox / CheckBoxes — chaque widget protégé par try
+        _w = {
+            "xdim": (self.spin_xdim, "setValue"),
+            "ydim": (self.spin_ydim, "setValue"),
+            "metaclusters": (self.spin_metaclusters, "setValue"),
+            "seed": (self.spin_seed, "setValue"),
+            "lr": (self.spin_lr, "setValue"),
+            "sigma": (self.spin_sigma, "setValue"),
+            "cofactor": (self.spin_cofactor, "setValue"),
+            "max_cells": (self.spin_max_cells, "setValue"),
+            "eln_min_events": (self.spin_eln_min_events, "setValue"),
+            "eln_positivity": (self.spin_eln_positivity, "setValue"),
+            "flo_multiplier": (self.spin_flo_multiplier, "setValue"),
+            "jf_max_normal": (self.spin_jf_max_normal, "setValue"),
+            "jf_min_patho": (self.spin_jf_min_patho, "setValue"),
+            "imbalance_ratio": (self.spin_imbalance_ratio, "setValue"),
+        }
+        for key, (widget, method) in _w.items():
+            if key in data:
+                try:
+                    getattr(widget, method)(data[key])
+                except Exception:
+                    pass
+
+        _chk = {
+            "auto_clustering": self.chk_auto_clustering,
+            "pregate": self.chk_pregate,
+            "viable": self.chk_viable,
+            "singlets": self.chk_singlets,
+            "mode_blastes": self.chk_mode_blastes,
+            "umap": self.chk_umap,
+            "compare": self.chk_compare,
+            "downsampling": self.chk_downsampling,
+            "batch": self.chk_batch,
+            "balance_conditions": self.chk_balance_conditions,
+            "allow_oversampling": self.chk_allow_oversampling,
+            "blast_filter": self.chk_blast_filter,
+        }
+        for key, widget in _chk.items():
+            if key in data:
+                try:
+                    widget.setChecked(bool(data[key]))
+                except Exception:
+                    pass
+
+        if "mrd_method" in data:
+            try:
+                idx = self.combo_mrd_method.findText(data["mrd_method"])
+                if idx >= 0:
+                    self.combo_mrd_method.setCurrentIndex(idx)
+            except Exception:
+                pass
+
+    # ==================================================================
+    # Événements fenêtre
+    # ==================================================================
+
+    def closeEvent(self, event: Any) -> None:  # type: ignore[override]
+        """Sauvegarde la session avant fermeture."""
+        self._save_session()
+        super().closeEvent(event)
 
     # ==================================================================
     # Utilitaires
