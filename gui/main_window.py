@@ -62,6 +62,7 @@ from PyQt5.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QAbstractItemView,
+    QLineEdit,
 )
 from PyQt5.QtCore import Qt, QSize, QMimeData, QUrl
 from PyQt5.QtGui import QFont, QColor, QDragEnterEvent, QDropEvent
@@ -76,6 +77,9 @@ matplotlib.use("Qt5Agg")
 from flowsom_pipeline_pro.gui.styles import STYLESHEET, COLORS
 from flowsom_pipeline_pro.gui.workers import PipelineWorker, SpiderPlotWorker
 from flowsom_pipeline_pro.gui.tabs.home_tab import HomeTab
+from flowsom_pipeline_pro.gui.widgets.log_console import LogConsole
+from flowsom_pipeline_pro.gui.widgets.toggle_switch import ToggleSwitch
+from flowsom_pipeline_pro.gui.widgets.settings_card import SettingsCard
 
 # qtawesome — icônes vectorielles Font Awesome 5
 try:
@@ -730,51 +734,84 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         layout.addLayout(grid)
 
-        # ── Prévisualisation des fichiers FCS détectés ────────────────
-        preview_sep = QFrame()
-        preview_sep.setFrameShape(QFrame.HLine)
-        layout.addWidget(preview_sep)
+        # ── Boutons d'actions rapides (Aperçu FCS + Renommage) ────────
+        actions_sep = QFrame()
+        actions_sep.setFrameShape(QFrame.HLine)
+        layout.addWidget(actions_sep)
 
-        preview_header = QHBoxLayout()
-        lbl_preview = QLabel("APERÇU DES FICHIERS FCS DÉTECTÉS")
-        lbl_preview.setObjectName("cardLabel")
-        preview_header.addWidget(lbl_preview)
-        preview_header.addStretch()
-        self.btn_refresh_preview = QPushButton("  Actualiser")
-        self.btn_refresh_preview.setObjectName("ghostBtn")
-        ico_ref = _icon("fa5s.sync-alt", "#89b4fa")
-        if ico_ref:
-            self.btn_refresh_preview.setIcon(ico_ref)
-        self.btn_refresh_preview.clicked.connect(self._refresh_fcs_preview)
-        preview_header.addWidget(self.btn_refresh_preview)
-        layout.addLayout(preview_header)
+        actions_row = QHBoxLayout()
+        actions_row.setSpacing(12)
 
-        self.fcs_preview_table = QTableWidget()
-        self.fcs_preview_table.setColumnCount(4)
-        self.fcs_preview_table.setHorizontalHeaderLabels(
-            ["Fichier", "Condition", "Cellules", "Marqueurs"]
+        # Bouton Aperçu FCS
+        self.btn_open_preview = QPushButton("  Aperçu fichiers FCS")
+        self.btn_open_preview.setObjectName("ghostBtn")
+        self.btn_open_preview.setMinimumHeight(44)
+        ico_preview = _icon("fa5s.table", "#89b4fa")
+        if ico_preview:
+            self.btn_open_preview.setIcon(ico_preview)
+            self.btn_open_preview.setIconSize(QSize(18, 18))
+        self.btn_open_preview.setToolTip(
+            "Ouvre une fenêtre avec la liste complète des fichiers FCS détectés\n"
+            "dans les dossiers sélectionnés (nom, condition, cellules, marqueurs)."
         )
-        self.fcs_preview_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.fcs_preview_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.fcs_preview_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.fcs_preview_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.fcs_preview_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.fcs_preview_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.fcs_preview_table.setMaximumHeight(200)
-        self.fcs_preview_table.setMinimumHeight(100)
-        layout.addWidget(self.fcs_preview_table)
+        self.btn_open_preview.clicked.connect(self._open_preview_dialog)
+        actions_row.addWidget(self.btn_open_preview, 1)
 
+        # Bouton Renommage colonnes
+        self.btn_open_rename = QPushButton("  Renommer colonnes FCS  ·  Kaluza")
+        self.btn_open_rename.setObjectName("ghostBtn")
+        self.btn_open_rename.setMinimumHeight(44)
+        ico_rename = _icon("fa5s.exchange-alt", "#cba6f7")
+        if ico_rename:
+            self.btn_open_rename.setIcon(ico_rename)
+            self.btn_open_rename.setIconSize(QSize(18, 18))
+        self.btn_open_rename.setToolTip(
+            "Ouvre l'éditeur de renommage de colonnes FCS.\n"
+            "Permet de mapper les noms bruts (ex: 'CD45 KO') vers les noms\n"
+            "canoniques Kaluza (ex: 'CD45') avant l'analyse."
+        )
+        self.btn_open_rename.clicked.connect(self._open_rename_dialog)
+        actions_row.addWidget(self.btn_open_rename, 1)
+
+        layout.addLayout(actions_row)
+
+        # Badge de résumé (mis à jour après chaque sélection de dossier)
         self.lbl_preview_summary = QLabel(
-            "Sélectionnez les dossiers FCS pour afficher un aperçu."
+            "Sélectionnez les dossiers FCS ci-dessus, puis cliquez sur «Aperçu» pour vérifier les fichiers."
         )
+        self.lbl_preview_summary.setWordWrap(True)
         self.lbl_preview_summary.setStyleSheet(
-            "color: #6c7086; font-size: 9.5pt; padding: 2px 0;"
+            "color: #6c7086; font-size: 9.5pt; padding: 4px 2px;"
         )
         layout.addWidget(self.lbl_preview_summary)
+
+        # Badge renommage (nombre de règles actives)
+        self.lbl_rename_summary = QLabel("Renommage colonnes : aucune règle configurée.")
+        self.lbl_rename_summary.setWordWrap(True)
+        self.lbl_rename_summary.setStyleSheet(
+            "color: #6c7086; font-size: 9.5pt; padding: 0px 2px 4px 2px;"
+        )
+        layout.addWidget(self.lbl_rename_summary)
+
+        # Table de renommage (cachée — stockage interne uniquement)
+        self.rename_table = QTableWidget()
+        self.rename_table.setColumnCount(2)
+        self.rename_table.setHorizontalHeaderLabels(["Colonne FCS (brute)", "Nom cible (Kaluza)"])
+        self.rename_table.hide()
 
         # Bouton suivant
         layout.addStretch()
         nav = QHBoxLayout()
+
+        # ── Bouton Dashboard 3-colonnes ─────────────────────────────
+        try:
+            from flowsom_pipeline_pro.gui.dialogs.pipeline_dashboard import make_expand_button
+            btn_dashboard = make_expand_button(self)
+            btn_dashboard.setToolTip("Ouvrir le Dashboard Pipeline (vue 3 colonnes côte à côte)")
+            nav.addWidget(btn_dashboard)
+        except ImportError:
+            pass
+
         nav.addStretch()
         btn_next = QPushButton("  Paramétrage")
         btn_next.setObjectName("primaryBtn")
@@ -837,11 +874,13 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         # ── Colonne 2 : Gating + Options ─────────────────────────────
         col2.addWidget(self._build_gating_group())
+        col2.addWidget(self._build_markers_group())
         col2.addWidget(self._build_options_group())
         col2.addStretch()
 
-        # ── Colonne 3 : MRD + Stratified DS ─────────────────────────
+        # ── Colonne 3 : MRD + Harmony + Stratified DS ────────────────
         col3.addWidget(self._build_mrd_group())
+        col3.addWidget(self._build_harmony_group())
         col3.addWidget(self._build_stratified_ds_group())
         col3.addStretch()
 
@@ -932,7 +971,7 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.spin_sigma.setDecimals(1)
         grid.addWidget(self.spin_sigma, 5, 1)
 
-        self.chk_auto_clustering = QCheckBox("Auto-sélection clusters (bootstrap)")
+        self.chk_auto_clustering = ToggleSwitch("Auto-sélection clusters (bootstrap)")
         grid.addWidget(self.chk_auto_clustering, 6, 0, 1, 2)
 
         return group
@@ -961,13 +1000,113 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         return group
 
+    def _build_markers_group(self) -> QGroupBox:
+        group = QGroupBox("Marqueurs & Scatter")
+        grid = QGridLayout(group)
+        grid.setSpacing(8)
+
+        # Exclude scatter (FSC/SSC)
+        self.chk_exclude_scatter = ToggleSwitch("Exclure scatter (FSC/SSC)", checked=True)
+        self.chk_exclude_scatter.setToolTip(
+            "Si activé, les colonnes FSC et SSC sont exclues du clustering FlowSOM.\n"
+            "Recommandé pour ne garder que les marqueurs immunophénotypiques."
+        )
+        grid.addWidget(self.chk_exclude_scatter, 0, 0, 1, 2)
+
+        # Keep Area only (A) vs garder les deux (A + H)
+        self.chk_keep_area_only = ToggleSwitch("Garder Area seulement (-A, exclure -H)", checked=True)
+        self.chk_keep_area_only.setToolTip(
+            "Si activé, les colonnes -H (Height) sont supprimées quand le doublon\n"
+            "-A (Area) existe. Réduit la colinéarité et accélère le SOM.\n"
+            "Désactivez pour garder les deux (-A et -H) dans le clustering."
+        )
+        grid.addWidget(self.chk_keep_area_only, 1, 0, 1, 2)
+
+        # Colonnes supplémentaires à exclure
+        grid.addWidget(QLabel("Colonnes à exclure (séparées par ,) :"), 2, 0, 1, 2)
+        self.edit_exclude_cols = QLineEdit()
+        self.edit_exclude_cols.setPlaceholderText("ex: Time, Width, Event_length")
+        self.edit_exclude_cols.setToolTip(
+            "Liste de colonnes supplémentaires à exclure du clustering,\n"
+            "séparées par des virgules."
+        )
+        grid.addWidget(self.edit_exclude_cols, 3, 0, 1, 2)
+
+        return group
+
+    def _build_harmony_group(self) -> QGroupBox:
+        group = QGroupBox("Harmony (Correction batch)")
+        grid = QGridLayout(group)
+        grid.setSpacing(8)
+
+        # Toggle principal
+        self.chk_harmony = ToggleSwitch("Activer Harmony (harmonypy)", checked=True)
+        self.chk_harmony.setToolTip(
+            "Active la correction d'effet batch inter-fichiers via harmonypy.\n"
+            "Recommandé quand les fichiers NBM proviennent de sessions différentes."
+        )
+        grid.addWidget(self.chk_harmony, 0, 0, 1, 2)
+
+        # Marqueurs à aligner
+        grid.addWidget(QLabel("Marqueurs à aligner (vide = tous) :"), 1, 0, 1, 2)
+        self.edit_harmony_markers = QLineEdit()
+        self.edit_harmony_markers.setPlaceholderText("ex: FSC-A, SSC-A  (vide = tous les marqueurs)")
+        self.edit_harmony_markers.setToolTip(
+            "Liste de marqueurs à corriger avec Harmony (séparés par virgules).\n"
+            "Vide = tous les marqueurs du clustering. Recommandé : FSC-A, SSC-A."
+        )
+        grid.addWidget(self.edit_harmony_markers, 2, 0, 1, 2)
+
+        # Paramètres Harmony
+        grid.addWidget(QLabel("Sigma :"), 3, 0)
+        self.spin_harmony_sigma = QDoubleSpinBox()
+        self.spin_harmony_sigma.setRange(0.001, 1.0)
+        self.spin_harmony_sigma.setSingleStep(0.01)
+        self.spin_harmony_sigma.setValue(0.05)
+        self.spin_harmony_sigma.setDecimals(3)
+        self.spin_harmony_sigma.setToolTip(
+            "Paramètre de largeur de la distribution de Harmony.\n"
+            "Plus petit = correction plus agressive. Défaut : 0.05"
+        )
+        grid.addWidget(self.spin_harmony_sigma, 3, 1)
+
+        grid.addWidget(QLabel("nclust (0=auto) :"), 4, 0)
+        self.spin_harmony_nclust = QSpinBox()
+        self.spin_harmony_nclust.setRange(0, 200)
+        self.spin_harmony_nclust.setValue(30)
+        self.spin_harmony_nclust.setToolTip(
+            "Nombre de clusters Harmony internes.\n"
+            "0 = auto (N/30, très lent sur grands datasets). Défaut : 30"
+        )
+        grid.addWidget(self.spin_harmony_nclust, 4, 1)
+
+        grid.addWidget(QLabel("Max itérations :"), 5, 0)
+        self.spin_harmony_max_iter = QSpinBox()
+        self.spin_harmony_max_iter.setRange(1, 100)
+        self.spin_harmony_max_iter.setValue(10)
+        self.spin_harmony_max_iter.setToolTip("Nombre max d'itérations Harmony. Défaut : 10")
+        grid.addWidget(self.spin_harmony_max_iter, 5, 1)
+
+        grid.addWidget(QLabel("Block size :"), 6, 0)
+        self.spin_harmony_block = QDoubleSpinBox()
+        self.spin_harmony_block.setRange(0.01, 1.0)
+        self.spin_harmony_block.setSingleStep(0.05)
+        self.spin_harmony_block.setValue(0.20)
+        self.spin_harmony_block.setDecimals(2)
+        self.spin_harmony_block.setToolTip(
+            "Fraction de cellules par bloc pour les mises à jour Harmony.\n"
+            "Défaut : 0.20 (20% = 5 blocs)"
+        )
+        grid.addWidget(self.spin_harmony_block, 6, 1)
+
+        return group
+
     def _build_gating_group(self) -> QGroupBox:
         group = QGroupBox("Pré-gating automatique")
         vbox = QVBoxLayout(group)
         vbox.setSpacing(6)
 
-        self.chk_pregate = QCheckBox("Activer le pré-gating")
-        self.chk_pregate.setChecked(True)
+        self.chk_pregate = ToggleSwitch("Activer le pré-gating", checked=True)
         vbox.addWidget(self.chk_pregate)
 
         grid = QGridLayout()
@@ -978,22 +1117,19 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.combo_gate_mode.addItems(["auto", "manual"])
         grid.addWidget(self.combo_gate_mode, 0, 1)
 
-        self.chk_viable = QCheckBox("Débris (FSC/SSC)")
-        self.chk_viable.setChecked(True)
+        self.chk_viable = ToggleSwitch("Débris (FSC/SSC)", checked=True)
         grid.addWidget(self.chk_viable, 1, 0)
 
-        self.chk_singlets = QCheckBox("Doublets (FSC-H/FSC-A)")
-        self.chk_singlets.setChecked(True)
+        self.chk_singlets = ToggleSwitch("Doublets (FSC-H/FSC-A)", checked=True)
         grid.addWidget(self.chk_singlets, 1, 1)
 
-        self.chk_cd45 = QCheckBox("CD45 dim")
+        self.chk_cd45 = ToggleSwitch("CD45 dim")
         grid.addWidget(self.chk_cd45, 2, 0)
 
-        self.chk_cd34 = QCheckBox("CD34+ blastes")
+        self.chk_cd34 = ToggleSwitch("CD34+ blastes")
         grid.addWidget(self.chk_cd34, 2, 1)
 
-        self.chk_mode_blastes = QCheckBox("Gating CD45 asymétrique (patho seulement)")
-        self.chk_mode_blastes.setChecked(True)
+        self.chk_mode_blastes = ToggleSwitch("Gating CD45 asymétrique (patho seulement)", checked=True)
         grid.addWidget(self.chk_mode_blastes, 3, 0, 1, 2)
 
         grid.addWidget(QLabel("Dénominateur MRD :"), 4, 0)
@@ -1010,6 +1146,80 @@ class FlowSomAnalyzerPro(QMainWindow):
         )
         grid.addWidget(self.combo_cd45_autogating_mode, 4, 1)
 
+        # ── Paramètres méthode de densité (Tri initial) ───────────────
+        density_lbl = QLabel("── Méthode Tri Initial ──")
+        density_lbl.setObjectName("subtitleLabel")
+        grid.addWidget(density_lbl, 5, 0, 1, 2)
+
+        grid.addWidget(QLabel("Méthode (viable) :"), 6, 0)
+        self.combo_density_method = DarkComboBox()
+        self.combo_density_method.addItems(["GMM", "KDE"])
+        self.combo_density_method.setToolTip(
+            "GMM (Gaussian Mixture Model) : robuste, recommandé\n"
+            "KDE (Kernel Density Estimation) : plus léger, bon pour CD45"
+        )
+        grid.addWidget(self.combo_density_method, 6, 1)
+
+        grid.addWidget(QLabel("Composantes GMM :"), 7, 0)
+        self.spin_gmm_components = QSpinBox()
+        self.spin_gmm_components.setRange(1, 10)
+        self.spin_gmm_components.setValue(3)
+        self.spin_gmm_components.setToolTip(
+            "Nombre de composantes gaussiennes pour le gating débris/viables.\n"
+            "3 = debris + transitoire + cellules viables (recommandé)"
+        )
+        grid.addWidget(self.spin_gmm_components, 7, 1)
+
+        grid.addWidget(QLabel("Type covariance GMM :"), 8, 0)
+        self.combo_gmm_cov = DarkComboBox()
+        self.combo_gmm_cov.addItems(["full", "tied", "diag", "spherical"])
+        self.combo_gmm_cov.setToolTip(
+            "full      : chaque composante a sa propre matrice de covariance (défaut)\n"
+            "tied      : toutes partagent la même matrice\n"
+            "diag      : matrices diagonales (moins de paramètres)\n"
+            "spherical : variances scalaires (le plus simple)"
+        )
+        grid.addWidget(self.combo_gmm_cov, 8, 1)
+
+        # ── Paramètres KDE CD45 ───────────────────────────────────────
+        kde_lbl = QLabel("── Paramètres KDE CD45 ──")
+        kde_lbl.setObjectName("subtitleLabel")
+        grid.addWidget(kde_lbl, 9, 0, 1, 2)
+
+        grid.addWidget(QLabel("Finesse bandwidth :"), 10, 0)
+        self.spin_kde_finesse = QDoubleSpinBox()
+        self.spin_kde_finesse.setRange(0.1, 2.0)
+        self.spin_kde_finesse.setSingleStep(0.05)
+        self.spin_kde_finesse.setValue(0.6)
+        self.spin_kde_finesse.setDecimals(2)
+        self.spin_kde_finesse.setToolTip(
+            "Facteur de bandwidth Silverman pour KDE CD45.\n"
+            "< 1 = plus fin, > 1 = plus lissé. Défaut : 0.6"
+        )
+        grid.addWidget(self.spin_kde_finesse, 10, 1)
+
+        grid.addWidget(QLabel("Sigma lissage :"), 11, 0)
+        self.spin_kde_sigma = QSpinBox()
+        self.spin_kde_sigma.setRange(1, 50)
+        self.spin_kde_sigma.setValue(10)
+        self.spin_kde_sigma.setToolTip(
+            "Lissage gaussien post-KDE (sigma en points de grille).\n"
+            "Réduit les faux-creux. Défaut : 10"
+        )
+        grid.addWidget(self.spin_kde_sigma, 11, 1)
+
+        grid.addWidget(QLabel("Seuil relatif CD45 :"), 12, 0)
+        self.spin_kde_seuil = QDoubleSpinBox()
+        self.spin_kde_seuil.setRange(0.01, 0.5)
+        self.spin_kde_seuil.setSingleStep(0.01)
+        self.spin_kde_seuil.setValue(0.05)
+        self.spin_kde_seuil.setDecimals(3)
+        self.spin_kde_seuil.setToolTip(
+            "Fraction du pic max pour détecter le 'pied' du pic CD45.\n"
+            "Plus petit = seuil plus bas (inclut plus de cellules CD45-dim). Défaut : 0.05"
+        )
+        grid.addWidget(self.spin_kde_seuil, 12, 1)
+
         vbox.addLayout(grid)
         return group
 
@@ -1018,21 +1228,19 @@ class FlowSomAnalyzerPro(QMainWindow):
         grid = QGridLayout(group)
         grid.setSpacing(6)
 
-        self.chk_umap = QCheckBox("Calculer UMAP")
+        self.chk_umap = ToggleSwitch("Calculer UMAP")
         grid.addWidget(self.chk_umap, 0, 0)
 
-        self.chk_gpu = QCheckBox("GPU (CUDA)")
-        self.chk_gpu.setChecked(True)
+        self.chk_gpu = ToggleSwitch("GPU (CUDA)", checked=True)
         grid.addWidget(self.chk_gpu, 0, 1)
 
-        self.chk_compare = QCheckBox("Mode comparaison Sain vs Patho")
-        self.chk_compare.setChecked(True)
+        self.chk_compare = ToggleSwitch("Mode comparaison Sain vs Patho", checked=True)
         grid.addWidget(self.chk_compare, 1, 0, 1, 2)
 
-        self.chk_pop_mapping = QCheckBox("Mapping populations (Ref MFI)")
+        self.chk_pop_mapping = ToggleSwitch("Mapping populations (Ref MFI)")
         grid.addWidget(self.chk_pop_mapping, 2, 0, 1, 2)
 
-        self.chk_downsampling = QCheckBox("Downsampling")
+        self.chk_downsampling = ToggleSwitch("Downsampling")
         grid.addWidget(self.chk_downsampling, 3, 0)
 
         self.spin_max_cells = QSpinBox()
@@ -1042,7 +1250,7 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.spin_max_cells.setSuffix(" cell./fichier")
         grid.addWidget(self.spin_max_cells, 3, 1)
 
-        self.chk_batch = QCheckBox("Mode Batch (tous les fichiers patho)")
+        self.chk_batch = ToggleSwitch("Mode Batch (tous les fichiers patho)")
         grid.addWidget(self.chk_batch, 4, 0, 1, 2)
 
         grid.addWidget(QLabel("Mode export :"), 5, 0)
@@ -1183,13 +1391,12 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         # ── Indicateur d'étape textuel ────────────────────────────────
         self.lbl_pipeline_step = QLabel("En attente du lancement…")
-        self.lbl_pipeline_step.setStyleSheet(
-            "color: #4a4c70; font-size: 10pt; font-weight: 500; padding: 4px 0;"
-        )
+        self.lbl_pipeline_step.setObjectName("pipelineStepLabel")
         layout.addWidget(self.lbl_pipeline_step)
 
         # ── Barre de progression ──────────────────────────────────────
         self.progress_bar = QProgressBar()
+        self.progress_bar.setObjectName("pipelineProgress")
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("%p%")
@@ -1198,10 +1405,7 @@ class FlowSomAnalyzerPro(QMainWindow):
         layout.addWidget(self.progress_bar)
 
         # ── Console logs ──────────────────────────────────────────────
-        self.log_output = QTextEdit()
-        self.log_output.setObjectName("logConsole")
-        self.log_output.setReadOnly(True)
-        self.log_output.setPlaceholderText("Les logs du pipeline apparaîtront ici…")
+        self.log_output = LogConsole()
         layout.addWidget(self.log_output, 1)
 
         # ── Boutons ───────────────────────────────────────────────────
@@ -1825,6 +2029,55 @@ class FlowSomAnalyzerPro(QMainWindow):
                 getattr(c.stratified_downsampling, "allow_oversampling", False)
             )
 
+        # ── Marqueurs & Scatter ───────────────────────────────────────
+        if hasattr(c, "markers"):
+            self.chk_exclude_scatter.setChecked(
+                getattr(c.markers, "exclude_scatter", True)
+            )
+            self.chk_keep_area_only.setChecked(
+                getattr(c.markers, "keep_area_only", True)
+            )
+            excl = getattr(c.markers, "exclude_additional", [])
+            self.edit_exclude_cols.setText(", ".join(excl) if excl else "")
+
+        # ── Harmony ───────────────────────────────────────────────────
+        if hasattr(c, "data_integration"):
+            self.chk_harmony.setChecked(
+                getattr(c.data_integration, "enabled", True)
+            )
+            hp = getattr(c.data_integration, "harmony_params", None)
+            if hp is not None:
+                self.spin_harmony_sigma.setValue(getattr(hp, "sigma", 0.05))
+                nclust = getattr(hp, "nclust", 30)
+                self.spin_harmony_nclust.setValue(nclust if nclust is not None else 0)
+                self.spin_harmony_max_iter.setValue(getattr(hp, "max_iter", 10))
+                self.spin_harmony_block.setValue(getattr(hp, "block_size", 0.20))
+                markers_align = getattr(hp, "markers_to_align", [])
+                self.edit_harmony_markers.setText(", ".join(markers_align) if markers_align else "")
+
+        # ── Paramètres GMM / KDE ──────────────────────────────────────
+        if hasattr(c, "pregate"):
+            self.combo_density_method.setCurrentIndex(
+                0 if getattr(c.pregate, "density_method", "GMM") == "GMM" else 1
+            )
+            self.spin_gmm_components.setValue(
+                getattr(c.pregate, "gmm_n_components_debris", 3)
+            )
+            idx_cov = self.combo_gmm_cov.findText(
+                getattr(c.pregate, "gmm_covariance_type", "full")
+            )
+            if idx_cov >= 0:
+                self.combo_gmm_cov.setCurrentIndex(idx_cov)
+            self.spin_kde_finesse.setValue(
+                getattr(c.pregate, "kde_cd45_finesse", 0.6)
+            )
+            self.spin_kde_sigma.setValue(
+                getattr(c.pregate, "kde_cd45_sigma_smooth", 10)
+            )
+            self.spin_kde_seuil.setValue(
+                getattr(c.pregate, "kde_cd45_seuil_relatif", 0.05)
+            )
+
     def _sync_ui_to_config(self) -> None:
         c = self._config
         if c is None:
@@ -1886,6 +2139,47 @@ class FlowSomAnalyzerPro(QMainWindow):
             c.stratified_downsampling.allow_oversampling = (
                 self.chk_allow_oversampling.isChecked()
             )
+
+        # ── Marqueurs & Scatter ───────────────────────────────────────
+        if hasattr(c, "markers"):
+            c.markers.exclude_scatter = self.chk_exclude_scatter.isChecked()
+            c.markers.keep_area_only = self.chk_keep_area_only.isChecked()
+            raw_excl = self.edit_exclude_cols.text().strip()
+            c.markers.exclude_additional = (
+                [s.strip() for s in raw_excl.split(",") if s.strip()]
+                if raw_excl else []
+            )
+
+        # ── Harmony ───────────────────────────────────────────────────
+        if hasattr(c, "data_integration"):
+            c.data_integration.enabled = self.chk_harmony.isChecked()
+            hp = c.data_integration.harmony_params
+            hp.sigma = self.spin_harmony_sigma.value()
+            nclust_val = self.spin_harmony_nclust.value()
+            hp.nclust = nclust_val if nclust_val > 0 else None
+            hp.max_iter = self.spin_harmony_max_iter.value()
+            hp.block_size = self.spin_harmony_block.value()
+            raw_markers = self.edit_harmony_markers.text().strip()
+            hp.markers_to_align = (
+                [s.strip() for s in raw_markers.split(",") if s.strip()]
+                if raw_markers else []
+            )
+
+        # ── Paramètres GMM / KDE ──────────────────────────────────────
+        if hasattr(c, "pregate"):
+            c.pregate.density_method = self.combo_density_method.currentText()
+            c.pregate.gmm_n_components_debris = self.spin_gmm_components.value()
+            c.pregate.gmm_covariance_type = self.combo_gmm_cov.currentText()
+            c.pregate.kde_cd45_finesse = self.spin_kde_finesse.value()
+            c.pregate.kde_cd45_sigma_smooth = self.spin_kde_sigma.value()
+            c.pregate.kde_cd45_seuil_relatif = self.spin_kde_seuil.value()
+
+        # ── Mapping colonnes FCS (injecté dans config._extra) ─────────
+        rename_map = self._get_column_rename_map()
+        if rename_map:
+            c._extra["column_rename_map"] = rename_map
+        else:
+            c._extra.pop("column_rename_map", None)
 
         self._sync_ui_to_mrd_config()
 
@@ -1972,17 +2266,7 @@ class FlowSomAnalyzerPro(QMainWindow):
             self.drop_output.set_path(path)
 
     def _refresh_fcs_preview(self) -> None:
-        """
-        Lit les métadonnées FCS (sans charger les données) depuis les dossiers
-        sain et patho et peuple la table de prévisualisation.
-
-        Utilise flowio.FlowData pour lire uniquement le header FCS (rapide).
-        Fallback sur le comptage de lignes si flowio n'est pas disponible.
-        """
-        if not hasattr(self, "fcs_preview_table"):
-            return
-
-        rows: List[tuple] = []  # (filepath, condition, n_events, n_markers)
+        """Met à jour le badge de résumé après sélection d'un dossier."""
         folder_conditions = []
         if self.drop_healthy.path and Path(self.drop_healthy.path).is_dir():
             folder_conditions.append((self.drop_healthy.path, "Sain"))
@@ -1991,53 +2275,358 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         if not folder_conditions:
             self.lbl_preview_summary.setText(
-                "Sélectionnez les dossiers FCS pour afficher un aperçu."
+                "Sélectionnez les dossiers FCS ci-dessus, puis cliquez sur «Aperçu» pour vérifier les fichiers."
             )
-            self.fcs_preview_table.setRowCount(0)
             return
 
-        for folder, condition in folder_conditions:
-            fcs_files = sorted(
-                [p for p in Path(folder).iterdir()
-                 if p.suffix.lower() == ".fcs"]
-            )
-            for fcs_path in fcs_files:
-                n_events, n_markers = self._read_fcs_header(fcs_path)
-                rows.append((fcs_path.name, condition, n_events, n_markers))
+        # Comptage rapide uniquement pour le badge
+        n_sain = sum(
+            1 for p in Path(folder_conditions[0][0]).iterdir()
+            if p.suffix.lower() == ".fcs"
+        ) if folder_conditions else 0
+        n_patho = sum(
+            1 for p in Path(folder_conditions[-1][0]).iterdir()
+            if p.suffix.lower() == ".fcs"
+        ) if len(folder_conditions) > 1 else 0
 
-        self.fcs_preview_table.setRowCount(len(rows))
-        for i, (fname, cond, n_ev, n_mk) in enumerate(rows):
-            self.fcs_preview_table.setItem(i, 0, QTableWidgetItem(fname))
-            cond_item = QTableWidgetItem(cond)
-            cond_item.setForeground(
-                QColor("#a6e3a1") if cond == "Sain" else QColor("#f38ba8")
-            )
-            self.fcs_preview_table.setItem(i, 1, cond_item)
-            ev_item = QTableWidgetItem(
-                f"{n_ev:,}" if isinstance(n_ev, int) else str(n_ev)
-            )
-            ev_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.fcs_preview_table.setItem(i, 2, ev_item)
-            mk_item = QTableWidgetItem(str(n_mk))
-            mk_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.fcs_preview_table.setItem(i, 3, mk_item)
-
-        total_sain = sum(r[2] for r in rows if r[1] == "Sain" and isinstance(r[2], int))
-        total_patho = sum(r[2] for r in rows if r[1] == "Pathologique" and isinstance(r[2], int))
-        n_sain_files = sum(1 for r in rows if r[1] == "Sain")
-        n_patho_files = sum(1 for r in rows if r[1] == "Pathologique")
-        summary_parts = []
-        if n_sain_files:
-            summary_parts.append(
-                f"NBM : {n_sain_files} fichier(s) — {total_sain:,} cellules"
-            )
-        if n_patho_files:
-            summary_parts.append(
-                f"Patho : {n_patho_files} fichier(s) — {total_patho:,} cellules"
-            )
+        parts = []
+        if folder_conditions[0][1] == "Sain" and n_sain:
+            parts.append(f"NBM : {n_sain} fichier(s)")
+        if n_patho:
+            parts.append(f"Patho : {n_patho} fichier(s)")
         self.lbl_preview_summary.setText(
-            "  ".join(summary_parts) if summary_parts else "Aucun fichier FCS trouvé."
+            "  ·  ".join(parts) + "   —   cliquez sur «Aperçu» pour les détails."
+            if parts else "Aucun fichier FCS trouvé."
         )
+
+    def _open_preview_dialog(self) -> None:
+        """Ouvre une fenêtre modale avec la liste complète des fichiers FCS."""
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton
+
+        folder_conditions = []
+        if self.drop_healthy.path and Path(self.drop_healthy.path).is_dir():
+            folder_conditions.append((self.drop_healthy.path, "Sain"))
+        if self.drop_patho.path and Path(self.drop_patho.path).is_dir():
+            folder_conditions.append((self.drop_patho.path, "Pathologique"))
+
+        if not folder_conditions:
+            QMessageBox.information(
+                self, "Aperçu FCS", "Aucun dossier sélectionné.\nVeuillez d'abord choisir un dossier FCS."
+            )
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Aperçu des fichiers FCS détectés")
+        dlg.resize(900, 520)
+        dlg.setStyleSheet(self.styleSheet())
+        vbox = QVBoxLayout(dlg)
+        vbox.setContentsMargins(16, 16, 16, 12)
+        vbox.setSpacing(10)
+
+        # En-tête
+        hdr = QHBoxLayout()
+        lbl_title = QLabel("Fichiers FCS détectés")
+        lbl_title.setStyleSheet("color: #cdd6f4; font-size: 13pt; font-weight: 700;")
+        hdr.addWidget(lbl_title)
+        hdr.addStretch()
+        btn_refresh = QPushButton("  Actualiser")
+        btn_refresh.setObjectName("ghostBtn")
+        ico_r = _icon("fa5s.sync-alt", "#89b4fa")
+        if ico_r:
+            btn_refresh.setIcon(ico_r)
+        hdr.addWidget(btn_refresh)
+        vbox.addLayout(hdr)
+
+        # Table
+        table = QTableWidget()
+        table.setColumnCount(5)
+        table.setHorizontalHeaderLabels(["Fichier", "Condition", "Cellules", "Canaux", "Marqueurs ($PnS)"])
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setAlternatingRowColors(False)
+        vbox.addWidget(table, 1)
+
+        # Label résumé
+        lbl_sum = QLabel("")
+        lbl_sum.setStyleSheet("color: #a6adc8; font-size: 9.5pt;")
+        vbox.addWidget(lbl_sum)
+
+        def _populate():
+            rows = []
+            for folder, condition in folder_conditions:
+                fcs_files = sorted(p for p in Path(folder).iterdir() if p.suffix.lower() == ".fcs")
+                for fcs_path in fcs_files:
+                    n_ev, n_ch, marker_names = self._read_fcs_header_full(fcs_path)
+                    rows.append((fcs_path.name, condition, n_ev, n_ch, marker_names))
+
+            table.setRowCount(len(rows))
+            for i, (fname, cond, n_ev, n_ch, markers) in enumerate(rows):
+                table.setItem(i, 0, QTableWidgetItem(fname))
+                cond_item = QTableWidgetItem(cond)
+                cond_item.setForeground(QColor("#a6e3a1") if cond == "Sain" else QColor("#f38ba8"))
+                table.setItem(i, 1, cond_item)
+
+                ev_item = QTableWidgetItem(f"{n_ev:,}" if isinstance(n_ev, int) else str(n_ev))
+                ev_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                table.setItem(i, 2, ev_item)
+
+                ch_item = QTableWidgetItem(str(n_ch))
+                ch_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                table.setItem(i, 3, ch_item)
+
+                mk_str = ", ".join(m for m in markers if m) if markers else "—"
+                table.setItem(i, 4, QTableWidgetItem(mk_str))
+
+            total_sain = sum(r[2] for r in rows if r[1] == "Sain" and isinstance(r[2], int))
+            total_patho = sum(r[2] for r in rows if r[1] == "Pathologique" and isinstance(r[2], int))
+            n_sf = sum(1 for r in rows if r[1] == "Sain")
+            n_pf = sum(1 for r in rows if r[1] == "Pathologique")
+            parts = []
+            if n_sf:
+                parts.append(f"NBM : {n_sf} fichier(s) — {total_sain:,} cellules")
+            if n_pf:
+                parts.append(f"Patho : {n_pf} fichier(s) — {total_patho:,} cellules")
+            lbl_sum.setText("  |  ".join(parts) if parts else "Aucun fichier trouvé.")
+
+        btn_refresh.clicked.connect(_populate)
+        _populate()
+
+        # Boutons bas
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_close = QPushButton("  Fermer")
+        btn_close.setObjectName("primaryBtn")
+        btn_close.setMinimumHeight(38)
+        btn_close.clicked.connect(dlg.accept)
+        btn_row.addWidget(btn_close)
+        vbox.addLayout(btn_row)
+
+        dlg.exec_()
+
+    def _open_rename_dialog(self) -> None:
+        """Ouvre l'éditeur complet de renommage des colonnes FCS."""
+        import re
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel as _QL
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Renommage des colonnes FCS — harmonisation Kaluza")
+        dlg.resize(820, 560)
+        dlg.setStyleSheet(self.styleSheet())
+        vbox = QVBoxLayout(dlg)
+        vbox.setContentsMargins(16, 16, 16, 12)
+        vbox.setSpacing(10)
+
+        # Titre + description
+        lbl_title = _QL("Renommage colonnes FCS  →  Kaluza")
+        lbl_title.setStyleSheet("color: #cdd6f4; font-size: 13pt; font-weight: 700;")
+        vbox.addWidget(lbl_title)
+
+        lbl_desc = _QL(
+            "Définissez ici le mapping entre les noms bruts des colonnes FCS "
+            "(ex : «CD45 KO», «CD34 Cy55», «SSC-A») et les noms canoniques "
+            "attendus par le pipeline Kaluza (ex : «CD45», «CD34»).\n"
+            "Les colonnes dont le nom source = nom cible ne sont pas modifiées. "
+            "Ces règles sont appliquées avant toute harmonisation automatique."
+        )
+        lbl_desc.setWordWrap(True)
+        lbl_desc.setStyleSheet("color: #a6adc8; font-size: 9.5pt; padding-bottom: 4px;")
+        vbox.addWidget(lbl_desc)
+
+        # Barre d'outils
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
+
+        def _mk_btn(label, icon_name, color="#89b4fa"):
+            b = QPushButton(f"  {label}")
+            b.setObjectName("ghostBtn")
+            b.setMinimumHeight(34)
+            ico = _icon(icon_name, color)
+            if ico:
+                b.setIcon(ico)
+            return b
+
+        btn_detect = _mk_btn("Détecter colonnes FCS", "fa5s.search", "#89b4fa")
+        btn_add    = _mk_btn("Ajouter ligne", "fa5s.plus", "#a6e3a1")
+        btn_del    = _mk_btn("Supprimer sélection", "fa5s.trash-alt", "#f38ba8")
+        btn_clear  = _mk_btn("Tout effacer", "fa5s.eraser", "#f9e2af")
+
+        toolbar.addWidget(btn_detect)
+        toolbar.addWidget(btn_add)
+        toolbar.addWidget(btn_del)
+        toolbar.addWidget(btn_clear)
+        toolbar.addStretch()
+
+        lbl_count = _QL("0 règle(s)")
+        lbl_count.setStyleSheet("color: #a6adc8; font-size: 9pt;")
+        toolbar.addWidget(lbl_count)
+        vbox.addLayout(toolbar)
+
+        # Table principale
+        local_table = QTableWidget()
+        local_table.setColumnCount(2)
+        local_table.setHorizontalHeaderLabels(["Colonne FCS brute (source)", "Nom cible Kaluza"])
+        local_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        local_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        local_table.setSelectionBehavior(QTableWidget.SelectRows)
+        local_table.setAlternatingRowColors(False)
+        local_table.verticalHeader().setVisible(False)
+        local_table.setMinimumHeight(300)
+        vbox.addWidget(local_table, 1)
+
+        def _update_count():
+            n = local_table.rowCount()
+            active = sum(
+                1 for r in range(n)
+                if (local_table.item(r, 0) and local_table.item(r, 0).text().strip())
+                and (local_table.item(r, 1) and local_table.item(r, 1).text().strip())
+                and local_table.item(r, 0).text().strip() != local_table.item(r, 1).text().strip()
+            )
+            lbl_count.setText(f"{active} règle(s) active(s)")
+
+        local_table.itemChanged.connect(lambda _: _update_count())
+
+        # Charger les règles existantes depuis self.rename_table
+        for r in range(self.rename_table.rowCount()):
+            src_item = self.rename_table.item(r, 0)
+            dst_item = self.rename_table.item(r, 1)
+            src = src_item.text() if src_item else ""
+            dst = dst_item.text() if dst_item else ""
+            row = local_table.rowCount()
+            local_table.insertRow(row)
+            local_table.setItem(row, 0, QTableWidgetItem(src))
+            local_table.setItem(row, 1, QTableWidgetItem(dst))
+        _update_count()
+
+        def _detect():
+            fcs_path: Optional[Path] = None
+            for folder in (self.drop_healthy.path, self.drop_patho.path):
+                if folder and Path(folder).is_dir():
+                    for p in sorted(Path(folder).iterdir()):
+                        if p.suffix.lower() == ".fcs":
+                            fcs_path = p
+                            break
+                if fcs_path:
+                    break
+
+            if fcs_path is None:
+                QMessageBox.information(dlg, "Détecter colonnes",
+                    "Aucun fichier FCS trouvé.\nSélectionnez d'abord les dossiers dans l'onglet Import.")
+                return
+
+            _, _, col_names = self._read_fcs_header_full(fcs_path)
+
+            existing_srcs = set()
+            for r in range(local_table.rowCount()):
+                item = local_table.item(r, 0)
+                if item:
+                    existing_srcs.add(item.text().strip())
+
+            new_cols = [c for c in col_names if c and c not in existing_srcs]
+            for col in new_cols:
+                # Proposition automatique : retirer suffixes fluorochromes
+                short = re.sub(
+                    r"\s+(KO|FITC|PE|APC|BV\d+|Cy\d+|PerCP|EF\d+|BUV\d+|"
+                    r"BB\d+|R\d+|AF\d+|V\d+|Pacific[- ]Blue|AlexaFluor\d*"
+                    r"|Pacific\s*Orange|BrilliantViolet\d*)\b.*",
+                    "", col, flags=re.IGNORECASE,
+                ).strip()
+                row = local_table.rowCount()
+                local_table.insertRow(row)
+                local_table.setItem(row, 0, QTableWidgetItem(col))
+                local_table.setItem(row, 1, QTableWidgetItem(short))
+            _update_count()
+            if new_cols:
+                QMessageBox.information(dlg, "Colonnes détectées",
+                    f"{len(new_cols)} colonne(s) ajoutée(s) depuis\n{fcs_path.name}")
+
+        def _add_row():
+            row = local_table.rowCount()
+            local_table.insertRow(row)
+            local_table.setItem(row, 0, QTableWidgetItem(""))
+            local_table.setItem(row, 1, QTableWidgetItem(""))
+            local_table.editItem(local_table.item(row, 0))
+            _update_count()
+
+        def _del_rows():
+            rows = sorted({idx.row() for idx in local_table.selectedIndexes()}, reverse=True)
+            for r in rows:
+                local_table.removeRow(r)
+            _update_count()
+
+        def _clear():
+            reply = QMessageBox.question(dlg, "Effacer", "Supprimer toutes les règles de renommage ?",
+                QMessageBox.Yes | QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                local_table.setRowCount(0)
+                _update_count()
+
+        btn_detect.clicked.connect(_detect)
+        btn_add.clicked.connect(_add_row)
+        btn_del.clicked.connect(_del_rows)
+        btn_clear.clicked.connect(_clear)
+
+        # Boutons bas
+        btn_row_layout = QHBoxLayout()
+        btn_cancel = QPushButton("  Annuler")
+        btn_cancel.setObjectName("ghostBtn")
+        btn_cancel.setMinimumHeight(38)
+        btn_cancel.clicked.connect(dlg.reject)
+        btn_row_layout.addWidget(btn_cancel)
+        btn_row_layout.addStretch()
+
+        btn_apply = QPushButton("  Appliquer")
+        btn_apply.setObjectName("primaryBtn")
+        btn_apply.setMinimumHeight(38)
+        btn_apply.setMinimumWidth(140)
+        ico_ok = _icon("fa5s.check", "#11111b")
+        if ico_ok:
+            btn_apply.setIcon(ico_ok)
+        btn_row_layout.addWidget(btn_apply)
+        vbox.addLayout(btn_row_layout)
+
+        def _apply():
+            # Sauvegarder dans self.rename_table (stockage interne)
+            self.rename_table.setRowCount(0)
+            for r in range(local_table.rowCount()):
+                src_item = local_table.item(r, 0)
+                dst_item = local_table.item(r, 1)
+                src = src_item.text().strip() if src_item else ""
+                dst = dst_item.text().strip() if dst_item else ""
+                if src:
+                    row = self.rename_table.rowCount()
+                    self.rename_table.insertRow(row)
+                    self.rename_table.setItem(row, 0, QTableWidgetItem(src))
+                    self.rename_table.setItem(row, 1, QTableWidgetItem(dst))
+
+            # Mettre à jour le badge
+            active = sum(
+                1 for r in range(self.rename_table.rowCount())
+                if (self.rename_table.item(r, 0) and self.rename_table.item(r, 0).text().strip())
+                and (self.rename_table.item(r, 1) and self.rename_table.item(r, 1).text().strip())
+                and self.rename_table.item(r, 0).text().strip() != self.rename_table.item(r, 1).text().strip()
+            )
+            if active:
+                self.lbl_rename_summary.setText(
+                    f"Renommage colonnes : {active} règle(s) active(s). "
+                    f"Cliquez sur «Renommer colonnes» pour modifier."
+                )
+                self.lbl_rename_summary.setStyleSheet(
+                    "color: #cba6f7; font-size: 9.5pt; padding: 0px 2px 4px 2px; font-weight: 600;"
+                )
+            else:
+                self.lbl_rename_summary.setText("Renommage colonnes : aucune règle configurée.")
+                self.lbl_rename_summary.setStyleSheet(
+                    "color: #6c7086; font-size: 9.5pt; padding: 0px 2px 4px 2px;"
+                )
+            dlg.accept()
+
+        btn_apply.clicked.connect(_apply)
+        dlg.exec_()
 
     @staticmethod
     def _read_fcs_header(fcs_path: Path) -> tuple:
@@ -2048,35 +2637,119 @@ class FlowSomAnalyzerPro(QMainWindow):
         Returns:
             (n_events, n_markers) ou ("?", "?") en cas d'erreur.
         """
+        n_ev, n_ch, _ = FlowSomAnalyzerPro._read_fcs_header_full(fcs_path)
+        return n_ev, n_ch
+
+    @staticmethod
+    def _read_fcs_header_full(fcs_path: Path) -> tuple:
+        """
+        Lit le header FCS et extrait le nombre d'événements, le nombre de
+        canaux et la liste des noms de canaux ($PnS en priorité, puis $PnN).
+
+        flowio stocke les clés du TEXT segment en minuscules — on normalise
+        en cherchant toutes les variantes ($PnS, $pns, pns, pnS, etc.).
+
+        Returns:
+            (n_events, n_channels, channel_names: List[str])
+            En cas d'erreur : ("?", "?", [])
+        """
+        # ── Via flowio ───────────────────────────────────────────────
         try:
             import flowio
             fcs = flowio.FlowData(str(fcs_path))
             n_events = int(fcs.event_count)
-            n_markers = int(fcs.channel_count)
-            return n_events, n_markers
+            n_ch = int(fcs.channel_count)
+            text = fcs.text  # dict clés en minuscules : "$p1s", "$p1n", …
+
+            # Normalise en minuscules pour recherche insensible à la casse
+            text_lower = {k.lower(): v for k, v in text.items()}
+
+            names: List[str] = []
+            for i in range(1, n_ch + 1):
+                name = ""
+                # Priorité : $PnS (short name = marqueur) puis $PnN (channel name)
+                for key in (f"$p{i}s", f"p{i}s", f"$p{i}n", f"p{i}n"):
+                    val = str(text_lower.get(key, "")).strip()
+                    if val:
+                        name = val
+                        break
+                names.append(name if name else f"Channel_{i}")
+            return n_events, n_ch, names
         except Exception:
             pass
-        # Fallback : tenter de lire le TEXT segment minimal
+
+        # ── Fallback : parsing binaire manuel du TEXT segment ────────
         try:
             with open(fcs_path, "rb") as f:
-                header = f.read(58)
-                text_start = int(header[10:18].strip())
-                text_end = int(header[18:26].strip())
+                raw_hdr = f.read(58)
+                text_start = int(raw_hdr[10:18].strip())
+                text_end = int(raw_hdr[18:26].strip())
                 f.seek(text_start)
                 text_raw = f.read(text_end - text_start + 1).decode(
                     "latin-1", errors="replace"
                 )
-                delimiter = chr(text_raw[0]) if text_raw else "/"
-                pairs = text_raw[1:].split(delimiter)
-                meta = {
-                    pairs[i].strip().upper(): pairs[i + 1].strip()
-                    for i in range(0, len(pairs) - 1, 2)
-                }
-                n_events = int(meta.get("$TOT", "0"))
-                n_par = int(meta.get("$PAR", "0"))
-                return n_events, n_par
+
+            delimiter = text_raw[0] if text_raw else "/"
+            parts = text_raw[1:].split(delimiter)
+            # Construit le dict en conservant les deux variantes (casse + $)
+            meta_upper: Dict[str, str] = {}
+            for i in range(0, len(parts) - 1, 2):
+                k = parts[i].strip().upper()
+                v = parts[i + 1].strip() if i + 1 < len(parts) else ""
+                meta_upper[k] = v
+                # Variante sans "$"
+                if k.startswith("$"):
+                    meta_upper[k[1:]] = v
+
+            n_events = int(meta_upper.get("$TOT", meta_upper.get("TOT", "0")))
+            n_par = int(meta_upper.get("$PAR", meta_upper.get("PAR", "0")))
+
+            names = []
+            for i in range(1, n_par + 1):
+                name = ""
+                for key in (f"$P{i}S", f"P{i}S", f"$P{i}N", f"P{i}N"):
+                    val = meta_upper.get(key, "").strip()
+                    if val:
+                        name = val
+                        break
+                names.append(name if name else f"Channel_{i}")
+            return n_events, n_par, names
         except Exception:
-            return "?", "?"
+            return "?", "?", []
+
+    # ==================================================================
+    # Renommage colonnes FCS
+    # ==================================================================
+
+    def _add_rename_row(self) -> None:
+        """Ajoute une ligne vide dans la table de renommage."""
+        row = self.rename_table.rowCount()
+        self.rename_table.insertRow(row)
+        self.rename_table.setItem(row, 0, QTableWidgetItem(""))
+        self.rename_table.setItem(row, 1, QTableWidgetItem(""))
+        self.rename_table.editItem(self.rename_table.item(row, 0))
+
+    def _remove_rename_row(self) -> None:
+        """Supprime la ligne sélectionnée dans la table de renommage."""
+        rows = sorted(
+            {idx.row() for idx in self.rename_table.selectedIndexes()}, reverse=True
+        )
+        for r in rows:
+            self.rename_table.removeRow(r)
+
+
+    def _get_column_rename_map(self) -> Dict[str, str]:
+        """Retourne le mapping {col_brute: col_cible} depuis la table de renommage."""
+        rename: Dict[str, str] = {}
+        for r in range(self.rename_table.rowCount()):
+            src_item = self.rename_table.item(r, 0)
+            dst_item = self.rename_table.item(r, 1)
+            if src_item and dst_item:
+                src = src_item.text().strip()
+                dst = dst_item.text().strip()
+                if src and dst and src != dst:
+                    rename[src] = dst
+        return rename
 
     # ==================================================================
     # Exécution du pipeline
@@ -2856,7 +3529,52 @@ class FlowSomAnalyzerPro(QMainWindow):
     # Exports
     # ==================================================================
 
+    # ------------------------------------------------------------------
+    # Validation experte — injection avant tout export
+    # ------------------------------------------------------------------
+
+    def _inject_human_curation(self) -> None:
+        """
+        Lit les décisions de validation experte depuis MRDNodeTable et les injecte
+        dans self._result avant tout appel d'export.
+
+        Ne fait rien si :
+          - _result est None
+          - la grille de validation n'a aucune carte (aucun nœud MRD visible)
+
+        Important : si le biologiste a écarté tous les nœuds, on injecte
+        quand même curated_nodes=[] et curated_mrd_percent=0 pour que le
+        bandeau HTML reflète la décision experte (MRD négatif après validation).
+        """
+        if self._result is None:
+            return
+        node_table = getattr(self._home_tab, "_node_table", None)
+        if node_table is None:
+            return
+
+        # Aucune carte dans la grille = pas d'analyse MRD, on n'écrase rien
+        if not node_table._cards:
+            return
+
+        curated_nodes = node_table.get_human_curated_results()
+        total_mrd_cells = sum(n.get("n_patho", 0) for n in curated_nodes)
+
+        # Dénominateur : même logique que dans _update_node_table
+        mrd = self._result.mrd_result
+        n_pre = getattr(mrd, "n_patho_pre_cd45", 0) if mrd else 0
+        total_patho = n_pre if n_pre > 0 else (
+            getattr(mrd, "total_cells_patho", 0) if mrd else 0
+        )
+        denom = max(total_patho, 1)
+
+        curated_pct = round(total_mrd_cells / denom * 100.0, 6)
+
+        self._result.curated_mrd_percent = curated_pct
+        self._result.curated_mrd_cells   = total_mrd_cells
+        self._result.curated_nodes       = curated_nodes
+
     def _export_fcs(self) -> None:
+        self._inject_human_curation()
         if self._result is None or not self._result.success:
             QMessageBox.information(self, "Info", "Aucun résultat à exporter.")
             return
@@ -2880,6 +3598,7 @@ class FlowSomAnalyzerPro(QMainWindow):
                 QMessageBox.critical(self, "Erreur", str(e))
 
     def _export_csv(self) -> None:
+        self._inject_human_curation()
         if self._result is None or not self._result.success:
             QMessageBox.information(self, "Info", "Aucun résultat à exporter.")
             return
@@ -2900,16 +3619,71 @@ class FlowSomAnalyzerPro(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Erreur", str(e))
 
+        # ── Dashboard MRD (toujours déclenché, append-safe en mode batch) ──
+        self._export_mrd_dashboard()
+
+    def _export_mrd_dashboard(self) -> None:
+        """
+        Exporte dashboard_metrics.csv avec les valeurs algorithmiques + validées.
+        Silencieux en cas d'erreur (ne doit pas bloquer l'utilisateur).
+        """
+        if self._result is None or self._output_dir is None:
+            return
+        try:
+            from flowsom_pipeline_pro.src.services.export_service import ExportService
+            exporter = ExportService(
+                config=self._config,
+                output_dir=self._output_dir,
+                timestamp=getattr(self._result, "timestamp", "")[:15].replace(":", "").replace("-", ""),
+                patho_name=getattr(self._result, "patho_stem", None),
+                patho_date=getattr(self._result, "patho_date", None),
+            )
+            # Récupère les gauges calculées par HomeTab si disponibles
+            gauges = getattr(self._home_tab, "_last_gauges_data", None) or []
+            dash_path = exporter.export_mrd_dashboard_csv(self._result, gauges=gauges)
+            if dash_path:
+                self._log(f" Dashboard MRD exporté : {dash_path}")
+        except Exception as exc:
+            _logger.warning("_export_mrd_dashboard: %s", exc)
+
     def _open_html_report(self) -> None:
+        self._inject_human_curation()
         if self._result is None:
             QMessageBox.information(self, "Info", "Aucun résultat disponible.")
             return
         output_files = self._result.output_files or {}
         html_path = output_files.get("html_report")
-        if html_path and Path(html_path).exists():
-            webbrowser.open(str(Path(html_path).resolve()))
-        else:
+        if not (html_path and Path(html_path).exists()):
             QMessageBox.information(self, "Info", "Rapport HTML non trouvé.")
+            return
+
+        # ── Patch validation experte dans le HTML existant ───────────────
+        # Dès que le biologiste a interagi avec la grille (curated_nodes is not
+        # None, même liste vide = tous écartés), on met à jour le bandeau MRD
+        # dans le fichier HTML sans régénérer les figures.
+        if self._result.curated_nodes is not None:
+            try:
+                from flowsom_pipeline_pro.src.visualization.html_report import (
+                    patch_curated_banner_in_html,
+                )
+                gauges = getattr(self._home_tab, "_last_gauges_data", None) or []
+                ok = patch_curated_banner_in_html(
+                    html_path,
+                    curated_mrd_percent=self._result.curated_mrd_percent or 0.0,
+                    curated_mrd_cells=self._result.curated_mrd_cells or 0,
+                    curated_nodes=self._result.curated_nodes,
+                    algo_gauges=gauges,
+                )
+                if ok:
+                    self._log(" Rapport HTML mis à jour avec la validation experte.")
+                else:
+                    _logger.warning(
+                        "_open_html_report: patch validation experte échoué"
+                    )
+            except Exception as _patch_err:
+                _logger.warning("_open_html_report patch: %s", _patch_err)
+
+        webbrowser.open(str(Path(html_path).resolve()))
 
     def _open_output_folder(self) -> None:
         output = self.drop_output.path

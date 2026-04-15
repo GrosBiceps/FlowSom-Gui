@@ -379,6 +379,8 @@ class ExportService:
         self_contained: bool = True,
         patho_info: Optional[Dict[str, str]] = None,
         ransac_summary: Optional[Dict[str, Any]] = None,
+        pipeline_result: Optional[Any] = None,
+        algo_gauges: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[str]:
         """
         Génère le rapport HTML complet self-contained.
@@ -411,6 +413,10 @@ class ExportService:
             }
         _viz_cfg_html = getattr(self.config, "visualization", None)
         _html_dpi_mpl = int(getattr(_viz_cfg_html, "pdf_dpi_mpl", 100))
+        _curated_pct   = getattr(pipeline_result, "curated_mrd_percent", None) if pipeline_result else None
+        _curated_cells = getattr(pipeline_result, "curated_mrd_cells",   None) if pipeline_result else None
+        _curated_nodes = getattr(pipeline_result, "curated_nodes",        None) if pipeline_result else None
+
         ok = generate_html_report(
             html_path,
             plotly_figures=plotly_figures,
@@ -427,6 +433,10 @@ class ExportService:
             patho_info=_patho_info,
             dpi_mpl=_html_dpi_mpl,
             ransac_summary=ransac_summary,
+            curated_mrd_percent=_curated_pct,
+            curated_mrd_cells=_curated_cells,
+            curated_nodes=_curated_nodes,
+            algo_gauges=algo_gauges,
         )
 
         return str(html_path) if ok else None
@@ -446,6 +456,8 @@ class ExportService:
         export_paths: Optional[Dict[str, str]] = None,
         patho_info: Optional[Dict[str, str]] = None,
         ransac_summary: Optional[Dict[str, Any]] = None,
+        pipeline_result: Optional[Any] = None,
+        algo_gauges: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[str]:
         """
         Génère le rapport PDF A4 complet (même contenu que le HTML).
@@ -469,6 +481,11 @@ class ExportService:
             }
         _viz_cfg = getattr(self.config, "visualization", None)
         _pdf_dpi_mpl = int(getattr(_viz_cfg, "pdf_dpi_mpl", 100))
+        # Extraire les champs de curation depuis pipeline_result si fourni
+        _curated_pct   = getattr(pipeline_result, "curated_mrd_percent", None) if pipeline_result else None
+        _curated_cells = getattr(pipeline_result, "curated_mrd_cells",   None) if pipeline_result else None
+        _curated_nodes = getattr(pipeline_result, "curated_nodes",        None) if pipeline_result else None
+
         return generate_pdf_report(
             pdf_path,
             plotly_figures=plotly_figures,
@@ -485,5 +502,95 @@ class ExportService:
             patho_info=_patho_info,
             dpi_mpl=_pdf_dpi_mpl,
             ransac_summary=ransac_summary,
+            curated_mrd_percent=_curated_pct,
+            curated_mrd_cells=_curated_cells,
+            curated_nodes=_curated_nodes,
+            algo_gauges=algo_gauges,
         )
+
+    def export_mrd_dashboard_csv(
+        self,
+        pipeline_result: Any,
+        *,
+        gauges: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[str]:
+        """
+        Exporte le fichier ``dashboard_metrics.csv`` avec une ligne par patient.
+
+        Colonnes produites :
+            Timestamp, Fichier_Patho, Date_Patho,
+            MRD_JF (%), MRD_Flo (%), MRD_ELN (%),
+            MRD_Algo_Best (%),          ← meilleur résultat algorithmique
+            MRD_Curated (%),            ← résultat après curation experte (ou «» si absent)
+            N_MRD_Cells_Algo,
+            N_MRD_Cells_Curated,        ← cellules après curation (ou «» si absent)
+            N_Curated_Nodes,            ← nœuds validés par l'expert (ou «» si absent)
+            N_Cells_Total
+
+        Args:
+            pipeline_result:  Instance de PipelineResult contenant mrd_result
+                              et les champs curated_*.
+            gauges:           Liste de dicts ``{method, pct, n_cells}`` déjà
+                              calculés par HomeTab._recompute_gauges_with_denom().
+                              Si None, les colonnes MRD_JF/Flo/ELN restent vides.
+
+        Returns:
+            Chemin absolu du CSV écrit, ou None si erreur.
+        """
+        try:
+            mrd = getattr(pipeline_result, "mrd_result", None)
+            gauges = gauges or []
+
+            # ── Valeurs algorithmiques brutes ──────────────────────────
+            algo_by_method: Dict[str, float] = {
+                g["method"]: float(g.get("pct", 0.0)) for g in gauges
+            }
+            algo_best = max(algo_by_method.values(), default=0.0)
+
+            n_algo_cells = 0
+            if mrd is not None:
+                n_algo_cells = max(
+                    getattr(mrd, "mrd_cells_jf",  0),
+                    getattr(mrd, "mrd_cells_flo", 0),
+                )
+
+            n_total = getattr(pipeline_result, "n_cells", 0)
+
+            # ── Valeurs curées (optionnelles) ──────────────────────────
+            curated_pct   = pipeline_result.curated_mrd_percent  # float | None
+            curated_cells = pipeline_result.curated_mrd_cells    # int   | None
+            curated_nodes_list = pipeline_result.curated_nodes or []
+            n_curated_nodes = len(curated_nodes_list) if curated_nodes_list else (
+                "" if curated_pct is None else 0
+            )
+
+            row: Dict[str, Any] = {
+                "Timestamp":            pipeline_result.timestamp,
+                "Fichier_Patho":        self.patho_name or "",
+                "Date_Patho":           self.patho_date or "",
+                "MRD_JF (%)":           algo_by_method.get("JF",  ""),
+                "MRD_Flo (%)":          algo_by_method.get("Flo", ""),
+                "MRD_ELN (%)":          algo_by_method.get("ELN", ""),
+                "MRD_Algo_Best (%)":    round(algo_best, 6) if algo_best else "",
+                "MRD_Curated (%)":      round(curated_pct, 6) if curated_pct is not None else "",
+                "N_MRD_Cells_Algo":     n_algo_cells or "",
+                "N_MRD_Cells_Curated":  curated_cells if curated_cells is not None else "",
+                "N_Curated_Nodes":      n_curated_nodes,
+                "N_Cells_Total":        n_total,
+            }
+
+            csv_path = self._dirs["csv"] / f"dashboard_metrics_{self.timestamp}.csv"
+
+            # Append si le fichier existe déjà (mode batch), sinon création
+            mode = "a" if csv_path.exists() else "w"
+            header = not csv_path.exists()
+            pd.DataFrame([row]).to_csv(csv_path, mode=mode, header=header, index=False)
+
+            pipeline_result.output_files["csv_dashboard"] = str(csv_path)
+            _logger.info("Dashboard CSV exporté : %s", csv_path.name)
+            return str(csv_path)
+
+        except Exception as exc:
+            _logger.error("export_mrd_dashboard_csv: %s", exc)
+            return None
 

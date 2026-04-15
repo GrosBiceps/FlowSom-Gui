@@ -206,6 +206,82 @@ tr:hover { background: #edf2f7; }
     .grid-3 { grid-template-columns: 1fr; }
     .toc ul { columns: 1; }
 }
+/* ── Bandeau MRD Validée par l'Expert ── */
+.mrd-curated-banner {
+    background: linear-gradient(135deg, #f0fdf4, #dcfce7);
+    border: 2px solid #86efac;
+    border-left: 6px solid #16a34a;
+    border-radius: 10px;
+    padding: 18px 22px 14px 22px;
+    margin-bottom: 18px;
+    box-shadow: 0 2px 10px rgba(22,163,74,0.13);
+}
+.mrd-curated-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.mrd-curated-icon {
+    font-size: 1.5em;
+    color: #16a34a;
+    font-weight: 900;
+}
+.mrd-curated-label {
+    font-size: 0.75em;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    color: #166534;
+    text-transform: uppercase;
+}
+.mrd-curated-value {
+    font-size: 2.4em;
+    font-weight: 900;
+    color: #15803d;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    margin-bottom: 4px;
+}
+.mrd-curated-sub {
+    font-size: 0.9em;
+    color: #4b5563;
+    margin-bottom: 12px;
+}
+.mrd-algo-trace {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #bbf7d0;
+}
+.mrd-algo-title {
+    font-size: 0.72em;
+    font-weight: 700;
+    color: #6b7280;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+}
+.mrd-algo-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82em;
+}
+.mrd-algo-table th {
+    background: #dcfce7;
+    color: #166534;
+    font-weight: 700;
+    padding: 4px 10px;
+    border: 1px solid #bbf7d0;
+    text-align: left;
+}
+.mrd-algo-table td {
+    padding: 3px 10px;
+    border: 1px solid #d1fae5;
+    color: #374151;
+}
+.mrd-algo-table tr:nth-child(even) td { background: #f0fdf4; }
+.mrd-algo-pos { color: #b91c1c; font-weight: 700; }
+.mrd-algo-neg { color: #166534; }
+
 .patho-banner {
     background: linear-gradient(135deg, #fff3cd, #ffe082);
     border: 2px solid #f59e0b;
@@ -261,6 +337,11 @@ def generate_html_report(
     patho_info: Optional[Dict[str, str]] = None,
     dpi_mpl: int = 100,
     ransac_summary: Optional[Dict[str, Any]] = None,
+    # ── Curation humaine (optionnelle) ──────────────────────────────────
+    curated_mrd_percent: Optional[float] = None,
+    curated_mrd_cells:   Optional[int]   = None,
+    curated_nodes:       Optional[List[Dict[str, Any]]] = None,
+    algo_gauges:         Optional[List[Dict[str, Any]]] = None,
 ) -> bool:
     """
     Génère un rapport HTML complet avec toutes les visualisations.
@@ -305,6 +386,54 @@ def generate_html_report(
     n_markers = summary_stats.get("n_markers", len(markers))
     n_files = summary_stats.get("n_files", 0)
     n_clusters = summary_stats.get("n_clusters", 0)
+
+    # ── Bandeau MRD Validée par l'Expert ─────────────────────────────────
+    _curated_banner = "<!-- MRD_CURATED_BANNER_START --><!-- MRD_CURATED_BANNER_END -->"
+    if curated_mrd_percent is not None:
+        _c_pct_str = f"{curated_mrd_percent:.4f} %"
+        _c_cells_str = f"{curated_mrd_cells:,} cellules" if curated_mrd_cells else ""
+        _c_nodes = curated_nodes or []
+        _c_nodes_str = f"{len(_c_nodes)} nœud(s) validé(s)" if _c_nodes else ""
+        _c_sub = "  ·  ".join(p for p in [_c_cells_str, _c_nodes_str] if p)
+
+        # Tableau de traçabilité algorithmique
+        _algo_rows_html = ""
+        for g in (algo_gauges or []):
+            _status = "POSITIF" if (g.get("positive") or g.get("low_level")) else "négatif"
+            _status_cls = "mrd-algo-pos" if g.get("positive") else "mrd-algo-neg"
+            _algo_rows_html += (
+                f"<tr>"
+                f"<td>{g.get('method','?')}</td>"
+                f"<td>{g.get('pct', 0.0):.4f} %</td>"
+                f"<td>{g.get('n_cells', 0):,}</td>"
+                f'<td class="{_status_cls}">{_status}</td>'
+                f"</tr>"
+            )
+        _algo_table_html = ""
+        if _algo_rows_html:
+            _algo_table_html = f"""
+            <div class="mrd-algo-trace">
+                <div class="mrd-algo-title">Valeurs algorithmiques brutes — traçabilité</div>
+                <table class="mrd-algo-table">
+                    <thead><tr>
+                        <th>Méthode</th><th>MRD Algo (%)</th>
+                        <th>Cellules</th><th>Statut</th>
+                    </tr></thead>
+                    <tbody>{_algo_rows_html}</tbody>
+                </table>
+            </div>"""
+
+        _curated_banner = f"""<!-- MRD_CURATED_BANNER_START -->
+<div class="mrd-curated-banner">
+  <div class="mrd-curated-header">
+    <span class="mrd-curated-icon">&#10003;</span>
+    <span class="mrd-curated-label">MRD VALIDÉE PAR L'EXPERT</span>
+  </div>
+  <div class="mrd-curated-value">{_c_pct_str}</div>
+  <div class="mrd-curated-sub">{_c_sub}</div>
+  {_algo_table_html}
+</div>
+<!-- MRD_CURATED_BANNER_END -->"""
 
     # ── Encadré moelle pathologique ───────────────────────────────────────
     _patho_banner = ""
@@ -570,6 +699,7 @@ def generate_html_report(
 
 <div class="container">
 
+{_curated_banner}
 {_patho_banner}
 <div class="toc">
     <h3>Table des matières</h3>
@@ -703,3 +833,124 @@ def plotly_to_html_div(fig_plotly: Any, fig_id: str = "") -> str:
         Chaîne HTML contenant le div Plotly.
     """
     return _plotly_to_html_div(fig_plotly, fig_id)
+
+
+_BANNER_START = "<!-- MRD_CURATED_BANNER_START -->"
+_BANNER_END   = "<!-- MRD_CURATED_BANNER_END -->"
+
+
+def patch_curated_banner_in_html(
+    html_path: Any,
+    curated_mrd_percent: float,
+    curated_mrd_cells: Optional[int] = None,
+    curated_nodes: Optional[List[Dict[str, Any]]] = None,
+    algo_gauges: Optional[List[Dict[str, Any]]] = None,
+) -> bool:
+    """
+    Remplace le bandeau MRD Validée par l'Expert dans un rapport HTML existant
+    sans régénérer l'intégralité du fichier.
+
+    Cherche les marqueurs ``<!-- MRD_CURATED_BANNER_START -->`` /
+    ``<!-- MRD_CURATED_BANNER_END -->`` déjà présents dans le HTML et remplace
+    tout ce qui se trouve entre eux (inclus) par le nouveau bandeau.
+
+    Args:
+        html_path:            Chemin du fichier HTML à patcher (str ou Path).
+        curated_mrd_percent:  Pourcentage MRD curé.
+        curated_mrd_cells:    Nombre de cellules MRD curées.
+        curated_nodes:        Liste des nœuds validés par l'expert.
+        algo_gauges:          Gauges algorithmiques brutes pour la traçabilité.
+
+    Returns:
+        True si le patch a été appliqué avec succès, False sinon.
+    """
+    from pathlib import Path as _Path
+
+    path = _Path(html_path)
+    if not path.exists():
+        return False
+
+    try:
+        content = path.read_text(encoding="utf-8")
+    except Exception:
+        return False
+
+    # ── Construction du nouveau bandeau ──────────────────────────────────
+    _c_pct_str   = f"{curated_mrd_percent:.4f} %"
+    _c_cells_str = f"{curated_mrd_cells:,} cellules" if curated_mrd_cells else ""
+    _c_nodes     = curated_nodes or []
+    _n_kept      = len(_c_nodes)
+    _n_discarded = ""  # calculé si on a l'info
+    _c_nodes_str = f"{_n_kept} nœud(s) validé(s)" if _c_nodes else "Tous les nœuds écartés"
+    _c_sub       = "  ·  ".join(p for p in [_c_cells_str, _c_nodes_str] if p)
+
+    _algo_rows_html = ""
+    for g in (algo_gauges or []):
+        _status     = "POSITIF" if (g.get("positive") or g.get("low_level")) else "négatif"
+        _status_cls = "mrd-algo-pos" if g.get("positive") else "mrd-algo-neg"
+        _algo_rows_html += (
+            f"<tr>"
+            f"<td>{g.get('method', '?')}</td>"
+            f"<td>{g.get('pct', 0.0):.4f} %</td>"
+            f"<td>{g.get('n_cells', 0):,}</td>"
+            f'<td class="{_status_cls}">{_status}</td>'
+            f"</tr>"
+        )
+    _algo_table_html = ""
+    if _algo_rows_html:
+        _algo_table_html = f"""
+            <div class="mrd-algo-trace">
+                <div class="mrd-algo-title">Valeurs algorithmiques brutes — traçabilité</div>
+                <table class="mrd-algo-table">
+                    <thead><tr>
+                        <th>Méthode</th><th>MRD Algo (%)</th>
+                        <th>Cellules</th><th>Statut</th>
+                    </tr></thead>
+                    <tbody>{_algo_rows_html}</tbody>
+                </table>
+            </div>"""
+
+    new_banner = (
+        f"{_BANNER_START}\n"
+        f'<div class="mrd-curated-banner">\n'
+        f'  <div class="mrd-curated-header">\n'
+        f'    <span class="mrd-curated-icon">&#10003;</span>\n'
+        f'    <span class="mrd-curated-label">MRD VALIDÉE PAR L\'EXPERT</span>\n'
+        f'  </div>\n'
+        f'  <div class="mrd-curated-value">{_c_pct_str}</div>\n'
+        f'  <div class="mrd-curated-sub">{_c_sub}</div>\n'
+        f'  {_algo_table_html}\n'
+        f'</div>\n'
+        f"{_BANNER_END}"
+    )
+
+    # ── Remplacement ou insertion ─────────────────────────────────────────
+    # Cas 1 : les marqueurs sont présents (rapport généré avec cette version)
+    if _BANNER_START in content and _BANNER_END in content:
+        idx_start = content.index(_BANNER_START)
+        idx_end   = content.index(_BANNER_END) + len(_BANNER_END)
+        patched   = content[:idx_start] + new_banner + content[idx_end:]
+
+    # Cas 2 : rapport généré avant l'ajout des marqueurs → insertion
+    # juste avant la balise <div class="toc"> ou, en dernier recours, après <div class="container">
+    else:
+        _INSERTION_ANCHORS = [
+            '<div class="toc">',
+            '<div class="toc" ',
+            '<div class="container">',
+        ]
+        inserted = False
+        for anchor in _INSERTION_ANCHORS:
+            idx = content.find(anchor)
+            if idx != -1:
+                patched = content[:idx] + new_banner + "\n" + content[idx:]
+                inserted = True
+                break
+        if not inserted:
+            return False
+
+    try:
+        path.write_text(patched, encoding="utf-8")
+        return True
+    except Exception:
+        return False

@@ -2320,6 +2320,33 @@ class FlowSOMPipeline:
                 samples.extend(all_samples)
                 _logger.info("  Dossier unique: %d fichiers", len(all_samples))
 
+        # ── Renommage manuel des colonnes FCS (depuis la GUI) ──────────────
+        # Appliqué avant toute harmonisation automatique pour permettre à
+        # l'utilisateur de mapper ses noms Kaluza vers les noms cibles.
+        col_rename_map: dict = dict(
+            getattr(config, "_extra", {}).get("column_rename_map", {}) or {}
+        )
+        if col_rename_map:
+            n_renamed = 0
+            for s in samples:
+                # Ne renommer que les colonnes réellement présentes
+                effective = {
+                    src: dst
+                    for src, dst in col_rename_map.items()
+                    if src in s.data.columns and src != dst
+                }
+                if effective:
+                    s.data.rename(columns=effective, inplace=True)
+                    n_renamed += len(effective)
+            if n_renamed:
+                _logger.info(
+                    "Renommage GUI : %d colonne(s) renommée(s) sur %d fichier(s) "
+                    "(mapping: %s)",
+                    n_renamed,
+                    len(samples),
+                    col_rename_map,
+                )
+
         return samples
 
     # ------------------------------------------------------------------

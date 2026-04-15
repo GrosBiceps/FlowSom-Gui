@@ -1008,4 +1008,228 @@ QMessageBox QPushButton {
     min-width: 80px;
     padding: 8px 16px;
 }
+
+/* ════════════════════════════════════════════════════════════════════
+   DEEP MEDICAL CLARITY — Écran 1 : Import (Drop Zones enrichies)
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Drop zone avec animation de survol bleue */
+QLabel#dropZone {
+    background: rgba(0, 163, 255, 0.03);
+    border: 2px dashed rgba(0, 163, 255, 0.22);
+    border-radius: 10px;
+    color: #45475a;
+    font-size: 10pt;
+    padding: 28px 20px;
+    qproperty-alignment: AlignCenter;
+}
+
+QLabel#dropZone[dragOver="true"] {
+    background: rgba(0, 163, 255, 0.10);
+    border: 2px dashed #00A3FF;
+    color: #cdd6f4;
+}
+
+QLabel#dropZoneOk {
+    background: rgba(46, 204, 113, 0.06);
+    border: 2px solid rgba(46, 204, 113, 0.42);
+    border-radius: 10px;
+    color: #2ECC71;
+    font-size: 10pt;
+    padding: 28px 20px;
+    qproperty-alignment: AlignCenter;
+}
+
+/* Table de prévisualisation FCS — lignes alternées nettes */
+QTableWidget#fcsPreviewTable {
+    background: #13131f;
+    border: 1px solid rgba(0, 163, 255, 0.12);
+    border-radius: 10px;
+    gridline-color: rgba(0, 163, 255, 0.04);
+    alternate-background-color: #1a1a2a;
+}
+
+QTableWidget#fcsPreviewTable::item {
+    padding: 8px 14px;
+    color: #b8c2e8;
+    border-bottom: 1px solid rgba(0, 163, 255, 0.04);
+}
+
+QTableWidget#fcsPreviewTable::item[status="ok"] {
+    color: #2ECC71;
+}
+
+QTableWidget#fcsPreviewTable::item[status="warn"] {
+    color: #F39C12;
+}
+
+QTableWidget#fcsPreviewTable QHeaderView::section {
+    background: #181828;
+    color: #4a4c65;
+    padding: 9px 14px;
+    border: none;
+    border-bottom: 1px solid rgba(0, 163, 255, 0.10);
+    font-weight: 700;
+    font-size: 8pt;
+    letter-spacing: 0.08em;
+}
+
+/* Badge de statut dans la table (Sain / Patho / Sortie) */
+QLabel#statusBadgeOk {
+    background: rgba(46, 204, 113, 0.14);
+    color: #2ECC71;
+    border: 1px solid rgba(46, 204, 113, 0.30);
+    border-radius: 5px;
+    padding: 2px 8px;
+    font-size: 8pt;
+    font-weight: 700;
+}
+
+QLabel#statusBadgePatho {
+    background: rgba(231, 76, 60, 0.14);
+    color: #E74C3C;
+    border: 1px solid rgba(231, 76, 60, 0.30);
+    border-radius: 5px;
+    padding: 2px 8px;
+    font-size: 8pt;
+    font-weight: 700;
+}
+
+QLabel#statusBadgeWarn {
+    background: rgba(243, 156, 18, 0.14);
+    color: #F39C12;
+    border: 1px solid rgba(243, 156, 18, 0.30);
+    border-radius: 5px;
+    padding: 2px 8px;
+    font-size: 8pt;
+    font-weight: 700;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   DEEP MEDICAL CLARITY — Écran 2 : SettingsCard (Paramétrage)
+   ════════════════════════════════════════════════════════════════════ */
+
+QFrame#settingsCard {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(35, 37, 55, 0.95),
+        stop:1 rgba(27, 29, 44, 0.90));
+    border: 1px solid rgba(137, 180, 250, 0.12);
+    border-top: 1px solid rgba(0, 163, 255, 0.25);
+    border-radius: 12px;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   DEEP MEDICAL CLARITY — Écran 3 : Exécution (ProgressBar + Console)
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Barre de progression principale — gradient bleu lumineux */
+QProgressBar#pipelineProgress {
+    border: none;
+    border-radius: 10px;
+    background: rgba(10, 10, 20, 0.9);
+    text-align: center;
+    color: #cdd6f4;
+    font-weight: 700;
+    font-size: 9pt;
+    min-height: 20px;
+    max-height: 20px;
+}
+
+QProgressBar#pipelineProgress::chunk {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0   #0066CC,
+        stop:0.3 #00A3FF,
+        stop:0.7 #00C8FF,
+        stop:1   #00A3FF);
+    border-radius: 10px;
+    /* Effet de shimmer simulé via gradient animé */
+}
+
+/* Indicateur textuel d'étape */
+QLabel#pipelineStepLabel {
+    color: #4a5070;
+    font-size: 10pt;
+    font-weight: 500;
+    padding: 4px 0;
+}
+
+QLabel#pipelineStepLabel[running="true"] {
+    color: #00A3FF;
+}
+
+QLabel#pipelineStepLabel[done="true"] {
+    color: #2ECC71;
+}
+
+QLabel#pipelineStepLabel[error="true"] {
+    color: #E74C3C;
+}
+
+/* Console log — surcharge pour objName logConsole */
+QPlainTextEdit#logConsole {
+    background: #08080f;
+    border: 1px solid rgba(0, 163, 255, 0.10);
+    border-radius: 10px;
+    color: #7ec87a;
+    padding: 14px 16px;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 9pt;
+    selection-background-color: rgba(0, 163, 255, 0.28);
+}
+
+/* Bouton GARDER (succès) */
+QPushButton#keepBtn {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(46, 204, 113, 0.85),
+        stop:1 rgba(36, 168, 90, 0.90));
+    border: 1px solid rgba(46, 204, 113, 0.50);
+    border-bottom: 1px solid rgba(20, 120, 60, 0.5);
+    border-radius: 8px;
+    color: #0a2010;
+    font-weight: 700;
+    font-size: 10pt;
+    padding: 10px 28px;
+    min-height: 36px;
+}
+
+QPushButton#keepBtn:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(56, 224, 123, 0.95),
+        stop:1 rgba(46, 204, 113, 1.0));
+    border-color: rgba(56, 224, 123, 0.70);
+}
+
+QPushButton#keepBtn:pressed {
+    background: rgba(30, 150, 80, 0.95);
+    padding-top: 11px;
+    padding-bottom: 9px;
+}
+
+/* Bouton ÉCARTER (danger) */
+QPushButton#discardBtn {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(231, 76, 60, 0.85),
+        stop:1 rgba(192, 57, 43, 0.90));
+    border: 1px solid rgba(231, 76, 60, 0.50);
+    border-bottom: 1px solid rgba(140, 30, 20, 0.5);
+    border-radius: 8px;
+    color: #1a0505;
+    font-weight: 700;
+    font-size: 10pt;
+    padding: 10px 28px;
+    min-height: 36px;
+}
+
+QPushButton#discardBtn:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(255, 90, 70, 0.95),
+        stop:1 rgba(231, 76, 60, 1.0));
+    border-color: rgba(255, 90, 70, 0.70);
+}
+
+QPushButton#discardBtn:pressed {
+    background: rgba(165, 40, 30, 0.95);
+    padding-top: 11px;
+    padding-bottom: 9px;
+}
 """

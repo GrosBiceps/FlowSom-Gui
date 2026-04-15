@@ -38,7 +38,7 @@ matplotlib.use("Qt5Agg")
 
 from flowsom_pipeline_pro.gui.widgets.mrd_gauge import MRDGauge
 from flowsom_pipeline_pro.gui.widgets.mrd_node_table import MRDNodeTable
-from flowsom_pipeline_pro.gui.adapters.mrd_adapter import adapt_mrd_result
+from flowsom_pipeline_pro.gui.adapters.mrd_adapter import adapt_mrd_result, adapt_all_nodes
 
 
 _SURFACE0 = "#313244"
@@ -284,21 +284,39 @@ class HomeTab(QWidget):
         # ── Gauges MRD ──
         self._gauge_container = QWidget()
         self._gauge_container.setStyleSheet("background: transparent;")
+        # Fixed verticalement : les gauges ont une hauteur naturelle et ne
+        # doivent JAMAIS voler de l'espace à la grille de validation en dessous.
+        self._gauge_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._gauge_row = QHBoxLayout(self._gauge_container)
         self._gauge_row.setContentsMargins(0, 0, 0, 0)
         self._gauge_row.setSpacing(12)
-        self._results_layout.addWidget(self._gauge_container)
+        # stretch=0 : prend uniquement sa hauteur naturelle (sizeHint)
+        self._results_layout.addWidget(self._gauge_container, 0)
 
         # ── Résumé clinique ──
         self._summary_card = self._build_summary_card()
-        self._results_layout.addWidget(self._summary_card)
+        # stretch=0 : hauteur fixe, ne compresse pas la grille
+        self._results_layout.addWidget(self._summary_card, 0)
 
-        # ── Tableau nœuds MRD ──
+        # ── Tableau nœuds MRD (grille de validation) ──
         self._node_table = MRDNodeTable()
         self._node_table.combo_filter.currentIndexChanged.connect(
             self._on_node_filter_changed
         )
-        self._results_layout.addWidget(self._node_table)
+        self._node_table.curated_ratio_changed.connect(
+            self._on_curated_ratio_changed
+        )
+        self._node_table.manually_added_nodes_changed.connect(
+            self._on_manually_added_nodes_changed
+        )
+        # Expanding/Expanding : la grille de validation réclame tout l'espace
+        # vertical restant. setMinimumHeight est le filet de sécurité absolu
+        # (déjà défini dans MRDNodeTable.__init__, répété ici par cohérence).
+        self._node_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._node_table.setMinimumHeight(400)
+        # stretch=1 : reçoit tout l'espace vertical non attribué par les
+        # widgets à stretch=0 au-dessus (patient_card, denom_bar, gauges, summary).
+        self._results_layout.addWidget(self._node_table, 1)
 
         # ── Mini Spider Plots des nœuds MRD ──
         self._spider_section = QWidget()
@@ -332,10 +350,13 @@ class HomeTab(QWidget):
         spider_scroll.setWidget(self._spider_grid_widget)
         spider_v.addWidget(spider_scroll)
 
-        self._results_layout.addWidget(self._spider_section)
+        # stretch=0 : la section spider est masquée par défaut et ne prend de
+        # place que quand elle est visible ; elle ne doit pas voler d'espace.
+        self._results_layout.addWidget(self._spider_section, 0)
         self._spider_section.hide()
 
-        self._results_layout.addStretch()
+        # Pas de addStretch() ici : le stretch=1 sur _node_table absorbe déjà
+        # tout l'espace résiduel. Un stretch supplémentaire comprimerait la grille.
 
         # Données MFI stockées pour les spider plots
         self._mfi_data: Any = None
@@ -598,6 +619,7 @@ class HomeTab(QWidget):
 
         self._update_patient_info(data["patient_info"])
         self._update_gauges(data["gauges"])
+        self._last_gauges_data: List[Dict] = data["gauges"]   # exposé pour export dashboard
         self._update_summary(data["gauges"], data["patient_info"])
         self._update_node_table(data["nodes"], data["gauges"])
 
@@ -686,12 +708,82 @@ class HomeTab(QWidget):
             self.lbl_clinical_detail.setText("  ·  ".join(details))
 
     def _update_node_table(self, nodes: List[Dict], gauges: List[Dict]) -> None:
-        """Charge le tableau des nœuds MRD."""
+        """Charge la grille de validation des nœuds MRD."""
         available_methods = [g["method"] for g in gauges]
         self._mrd_nodes_all = nodes
-        self._node_table.load_nodes(nodes, available_methods)
+
+        # Dénominateur : total cellules viables (patho) pour le ratio validé
+        mrd = self._raw_mrd_result
+        n_pre = getattr(mrd, "n_patho_pre_cd45", 0) if mrd else 0
+        total_viable = n_pre if n_pre > 0 else (
+            getattr(mrd, "total_cells_patho", 0) if mrd else 0
+        )
+
+        # Fournir TOUS les nœuds SOM (y compris non-MRD) à ExpertFocusDialog
+        all_patient_nodes = adapt_all_nodes(self._raw_mrd_result)
+        self._node_table.set_all_patient_nodes(
+            all_patient_nodes if all_patient_nodes else nodes
+        )
+
+        self._node_table.load_nodes(
+            nodes,
+            available_methods,
+            mfi_data=self._mfi_data,
+            marker_cols=self._marker_cols,
+            total_viable_cells=max(total_viable, 1),
+        )
         # Afficher les spider plots pour la sélection initiale
         self._refresh_spider_plots(nodes, method_label="")
+
+    def _on_curated_ratio_changed(
+        self, method: str, ratio: float, n_mrd_cells: int
+    ) -> None:
+        """
+        Slot connecté à MRDNodeTable.curated_ratio_changed.
+
+        Met à jour (ou crée) une jauge "Validé" reflétant le ratio
+        recalculé après validation experte des nœuds.
+        Toutes les gauges existantes JF/Flo/ELN sont conservées.
+        """
+        # Chercher une jauge "Validé" déjà présente
+        curated_gauge: Optional[MRDGauge] = None
+        for g in self._gauges:
+            if g.method_name == "Curated":
+                curated_gauge = g
+                break
+
+        if curated_gauge is None:
+            curated_gauge = MRDGauge(method_name="Validé")
+            curated_gauge.setMinimumWidth(220)
+            curated_gauge.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            self._gauge_row.addWidget(curated_gauge)
+            self._gauges.append(curated_gauge)
+
+        curated_gauge.update_data({
+            "pct":      ratio,
+            "n_cells":  n_mrd_cells,
+            "n_nodes":  sum(
+                1 for c in self._node_table._cards if c.is_included
+            ),
+            "positive": ratio > 0.01,
+            "low_level": 0 < ratio <= 0.01,
+            "positivity_threshold": 0.01,
+        })
+
+    def _on_manually_added_nodes_changed(self, manual_nodes: list) -> None:
+        """
+        Slot connecté à MRDNodeTable.manually_added_nodes_changed.
+
+        Appelé chaque fois que l'utilisateur valide des ajouts manuels
+        via ExpertFocusDialog. Peut être étendu pour :
+          - persister les ajouts dans un fichier de session,
+          - mettre à jour un indicateur visuel dans HomeTab,
+          - recalculer les spider plots.
+        """
+        # Rafraîchir les spider plots pour inclure les nœuds manuels
+        if manual_nodes:
+            all_curated = self._node_table.get_human_curated_results()
+            self._refresh_spider_plots(all_curated, method_label="Manuel")
 
     # ------------------------------------------------------------------
     # Toggle dénominateur MRD

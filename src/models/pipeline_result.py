@@ -63,6 +63,13 @@ class PipelineResult:
     patho_date: Optional[str] = None         # Date du prélèvement extraite du FCS (format YYYY-MM-DD)
     node_mfi_matrix: Optional[pd.DataFrame] = None  # MFI médiane par nœud SOM (index=node_id int, cols=markers)
 
+    # ── Curation humaine (optionnelle) ─────────────────────────────────
+    # Renseigné par HomeTab._inject_human_curation() avant tout export.
+    # Si None : l'export utilise les valeurs algorithmiques brutes.
+    curated_mrd_percent: Optional[float] = None   # MRD re-calculée après curation experte (%)
+    curated_mrd_cells:   Optional[int]   = None   # Nombre de cellules MRD après curation
+    curated_nodes:       Optional[List[Dict[str, Any]]] = None  # Nœuds validés par l'expert
+
     # ------------------------------------------------------------------
     # Accès
     # ------------------------------------------------------------------
@@ -192,6 +199,16 @@ class PipelineResult:
             "config": self.config_snapshot,
             "warnings": self.warnings,
         }
+        # Curation humaine — ajoutée uniquement si renseignée
+        if self.curated_mrd_percent is not None:
+            meta["human_curation"] = {
+                "curated_mrd_percent": self.curated_mrd_percent,
+                "curated_mrd_cells":   self.curated_mrd_cells,
+                "n_curated_nodes":     len(self.curated_nodes) if self.curated_nodes else 0,
+                "curated_node_ids": [
+                    n.get("node_id") for n in (self.curated_nodes or [])
+                ],
+            }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2, ensure_ascii=False, default=str)
         self.output_files["metadata_json"] = str(path)

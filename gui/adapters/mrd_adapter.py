@@ -117,6 +117,39 @@ def adapt_mrd_result(result: Any, method_used: str = "all") -> Dict[str, Any]:
     }
 
 
+def adapt_all_nodes(mrd: Any) -> List[Dict[str, Any]]:
+    """
+    Retourne la liste de TOUS les nœuds SOM patients, y compris ceux non
+    retenus par JF / Flo / ELN, pour alimenter ExpertFocusDialog.
+
+    Accepte directement un objet MRDResult (self._raw_mrd_result dans HomeTab),
+    contrairement à adapt_mrd_result() qui reçoit un PipelineResult.
+
+    Chaque dict contient les mêmes clés que adapt_mrd_result() avec les flags
+    is_mrd_jf / is_mrd_flo / is_mrd_eln à False pour les nœuds non sélectionnés.
+    """
+    if mrd is None:
+        return []
+
+    all_nodes: List[Dict[str, Any]] = []
+    for node in getattr(mrd, "per_node", []):
+        all_nodes.append({
+            "node_id":          node.cluster_id,
+            "n_cells":          node.n_cells_total,
+            "n_sain":           node.n_cells_sain,
+            "n_patho":          node.n_cells_patho,
+            "pct_sain":         round(node.pct_sain, 2),
+            "pct_patho":        round(node.pct_patho, 2),
+            "pct_sain_global":  round(node.pct_sain_global, 4),
+            "is_mrd_jf":        node.is_mrd_jf,
+            "is_mrd_flo":       node.is_mrd_flo,
+            "is_mrd_eln":       node.is_mrd_eln,
+        })
+
+    all_nodes.sort(key=lambda n: n["pct_patho"], reverse=True)
+    return all_nodes
+
+
 def _empty_state() -> Dict[str, Any]:
     return {
         "patient_info": {},

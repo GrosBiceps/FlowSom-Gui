@@ -401,6 +401,101 @@ def _cover_page(styles: dict, timestamp: str, n_cells: int = 0,
     return items
 
 
+def _section_mrd_curation(
+    styles: dict,
+    curated_pct: float,
+    algo_gauges: List[Dict[str, Any]],
+    curated_cells: Optional[int],
+    n_curated_nodes: Optional[int],
+    num: int = 0,
+) -> List[Any]:
+    """
+    Encadré « MRD Validée par l'Expert » en tête d'affiche.
+
+    Affiché uniquement quand curated_pct est renseigné.
+    La valeur algorithmique brute reste affichée en-dessous pour la traçabilité.
+    """
+    if not _RL:
+        return []
+
+    _green  = colors.HexColor("#166534")   # texte vert foncé
+    _green_bg = colors.HexColor("#f0fdf4") # fond vert très clair
+    _green_bd = colors.HexColor("#86efac") # bordure vert clair
+    _accent   = colors.HexColor("#15803d") # accent ligne gauche
+
+    items: List[Any] = []
+
+    # ── Titre de section ─────────────────────────────────────────────────────
+    if num:
+        items.append(_section_header("Résultat MRD Validé par l'Expert", num, styles))
+        items.append(Spacer(1, 8))
+
+    from reportlab.lib.styles import ParagraphStyle as _PS
+
+    _pct_style = _PS("mrdCuratedPct",
+        fontName="Helvetica-Bold", fontSize=28,
+        textColor=_accent, alignment=TA_CENTER,
+    )
+    _label_style = _PS("mrdCuratedLabel",
+        fontName="Helvetica-Bold", fontSize=9,
+        textColor=_green, alignment=TA_CENTER, spaceAfter=2,
+    )
+    _sub_style = _PS("mrdCuratedSub",
+        fontName="Helvetica", fontSize=8,
+        textColor=colors.HexColor("#4b5563"), alignment=TA_CENTER,
+    )
+    _trace_style = _PS("mrdAlgoTrace",
+        fontName="Helvetica-Oblique", fontSize=8,
+        textColor=colors.HexColor("#6b7280"), spaceAfter=2,
+    )
+
+    # ── Valeur curée (grande) ─────────────────────────────────────────────────
+    curated_data = [
+        [Paragraph("✓ MRD VALIDÉE PAR L'EXPERT", _label_style)],
+        [Paragraph(f"{curated_pct:.4f} %", _pct_style)],
+    ]
+    sub_parts = []
+    if curated_cells is not None:
+        sub_parts.append(f"{curated_cells:,} cellules MRD")
+    if n_curated_nodes is not None:
+        sub_parts.append(f"{n_curated_nodes} nœud(s) validé(s)")
+    if sub_parts:
+        curated_data.append([Paragraph("  ·  ".join(sub_parts), _sub_style)])
+
+    curated_tbl = Table(curated_data, colWidths=[_PW])
+    curated_tbl.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), _green_bg),
+        ("BOX",           (0, 0), (-1, -1), 1.5, _green_bd),
+        ("LINEBEFORE",    (0, 0), (0, -1),  5,   _accent),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 16),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 16),
+        ("TOPPADDING",    (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+    ]))
+    items.append(curated_tbl)
+    items.append(Spacer(1, 8))
+
+    # ── Valeurs algorithmiques brutes (traçabilité) ───────────────────────────
+    if algo_gauges:
+        items.append(Paragraph(
+            "<b>Valeurs algorithmiques brutes (référence / traçabilité)</b>",
+            _trace_style,
+        ))
+        algo_rows = [
+            [g.get("method", "?"), f"{g.get('pct', 0.0):.4f} %",
+             f"{g.get('n_cells', 0):,}", "POSITIF" if g.get("positive") else "négatif"]
+            for g in algo_gauges
+        ]
+        items.append(_data_table(
+            ["Méthode", "MRD Algo (%)", "Cellules", "Statut"],
+            algo_rows, styles,
+            col_widths=[100, 130, 130, 121],
+        ))
+        items.append(Spacer(1, 6))
+
+    return items
+
+
 def _section_params(styles: dict, params: Dict[str, Any],
                     num: int = 1) -> List[Any]:
     items: List[Any] = [_section_header("Paramètres de l'Analyse", num, styles),
@@ -652,6 +747,11 @@ def generate_pdf_report(
     patho_info: Optional[Dict[str, str]] = None,
     dpi_mpl: int = 100,
     ransac_summary: Optional[Dict[str, Any]] = None,
+    # ── Curation humaine (optionnelle) ──────────────────────────────────
+    curated_mrd_percent: Optional[float] = None,
+    curated_mrd_cells:   Optional[int]   = None,
+    curated_nodes:       Optional[List[Dict[str, Any]]] = None,
+    algo_gauges:         Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[str]:
     """
     Génère un rapport PDF A4 complet reproduisant le rapport HTML.
@@ -732,6 +832,19 @@ def generate_pdf_report(
             ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
         ]))
         story += [patho_tbl, Spacer(1, 16)]
+
+    # ── Encadré MRD Validée par l'Expert (affiché si curation disponible) ────
+    if curated_mrd_percent is not None and _RL:
+        n_nodes_curated = len(curated_nodes) if curated_nodes else None
+        story.extend(_section_mrd_curation(
+            styles,
+            curated_pct=curated_mrd_percent,
+            algo_gauges=algo_gauges or [],
+            curated_cells=curated_mrd_cells,
+            n_curated_nodes=n_nodes_curated,
+            num=0,   # pas de numéro : affiché comme encadré avant §1
+        ))
+        story.append(Spacer(1, 8))
 
     story.extend(_section_params(styles, analysis_params, num=1))
     story.extend(_section_summary(styles, summary_stats,
