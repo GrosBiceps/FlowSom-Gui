@@ -1360,6 +1360,169 @@ def plot_cd45_kde_qc(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Pré-screening CD34 — KDE minimum local (2 pics)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def plot_cd34_kde_prescreening(
+    prescreening_result: Any,
+    output_path: Optional[Path] = None,
+    title: Optional[str] = None,
+) -> Optional[Any]:
+    """
+    QC Pré-screening — Densité KDE CD34 avec seuil minimum local (2 pics).
+
+    Visualise la courbe KDE 1D sur CD34 (espace log), le seuil de séparation
+    CD34−/CD34+ (minimum local entre les deux pics), et les zones colorées.
+    Affiche aussi la comparaison GMM vs KDE en encadré.
+
+    Args:
+        prescreening_result: PrescreeningResult depuis compute_cd34_prescreening().
+        output_path: Chemin de sauvegarde PNG (optionnel).
+        title: Titre du graphique (auto-généré si None).
+
+    Returns:
+        Figure matplotlib ou None si données insuffisantes.
+    """
+    if not _MPL_AVAILABLE:
+        _logger.warning("matplotlib requis pour plot_cd34_kde_prescreening")
+        return None
+
+    ps = prescreening_result
+    x_grid = getattr(ps, "kde_x_grid", None)
+    density = getattr(ps, "kde_density", None)
+
+    if x_grid is None or density is None or len(x_grid) == 0:
+        _logger.warning("plot_cd34_kde_prescreening: pas de données KDE disponibles")
+        return None
+
+    x_grid = np.asarray(x_grid, dtype=np.float64)
+    density = np.asarray(density, dtype=np.float64)
+
+    threshold_log = float(getattr(ps, "kde_threshold_log", 0.0))
+    n_cd34_pos = int(getattr(ps, "kde_n_cd34_pos", 0))
+    n_cd45dim = int(getattr(ps, "n_cd45dim", 0))
+    n_cd34_neg = n_cd45dim - n_cd34_pos
+    ratio_kde = float(getattr(ps, "kde_ratio_pct", 0.0))
+    ratio_gmm = float(getattr(ps, "gmm_ratio_pct", 0.0))
+    ratio_ref = float(getattr(ps, "ratio_pct", 0.0))
+    method_used = str(getattr(ps, "method_used", "KDE"))
+    alert_level = str(getattr(ps, "alert_level", "none"))
+    n_gmm_pos = int(getattr(ps, "gmm_n_cd34_pos", 0))
+
+    if title is None:
+        title = "Pré-screening — KDE CD34 (minimum local entre 2 pics)"
+
+    BG = "#1e1e2f"
+    PANEL = "#16213e"
+    TXT = "#e2e8f0"
+    GRID = "#2d2d4e"
+    RED_F = "#ef4444"
+    GRN_F = "#22c55e"
+    AMBER = "#f9e2af"
+    ORANGE = "#fb923c"
+
+    alert_color = {"high": RED_F, "moderate": ORANGE, "none": GRN_F}.get(alert_level, GRN_F)
+
+    fig, ax = plt.subplots(figsize=(13, 5.5), facecolor=BG)
+    ax.set_facecolor(PANEL)
+
+    # Zones CD34− / CD34+
+    ax.fill_between(
+        x_grid, density,
+        where=(x_grid < threshold_log),
+        color=RED_F, alpha=0.28,
+        label=f"CD34− ({n_cd34_neg:,} | {100 - ratio_kde:.1f}%)",
+        rasterized=True,
+    )
+    ax.fill_between(
+        x_grid, density,
+        where=(x_grid >= threshold_log),
+        color=GRN_F, alpha=0.28,
+        label=f"CD34+ ({n_cd34_pos:,} | {ratio_kde:.1f}%)",
+        rasterized=True,
+    )
+
+    # Courbe KDE
+    ax.plot(x_grid, density, color=TXT, linewidth=2.2,
+            label="KDE CD34 (Silverman + lissage gaussien)", zorder=3, rasterized=True)
+
+    # Ligne de seuil (minimum entre les 2 pics)
+    ax.axvline(
+        threshold_log, color=AMBER, linestyle="--", linewidth=2.5, zorder=4,
+        label=f"Seuil KDE (vallée entre 2 pics) : {threshold_log:.3f}",
+    )
+
+    # Annotation seuil
+    y_ann = density.max() * 0.55
+    ax.annotate(
+        f"  {threshold_log:.3f}",
+        xy=(threshold_log, y_ann),
+        xytext=(threshold_log + (x_grid[-1] - x_grid[0]) * 0.05, y_ann),
+        color=AMBER, fontsize=10, fontweight="bold",
+        arrowprops=dict(arrowstyle="->", color=AMBER, lw=1.5), zorder=5,
+    )
+
+    # Point du minimum local
+    idx_thr = int(np.argmin(np.abs(x_grid - threshold_log)))
+    ax.plot(
+        x_grid[idx_thr], density[idx_thr], "v",
+        color=AMBER, markersize=8, zorder=5,
+        label="Minimum local (vallée)",
+    )
+
+    # Encadré stats
+    stats_text = (
+        f"CD45dim total : {n_cd45dim:,}\n"
+        f"CD34+ KDE     : {n_cd34_pos:,} ({ratio_kde:.1f}%)\n"
+        f"CD34+ GMM     : {n_gmm_pos:,} ({ratio_gmm:.1f}%)\n"
+        f"Ref ({method_used})  : {ratio_ref:.1f}%"
+    )
+    ax.text(
+        0.98, 0.97, stats_text,
+        transform=ax.transAxes, ha="right", va="top",
+        fontsize=8.5, color=TXT, family="monospace",
+        bbox=dict(facecolor=BG, edgecolor=GRID, alpha=0.85, pad=6),
+    )
+
+    # Encadré alerte
+    if alert_level != "none":
+        interp = str(getattr(ps, "interpretation_warning", ""))
+        ax.text(
+            0.02, 0.97, interp,
+            transform=ax.transAxes, ha="left", va="top",
+            fontsize=8.5, color=alert_color, style="italic",
+            bbox=dict(facecolor=BG, edgecolor=alert_color, alpha=0.85, pad=5),
+        )
+
+    ax.set_xlabel("CD34 (espace logicle / arcsinh)", color=TXT, fontsize=11)
+    ax.set_ylabel("Densité KDE", color=TXT, fontsize=11)
+    ax.set_title(title, color=TXT, fontsize=13, pad=12)
+    ax.tick_params(colors=TXT, labelsize=9)
+    for spine in ax.spines.values():
+        spine.set_edgecolor(GRID)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(True, color=GRID, linewidth=0.5, linestyle="--", alpha=0.4)
+    x_span = max(float(x_grid[-1] - x_grid[0]), 1e-9)
+    ax.set_xlim(float(x_grid[0]) - 0.02 * x_span, float(x_grid[-1]) + 0.02 * x_span)
+    ax.set_ylim(bottom=0, top=density.max() * 1.10)
+    ax.legend(
+        loc="upper left" if alert_level == "none" else "center left",
+        fontsize=8.5, facecolor=BG, edgecolor=GRID, labelcolor=TXT, framealpha=0.9,
+    )
+
+    plt.tight_layout()
+
+    if output_path is not None:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(str(output_path), dpi=100, bbox_inches="tight", facecolor=BG)
+        _logger.info("Pré-screening CD34 KDE sauvegardé: %s", output_path)
+
+    return fig
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Dashboard interactif Plotly — Gating complet
 # ─────────────────────────────────────────────────────────────────────────────
 

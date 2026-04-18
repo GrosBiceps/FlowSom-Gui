@@ -895,6 +895,77 @@ class FlowSOMPipeline:
                 X_stacked, selected_markers, obs, metaclustering, clustering
             )
 
+            # ── Étape 4c: Pré-screening CD34+/CD45dim (TOUJOURS exécuté) ─────
+            # Calcul heuristique sur les données transformées post-gating.
+            # Indépendant des paramètres cd34 de l'utilisateur.
+            _prescreening_result = None
+            try:
+                from flowsom_pipeline_pro.src.analysis.prescreening import (
+                    compute_cd34_prescreening,
+                )
+                _density_method_ps = getattr(
+                    config.pregate, "cd34_cd45dim_density_method", "KDE"
+                )
+                _logger.info(
+                    "Étape 4c: Pré-screening CD34+/CD45dim (méthode=%s)...",
+                    _density_method_ps,
+                )
+                # Filtrer uniquement les cellules pathologiques
+                # (obs contient la colonne "condition" alignée sur X_stacked)
+                _patho_label = "Pathologique"
+                if "condition" in obs.columns:
+                    _patho_mask_ps = (obs["condition"].values == _patho_label)
+                    _X_patho_ps = X_stacked[_patho_mask_ps]
+                    _logger.info(
+                        "   Pré-screening sur %d cellules patho uniquement",
+                        int(_patho_mask_ps.sum()),
+                    )
+                else:
+                    _X_patho_ps = X_stacked
+                    _logger.warning(
+                        "   Colonne 'condition' absente — pré-screening sur toutes les cellules"
+                    )
+                _prescreening_result = compute_cd34_prescreening(
+                    _X_patho_ps,
+                    list(selected_markers),
+                    density_method=_density_method_ps,
+                )
+                if _prescreening_result is not None:
+                    _logger.info(
+                        "   Pré-screening: CD34+=%d, CD45dim=%d, ratio=%.1f%% [%s]",
+                        _prescreening_result.n_cd34_pos,
+                        _prescreening_result.n_cd45dim,
+                        _prescreening_result.ratio_pct,
+                        _prescreening_result.alert_level,
+                    )
+                    if _prescreening_result.alert_level != "none":
+                        _logger.warning(
+                            "   [ALERTE Pré-screening] %s",
+                            _prescreening_result.alert_message,
+                        )
+                    # Générer le plot KDE CD34
+                    if viz_save:
+                        try:
+                            from flowsom_pipeline_pro.src.visualization.gating_plots import (
+                                plot_cd34_kde_prescreening as _plot_cd34_ps,
+                            )
+                            _fig_cd34_ps = _plot_cd34_ps(
+                                _prescreening_result,
+                                output_path=output_dir / "plots" / "gating"
+                                / f"prescreening_cd34_kde_{timestamp}.png",
+                            )
+                            if _fig_cd34_ps is not None:
+                                gating_figures["fig_prescreening_cd34"] = _fig_cd34_ps
+                        except Exception as _plot_ps_exc:
+                            _logger.warning(
+                                "Plot pré-screening CD34 KDE échoué (non bloquant): %s",
+                                _plot_ps_exc,
+                            )
+            except Exception as _ps_exc:
+                _logger.warning(
+                    "Pré-screening CD34/CD45dim échoué (non bloquant): %s", _ps_exc
+                )
+
             # ── Étape 4b: Construction du DataFrame FCS complet ───────────────
             # Identique au monolithe flowsom_pipeline.py :
             # - Toutes les colonnes (données brutes pré-transformation)
@@ -2136,6 +2207,7 @@ class FlowSOMPipeline:
                         "fig_mrd_summary": "MRD Résiduelle — Nœuds SOM (JF / Flo + contrôles ELN)",
                         "fig_blast_mrd_classification": "Classification Phénotypique des Nœuds MRD (ELN 2022)",
                         "fig_mrd_blast_radar": "Radar MRD — Nœuds Porte 2 (BLAST_HIGH / BLAST_MODERATE)",
+                        "fig_prescreening_cd34": "Pré-screening CD34 — KDE minimum local (GMM vs KDE)",
                     }
 
                     _patho_info = None
@@ -2170,6 +2242,7 @@ class FlowSOMPipeline:
                         ransac_summary=dict(ransac_scatter_data)
                         if ransac_scatter_data
                         else None,
+                        prescreening_result=_prescreening_result,
                     )
                     if html_path:
                         export_paths["html_report"] = html_path
@@ -2212,6 +2285,7 @@ class FlowSOMPipeline:
                             ransac_summary=dict(ransac_scatter_data)
                             if ransac_scatter_data
                             else None,
+                            prescreening_result=_prescreening_result,
                         )
                         if pdf_path:
                             export_paths["pdf_report"] = pdf_path
@@ -2252,6 +2326,7 @@ class FlowSOMPipeline:
                 mrd_result=mrd_result,
                 patho_stem=_patho_stem,
                 patho_date=_patho_date,
+                prescreening_result=_prescreening_result,
             )
 
             _report(PipelineStep.DONE)

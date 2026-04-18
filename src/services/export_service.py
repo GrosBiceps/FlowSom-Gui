@@ -381,6 +381,7 @@ class ExportService:
         ransac_summary: Optional[Dict[str, Any]] = None,
         pipeline_result: Optional[Any] = None,
         algo_gauges: Optional[List[Dict[str, Any]]] = None,
+        prescreening_result: Optional[Any] = None,
     ) -> Optional[str]:
         """
         Génère le rapport HTML complet self-contained.
@@ -394,6 +395,7 @@ class ExportService:
             metacluster_table: Lignes du tableau métaclusters.
             markers: Liste des marqueurs.
             self_contained: Embarquer plotly.js dans le HTML.
+            prescreening_result: PrescreeningResult (pré-screening CD34+/CD45dim).
 
         Returns:
             Chemin du fichier HTML si succès, None sinon.
@@ -437,6 +439,7 @@ class ExportService:
             curated_mrd_cells=_curated_cells,
             curated_nodes=_curated_nodes,
             algo_gauges=algo_gauges,
+            prescreening_result=prescreening_result,
         )
 
         return str(html_path) if ok else None
@@ -458,6 +461,7 @@ class ExportService:
         ransac_summary: Optional[Dict[str, Any]] = None,
         pipeline_result: Optional[Any] = None,
         algo_gauges: Optional[List[Dict[str, Any]]] = None,
+        prescreening_result: Optional[Any] = None,
     ) -> Optional[str]:
         """
         Génère le rapport PDF A4 complet (même contenu que le HTML).

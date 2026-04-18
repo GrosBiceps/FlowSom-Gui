@@ -110,6 +110,12 @@ class PregateConfig:
     #   "cd45"     → gate CD45+ standard (dénominateur = cellules patho CD45+)
     #   "cd45_dim" → gate CD45 incluant les blastes CD45-dim (dénominateur = cellules patho CD45+)
     cd45_autogating_mode: str = "none"  # "none" | "cd45" | "cd45_dim"
+    # ── Pré-screening CD34+/CD45dim ────────────────────────────────────────────
+    # Méthode de référence pour le gating CD34 dans le pré-screening heuristique.
+    # "KDE" (défaut) : Kernel Density Estimation 1D — non-paramétrique, robuste.
+    # "GMM"          : Gaussian Mixture Model 2 composantes.
+    # Les deux méthodes sont toujours calculées et affichées dans le rapport HTML.
+    cd34_cd45dim_density_method: str = "KDE"  # "KDE" | "GMM"
 
 
 @dataclass

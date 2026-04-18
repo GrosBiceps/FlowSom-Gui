@@ -2883,6 +2883,7 @@ class FlowSomAnalyzerPro(QMainWindow):
             self._worker.log_message.connect(self._on_log_message)
             self._worker.progress.connect(self._on_progress)
             self._worker.gating_done.connect(self._on_gating_done)
+            self._worker.prescreening_done.connect(self._on_prescreening_done)
             self._worker.finished.connect(self._on_pipeline_finished)
             self._worker.error.connect(self._on_pipeline_error)
             self._worker.start()
@@ -2950,6 +2951,78 @@ class FlowSomAnalyzerPro(QMainWindow):
         self._log(
             f"[GATING] {n_kept:,}/{n_total:,} cellules ({pct:.1f} %)"
             + (f" — fallbacks: {', '.join(fallbacks)}" if fallbacks else "")
+        )
+
+    def _on_prescreening_done(self, info: dict) -> None:
+        """Affiche un popup de pré-screening CD34+/CD45dim en fin de pipeline."""
+        alert_level = info.get("alert_level", "none")
+        ratio_pct = info.get("ratio_pct", 0.0)
+        n_cd34_pos = info.get("n_cd34_pos", 0)
+        n_cd34_neg = info.get("n_cd34_neg", 0)
+        n_cd45dim = info.get("n_cd45dim", 0)
+        gmm_pct = info.get("gmm_ratio_pct", 0.0)
+        kde_pct = info.get("kde_ratio_pct", 0.0)
+        method_used = info.get("method_used", "KDE")
+        laip = info.get("laip_tracking_recommended", False)
+        interpretation = info.get("interpretation_warning", "")
+
+        # Couleur et icône selon le niveau d'alerte
+        if alert_level == "high":
+            icon = QMessageBox.Warning
+            color_ratio = "#FF3D6E"
+            title = "⚠ Pré-screening CD34+/CD45dim — ALERTE"
+        elif alert_level == "moderate":
+            icon = QMessageBox.Warning
+            color_ratio = "#F59E0B"
+            title = "⚠ Pré-screening CD34+/CD45dim — Rapport élevé"
+        else:
+            icon = QMessageBox.Information
+            color_ratio = "#86efac"
+            title = "✓ Pré-screening CD34+/CD45dim — Normal"
+
+        lines = [
+            f"<b>Pré-screening CD34+ / CD45dim</b><br>",
+            f"<b>Méthode de référence :</b> {method_used}<br>",
+            f"<table style='border-collapse:collapse; width:100%;'>",
+            f"<tr><td style='padding:3px 8px;'><b>Cellules CD45dim :</b></td>"
+            f"<td style='padding:3px 8px;'>{n_cd45dim:,}</td></tr>",
+            f"<tr><td style='padding:3px 8px;'><b>CD34+ dans CD45dim :</b></td>"
+            f"<td style='padding:3px 8px;'>{n_cd34_pos:,}</td></tr>",
+            f"<tr><td style='padding:3px 8px;'><b>CD34− dans CD45dim :</b></td>"
+            f"<td style='padding:3px 8px;'>{n_cd34_neg:,}</td></tr>",
+            f"<tr><td style='padding:3px 8px;'><b>Ratio CD34+/CD45dim :</b></td>"
+            f"<td style='padding:3px 8px; color:{color_ratio};'>"
+            f"<b>{ratio_pct:.1f}%</b></td></tr>",
+            f"<tr><td style='padding:3px 8px; color:#94a3b8;'>GMM :</td>"
+            f"<td style='padding:3px 8px; color:#94a3b8;'>{gmm_pct:.1f}%</td></tr>",
+            f"<tr><td style='padding:3px 8px; color:#94a3b8;'>KDE :</td>"
+            f"<td style='padding:3px 8px; color:#94a3b8;'>{kde_pct:.1f}%</td></tr>",
+            f"</table><br>",
+        ]
+        if interpretation:
+            lines.append(f"<i style='color:{color_ratio};'>{interpretation}</i><br>")
+        if laip:
+            lines.append(
+                "<br><b style='color:#F59E0B;'>→ LAIP Tracking classique recommandé<br>"
+                "→ Rapport CD34+/CD45dim élevé — attention pour l'interprétation de la MRD</b>"
+            )
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle(title)
+        msg.setIcon(icon)
+        msg.setText("".join(lines))
+        msg.setStandardButtons(QMessageBox.Ok)
+        msg.setTextFormat(Qt.RichText)
+        # Modal pour s'assurer que l'utilisateur le voit
+        msg.setWindowModality(Qt.ApplicationModal)
+        msg.exec_()
+
+        # Log dans le panneau
+        self._log(
+            f"[PRESCREENING] CD34+/CD45dim={ratio_pct:.1f}% "
+            f"(GMM={gmm_pct:.1f}%, KDE={kde_pct:.1f}%) "
+            f"— alerte={alert_level}"
+            + (" — LAIP recommandé" if laip else "")
         )
 
     def _on_pipeline_finished(self, result: Any) -> None:

@@ -1516,3 +1516,165 @@ class AutoGating:
         )
         gating_reports.append(gate_result)
         return mask_cd34
+
+    @staticmethod
+    def auto_gate_cd34_cd45dim(
+        X: np.ndarray,
+        var_names: List[str],
+        density_method: str = "KDE",
+        n_components: int = 2,
+    ) -> np.ndarray:
+        """
+        Gate CD34+ dans la population CD45dim — pré-screening MRD/régénération.
+
+        Identifie les cellules CD34+ parmi les CD45dim par deux méthodes
+        comparables (GMM et KDE) avec sélection de la méthode de référence.
+        Contrairement à ``auto_gate_cd34``, cette fonction cible spécifiquement
+        la population CD45dim (blastes + précurseurs) et force n_components=2.
+
+        La méthode KDE est la référence par défaut (plus robuste sur les
+        distributions asymétriques de moelle osseuse AML).
+
+        Args:
+            X: Matrice des données (n_cells, n_markers)
+            var_names: Noms des marqueurs
+            density_method: Méthode de référence — "KDE" (défaut) ou "GMM"
+            n_components: Nombre de composantes GMM (forcé à 2)
+
+        Returns:
+            Masque booléen (True = CD34+ dans CD45dim, False = autre)
+        """
+        n_cells = X.shape[0]
+
+        # ── Recherche des marqueurs ────────────────────────────────────────────
+        cd34_idx = PreGating.find_marker_index(
+            var_names, ["CD34", "CD34-PE", "CD34-APC", "CD34-PECY7"]
+        )
+        cd45_idx = PreGating.find_marker_index(
+            var_names, ["CD45", "CD45-PECY5", "CD45-PC5"]
+        )
+
+        if cd34_idx is None:
+            _logger.warning("[!] CD34 non trouvé pour auto-gate CD34/CD45dim")
+            return np.zeros(n_cells, dtype=bool)
+        if cd45_idx is None:
+            _logger.warning("[!] CD45 non trouvé pour auto-gate CD34/CD45dim")
+            return np.zeros(n_cells, dtype=bool)
+
+        cd34 = X[:, cd34_idx].astype(np.float64)
+        cd45 = X[:, cd45_idx].astype(np.float64)
+        valid = np.isfinite(cd34) & np.isfinite(cd45)
+
+        if valid.sum() < 200:
+            _logger.warning("[!] Pas assez de données valides pour auto-gate CD34/CD45dim")
+            return np.zeros(n_cells, dtype=bool)
+
+        # ── Gate CD45dim (percentile 5–40) ────────────────────────────────────
+        cd45_valid = cd45[valid]
+        cd45_low = float(np.nanpercentile(cd45_valid, 5))
+        cd45_high = float(np.nanpercentile(cd45_valid, 40))
+        mask_cd45dim = np.zeros(n_cells, dtype=bool)
+        mask_cd45dim[valid] = (cd45_valid >= cd45_low) & (cd45_valid <= cd45_high)
+        n_cd45dim = int(mask_cd45dim.sum())
+
+        if n_cd45dim < 100:
+            _logger.warning(
+                "[!] Seulement %d cellules CD45dim — gate CD34/CD45dim peu fiable", n_cd45dim
+            )
+
+        valid_in_dim = valid & mask_cd45dim
+        if valid_in_dim.sum() < 50:
+            return np.zeros(n_cells, dtype=bool)
+
+        cd34_in_dim = cd34[valid_in_dim]
+
+        # ── Méthode GMM (2 composantes, comme auto_gate_debris) ───────────────
+        mask_gmm = np.zeros(n_cells, dtype=bool)
+        try:
+            gmm = AutoGating.safe_fit_gmm(
+                cd34_in_dim.reshape(-1, 1),
+                n_components=2,
+                n_init=3,
+            )
+            labels_gmm = gmm.predict(cd34_in_dim.reshape(-1, 1))
+            means_gmm = gmm.means_.flatten()
+            pos_comp = int(np.argmax(means_gmm))
+            mask_gmm[valid_in_dim] = labels_gmm == pos_comp
+            _logger.info(
+                "   [CD34/CD45dim-GMM] μ_neg=%.0f, μ_pos=%.0f → %d CD34+",
+                means_gmm[1 - pos_comp], means_gmm[pos_comp], int(mask_gmm.sum()),
+            )
+        except RuntimeError as exc:
+            _logger.warning("   [!] GMM CD34/CD45dim échoué: %s", exc)
+            log_gating_event("cd34_cd45dim", "gmm", "error", {"error": str(exc)})
+
+        # ── Méthode KDE (référence) — minimum local entre 2 pics CD34 ─────────
+        mask_kde = np.zeros(n_cells, dtype=bool)
+        threshold_kde = 0.0
+        try:
+            from flowsom_pipeline_pro.src.analysis.prescreening import gate_cd34_kde
+
+            # Reconstruit un masque valide sur l'ensemble (n_cells) pointant
+            # uniquement les cellules CD45dim valides.
+            _cd34_full = cd34.copy()
+            _valid_full = np.zeros(n_cells, dtype=bool)
+            _valid_full[valid_in_dim] = True
+
+            _mask_kde_full, threshold_kde, _xg, _dens, _warns_kde = gate_cd34_kde(
+                _cd34_full, _valid_full
+            )
+            for _w in _warns_kde:
+                _logger.warning("   [!] KDE CD34/CD45dim: %s", _w)
+                log_gating_event("cd34_cd45dim", "kde", "error", {"error": _w})
+            mask_kde = _mask_kde_full
+            _logger.info(
+                "   [CD34/CD45dim-KDE] seuil_logicle=%.3f → %d CD34+",
+                threshold_kde, int(mask_kde.sum()),
+            )
+        except Exception as exc:
+            _logger.warning("   [!] KDE CD34/CD45dim échoué: %s — fallback percentile 85", exc)
+            log_gating_event("cd34_cd45dim", "kde", "error", {"error": str(exc)})
+            threshold_kde = float(np.nanpercentile(cd34_in_dim, 85))
+            mask_kde[valid_in_dim] = cd34_in_dim >= threshold_kde
+
+        # ── Sélection de la méthode de référence ─────────────────────────────
+        if density_method.upper() == "GMM":
+            mask_ref = mask_gmm
+            method_label = "gmm_cd34_cd45dim"
+        else:
+            mask_ref = mask_kde
+            method_label = "kde_cd34_cd45dim"
+
+        n_pos = int(mask_ref.sum())
+        _logger.info(
+            "   [CD34/CD45dim] Méthode référence=%s | CD34+ dans CD45dim: %d/%d (%.1f%%)",
+            density_method.upper(), n_pos, n_cd45dim, n_pos / max(n_cd45dim, 1) * 100,
+        )
+
+        gate_result = GateResult(
+            mask=mask_ref,
+            n_kept=n_pos,
+            n_total=n_cd45dim,
+            method=method_label,
+            gate_name="G5_cd34_cd45dim",
+            details={
+                "density_method": density_method.upper(),
+                "gmm_n_pos": int(mask_gmm.sum()),
+                "kde_n_pos": int(mask_kde.sum()),
+                "n_cd45dim": n_cd45dim,
+                "cd45dim_range": [cd45_low, cd45_high],
+            },
+        )
+        gating_reports.append(gate_result)
+        log_gating_event(
+            "cd34_cd45dim",
+            method_label,
+            "success",
+            {
+                "n_cd34_pos": n_pos,
+                "n_cd45dim": n_cd45dim,
+                "ratio_pct": round(n_pos / max(n_cd45dim, 1) * 100, 2),
+                "density_method": density_method.upper(),
+            },
+        )
+        return mask_ref

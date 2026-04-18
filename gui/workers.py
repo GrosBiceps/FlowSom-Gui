@@ -139,6 +139,7 @@ class PipelineWorker(QThread):
     log_message = pyqtSignal(str)
     progress = pyqtSignal(int)
     gating_done = pyqtSignal(dict)
+    prescreening_done = pyqtSignal(dict)
     finished = pyqtSignal(object)
     error = pyqtSignal(str)
 
@@ -223,6 +224,26 @@ class PipelineWorker(QThread):
             result = pipeline.execute(progress_callback=_on_progress)
 
             self.progress.emit(100)
+
+            # Émettre le résultat du pré-screening si disponible
+            _ps = getattr(result, "prescreening_result", None) if result else None
+            if _ps is not None:
+                try:
+                    self.prescreening_done.emit({
+                        "n_cd34_pos": int(_ps.n_cd34_pos),
+                        "n_cd34_neg": int(_ps.n_cd34_neg),
+                        "n_cd45dim": int(_ps.n_cd45dim),
+                        "ratio_pct": float(_ps.ratio_pct),
+                        "gmm_ratio_pct": float(_ps.gmm_ratio_pct),
+                        "kde_ratio_pct": float(_ps.kde_ratio_pct),
+                        "alert_level": str(_ps.alert_level),
+                        "alert_message": str(_ps.alert_message),
+                        "method_used": str(_ps.method_used),
+                        "laip_tracking_recommended": bool(_ps.laip_tracking_recommended),
+                        "interpretation_warning": str(_ps.interpretation_warning),
+                    })
+                except Exception:
+                    pass  # Non bloquant
 
             if result is not None and result.success:
                 self.log_message.emit(
