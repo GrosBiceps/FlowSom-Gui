@@ -9,7 +9,7 @@ mrd_parameters:
     d2_normalization: 109.28
     d2_threshold_high: 25.8
     d2_threshold_moderate: 19.03
-    enabled: true
+    enabled: false
     high_threshold: 2.2
     linear_weight: 0.17
     mahal_boost_factor: 1.03

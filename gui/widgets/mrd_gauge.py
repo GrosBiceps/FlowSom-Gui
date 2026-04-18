@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 mrd_gauge.py — Widget gauge MRD par méthode.
 
@@ -26,17 +26,17 @@ from PyQt5.QtCore import Qt, QPointF, QRectF
 from PyQt5.QtGui import QFont, QColor, QPainter, QPen
 
 
-# Couleurs Catppuccin Mocha (cohérence avec styles.py)
-_RED = "#f38ba8"
-_YELLOW = "#f9e2af"
-_GREEN = "#a6e3a1"
-_BLUE = "#89b4fa"
-_SUBTEXT = "#a6adc8"
-_SURFACE0 = "#313244"
-_SURFACE1 = "#45475a"
-_BASE = "#1e1e2e"
-_MANTLE = "#181825"
-_TEXT = "#cdd6f4"
+# Couleurs PRISMA v2
+_RED = "#FF3D6E"
+_YELLOW = "#FFE032"
+_GREEN = "#39FF8A"
+_BLUE = "#5BAAFF"
+_SUBTEXT = "rgba(238,242,247,0.55)"
+_SURFACE0 = "#101825"
+_SURFACE1 = "#141E2E"
+_BASE = "#0C1220"
+_MANTLE = "#080D18"
+_TEXT = "#EEF2F7"
 
 
 class SemiCircleGauge(QWidget):
@@ -126,9 +126,10 @@ class MRDGauge(QWidget):
 
         # ── Titre méthode ──
         self.lbl_method = QLabel(self.method_name)
-        self.lbl_method.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        self.lbl_method.setFont(QFont("Consolas", 9, QFont.Bold))
         self.lbl_method.setStyleSheet(
-            "color: #9fb9f2; background: transparent; letter-spacing: 0.12em; text-transform: uppercase;"
+            "color: #EEF2F7; background: transparent;"
+            "letter-spacing: 0.12em; text-transform: uppercase;"
         )
         self.lbl_method.setAlignment(Qt.AlignCenter)
         root.addWidget(self.lbl_method)
@@ -136,11 +137,12 @@ class MRDGauge(QWidget):
         # ── Badge statut ──
         self.lbl_badge = QLabel("EN ATTENTE")
         self.lbl_badge.setAlignment(Qt.AlignCenter)
-        self.lbl_badge.setFont(QFont("Segoe UI", 8, QFont.Bold))
+        self.lbl_badge.setFont(QFont("Consolas", 8, QFont.Bold))
         self.lbl_badge.setFixedHeight(22)
         self.lbl_badge.setStyleSheet(
-            f"color: {_SUBTEXT}; background: rgba(69,71,90,0.6); "
-            f"border-radius: 5px; padding: 0 10px; letter-spacing: 0.08em;"
+            f"color: {_SUBTEXT}; background: rgba(20,30,46,0.8); "
+            f"border: 1px solid rgba(255,255,255,0.08);"
+            f"border-radius: 0px; padding: 0 10px; letter-spacing: 0.08em;"
         )
         root.addWidget(self.lbl_badge)
 
@@ -167,7 +169,7 @@ class MRDGauge(QWidget):
         self.cursor.setStyleSheet(f"""
             QSlider::groove:horizontal {{
                 height: 5px;
-                background: rgba(20, 22, 36, 0.9);
+                background: rgba(4, 7, 13, 0.92);
                 border-radius: 2px;
             }}
             QSlider::sub-page:horizontal {{
@@ -175,12 +177,12 @@ class MRDGauge(QWidget):
                 border-radius: 2px;
             }}
             QSlider::add-page:horizontal {{
-                background: rgba(20, 22, 36, 0.9);
+                background: rgba(4, 7, 13, 0.92);
                 border-radius: 2px;
             }}
             QSlider::handle:horizontal {{
                 background: {_BLUE};
-                border: 1px solid rgba(205, 214, 244, 0.35);
+                border: 1px solid rgba(238, 242, 247, 0.35);
                 width: 9px;
                 margin: -5px 0;
                 border-radius: 4px;
@@ -199,13 +201,15 @@ class MRDGauge(QWidget):
 
         self.lbl_nodes = QLabel("— nœuds")
         self.lbl_nodes.setStyleSheet(
-            "color: #9ea9d8; background: transparent; font-size: 10px; font-weight: 600;"
+            "color: #EEF2F7; background: transparent; font-size: 10px;"
+            "font-weight: 600; font-family: 'Consolas', 'Cascadia Code', monospace;"
         )
         self.lbl_nodes.setAlignment(Qt.AlignCenter)
 
         self.lbl_cells = QLabel("— cellules")
         self.lbl_cells.setStyleSheet(
-            "color: #9ea9d8; background: transparent; font-size: 10px; font-weight: 600;"
+            "color: #EEF2F7; background: transparent; font-size: 10px;"
+            "font-weight: 600; font-family: 'Consolas', 'Cascadia Code', monospace;"
         )
         self.lbl_cells.setAlignment(Qt.AlignCenter)
 
@@ -215,32 +219,32 @@ class MRDGauge(QWidget):
 
     def _apply_card_style(self, status: str = "waiting") -> None:
         if status == "positive":
-            border_color = "rgba(243, 139, 168, 0.5)"
-            bg_top = "rgba(50, 28, 36, 0.85)"
-            bg_bot = "rgba(38, 20, 28, 0.85)"
-            top_border = "rgba(243, 139, 168, 0.7)"
+            border_color = "rgba(255, 61, 110, 0.42)"
+            bg_top = "rgba(34, 17, 26, 0.92)"
+            bg_bot = "rgba(24, 12, 20, 0.92)"
+            top_border = "rgba(255, 61, 110, 0.66)"
         elif status == "negative":
-            border_color = "rgba(166, 227, 161, 0.4)"
-            bg_top = "rgba(28, 50, 30, 0.8)"
-            bg_bot = "rgba(20, 38, 22, 0.8)"
-            top_border = "rgba(166, 227, 161, 0.55)"
+            border_color = "rgba(57, 255, 138, 0.35)"
+            bg_top = "rgba(14, 36, 25, 0.90)"
+            bg_bot = "rgba(10, 27, 19, 0.90)"
+            top_border = "rgba(57, 255, 138, 0.58)"
         elif status == "low":
-            border_color = "rgba(249, 226, 175, 0.4)"
-            bg_top = "rgba(50, 44, 20, 0.8)"
-            bg_bot = "rgba(38, 33, 14, 0.8)"
-            top_border = "rgba(249, 226, 175, 0.55)"
+            border_color = "rgba(255, 224, 50, 0.35)"
+            bg_top = "rgba(37, 32, 12, 0.90)"
+            bg_bot = "rgba(28, 24, 9, 0.90)"
+            top_border = "rgba(255, 224, 50, 0.58)"
         else:  # waiting
-            border_color = "rgba(69, 71, 90, 0.6)"
-            bg_top = "rgba(44, 46, 64, 0.7)"
-            bg_bot = "rgba(32, 34, 52, 0.7)"
-            top_border = "rgba(80, 82, 102, 0.5)"
+            border_color = "rgba(255, 255, 255, 0.08)"
+            bg_top = "rgba(16, 24, 37, 0.90)"
+            bg_bot = "rgba(12, 18, 32, 0.90)"
+            top_border = "rgba(123, 82, 255, 0.45)"
         self.setStyleSheet(f"""
             QWidget#mrdGaugeCard {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 {bg_top}, stop:1 {bg_bot});
-                border-radius: 12px;
+                border-radius: 0px;
                 border: 1px solid {border_color};
-                border-top: 2px solid {top_border};
+                border-top: 1px solid {top_border};
             }}
         """)
 
@@ -267,26 +271,26 @@ class MRDGauge(QWidget):
         if positive or n_nodes > 0:
             badge_text = "POSITIF"
             badge_color = _RED
-            badge_bg = "rgba(243, 139, 168, 0.22)"
-            badge_border = "rgba(243, 139, 168, 0.5)"
-            bar_color = f"qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {_RED}, stop:1 #eb6f92)"
-            pct_color = "#f7a8bf"
+            badge_bg = "rgba(255, 61, 110, 0.18)"
+            badge_border = "rgba(255, 61, 110, 0.42)"
+            bar_color = f"qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {_RED}, stop:1 #FF7294)"
+            pct_color = "#FF89A8"
             card_status = "positive"
         elif low_level:
             badge_text = "INDÉTECTABLE"
             badge_color = _YELLOW
-            badge_bg = "rgba(249, 226, 175, 0.18)"
-            badge_border = "rgba(249, 226, 175, 0.4)"
-            bar_color = f"qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {_YELLOW}, stop:1 #f0c060)"
+            badge_bg = "rgba(255, 224, 50, 0.15)"
+            badge_border = "rgba(255, 224, 50, 0.35)"
+            bar_color = f"qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {_YELLOW}, stop:1 #FFB84A)"
             pct_color = _YELLOW
             card_status = "low"
         else:
             badge_text = "NÉGATIF"
             badge_color = _GREEN
-            badge_bg = "rgba(166, 227, 161, 0.18)"
-            badge_border = "rgba(166, 227, 161, 0.4)"
-            bar_color = f"qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {_GREEN}, stop:1 #78c878)"
-            pct_color = "#b8f0b4"
+            badge_bg = "rgba(57, 255, 138, 0.16)"
+            badge_border = "rgba(57, 255, 138, 0.38)"
+            bar_color = f"qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {_GREEN}, stop:1 #78FFB2)"
+            pct_color = "#85FFC0"
             card_status = "negative"
 
         self._apply_card_style(card_status)
@@ -297,13 +301,13 @@ class MRDGauge(QWidget):
         self.lbl_badge.setStyleSheet(
             f"color: {badge_color}; background: {badge_bg}; "
             f"border: 1px solid {badge_border}; "
-            f"border-radius: 5px; padding: 0 10px; font-weight: bold; letter-spacing: 0.1em;"
+            f"border-radius: 0px; padding: 0 10px; font-weight: bold; letter-spacing: 0.1em;"
         )
         self.arc.set_color(pct_color)
         self.cursor.setStyleSheet(f"""
             QSlider::groove:horizontal {{
                 height: 5px;
-                background: rgba(20, 22, 36, 0.9);
+                background: rgba(4, 7, 13, 0.92);
                 border-radius: 2px;
             }}
             QSlider::sub-page:horizontal {{
@@ -311,12 +315,12 @@ class MRDGauge(QWidget):
                 border-radius: 2px;
             }}
             QSlider::add-page:horizontal {{
-                background: rgba(20, 22, 36, 0.9);
+                background: rgba(4, 7, 13, 0.92);
                 border-radius: 2px;
             }}
             QSlider::handle:horizontal {{
                 background: {pct_color};
-                border: 1px solid rgba(205, 214, 244, 0.45);
+                border: 1px solid rgba(238, 242, 247, 0.45);
                 width: 9px;
                 margin: -5px 0;
                 border-radius: 4px;
@@ -324,15 +328,17 @@ class MRDGauge(QWidget):
         """)
 
         # Infos secondaires
-        info_color = "#a4b0de"
+        info_color = "rgba(238,242,247,0.50)"
         seuil_txt = f" (seuil : {threshold}%)" if threshold else ""
         self.lbl_nodes.setText(f"{n_nodes} nœud{'s' if n_nodes != 1 else ''} MRD{seuil_txt}")
         self.lbl_nodes.setStyleSheet(
             f"color: {info_color}; background: transparent; font-size: 10px; font-weight: 600;"
+            "font-family: 'Consolas', 'Cascadia Code', monospace;"
         )
         self.lbl_cells.setText(f"{n_cells:,} cellule{'s' if n_cells != 1 else ''}")
         self.lbl_cells.setStyleSheet(
             f"color: {info_color}; background: transparent; font-size: 10px; font-weight: 600;"
+            "font-family: 'Consolas', 'Cascadia Code', monospace;"
         )
 
     def _set_empty(self) -> None:
@@ -340,10 +346,13 @@ class MRDGauge(QWidget):
         self.lbl_pct.setText("—")
         self.lbl_badge.setText("EN ATTENTE")
         self.lbl_badge.setStyleSheet(
-            f"color: {_SUBTEXT}; background: {_SURFACE1}; border-radius: 6px; padding: 0 8px;"
+            f"color: {_SUBTEXT}; background: {_SURFACE1}; border: 1px solid rgba(255,255,255,0.08);"
+            f"border-radius: 0px; padding: 0 8px;"
         )
         self.arc.set_value(0)
         self.arc.set_color(_BLUE)
         self.cursor.setValue(0)
         self.lbl_nodes.setText("— nœuds")
         self.lbl_cells.setText("— cellules")
+
+

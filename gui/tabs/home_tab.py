@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 home_tab.py — Onglet Accueil MRD (résultats principaux).
 
@@ -27,7 +27,7 @@ from PyQt5.QtWidgets import (
     QStackedWidget,
     QPushButton,
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QColor
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -40,18 +40,22 @@ from flowsom_pipeline_pro.gui.widgets.mrd_gauge import MRDGauge
 from flowsom_pipeline_pro.gui.widgets.mrd_node_table import MRDNodeTable
 from flowsom_pipeline_pro.gui.adapters.mrd_adapter import adapt_mrd_result, adapt_all_nodes
 
+# ── PRISMA v2.0 palette (replaces Catppuccin Mocha) ──────────────────────────
+_SURFACE0 = "#0C1220"  # --surface
+_SURFACE1 = "#101825"  # --raised
+_BASE = "#080D18"  # --deep
+_MANTLE = "#04070D"  # --void
+_TEXT = "#EEF2F7"  # --paper
+_SUBTEXT = "rgba(238,242,247,0.55)"
+_BLUE = "#5BAAFF"  # ch-v500 / info
+_GREEN = "#39FF8A"  # ch-fitc / accent
+_RED = "#FF3D6E"  # ch-apc  / danger
+_YELLOW = "#FFE032"  # ch-percp / warn
+_LAVENDER = "#7B52FF"  # ch-v450 / brand
 
-_SURFACE0 = "#313244"
-_SURFACE1 = "#45475a"
-_BASE = "#1e1e2e"
-_MANTLE = "#181825"
-_TEXT = "#cdd6f4"
-_SUBTEXT = "#a6adc8"
-_BLUE = "#89b4fa"
-_GREEN = "#a6e3a1"
-_RED = "#f38ba8"
-_YELLOW = "#f9e2af"
-_LAVENDER = "#b4befe"
+# Font used in all matplotlib figures
+_FONT_FAMILY = "Segoe UI"
+_FONT_FALLBACK = ["Segoe UI", "Arial", "Arial", "Helvetica", "sans-serif"]
 
 
 class HomeTab(QWidget):
@@ -61,7 +65,14 @@ class HomeTab(QWidget):
     Interfaces publiques :
       load_result(result, method_used)  → affiche les résultats
       show_waiting()                    → revient à l'écran d'attente
+
+    Signaux :
+      curation_changed()  → émis après toute modification de validation experte
+                            (ajout/suppression de nœud). MainWindow l'écoute pour
+                            patcher le HTML et mettre à jour son état interne.
     """
+
+    curation_changed = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -99,7 +110,7 @@ class HomeTab(QWidget):
         page.setStyleSheet("""
             QWidget#waitingPage {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #0d0d17, stop:1 #0a0a14);
+                    stop:0 #080D18, stop:1 #04070D);
             }
         """)
         layout = QVBoxLayout(page)
@@ -115,10 +126,10 @@ class HomeTab(QWidget):
         container.setStyleSheet("""
             QWidget#waitingContainer {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(36, 38, 60, 0.82), stop:1 rgba(20, 22, 36, 0.78));
-                border-radius: 18px;
-                border: 1px solid rgba(137, 180, 250, 0.13);
-                border-top: 1px solid rgba(137, 180, 250, 0.20);
+                    stop:0 rgba(16, 24, 37, 0.90), stop:1 rgba(12, 18, 32, 0.90));
+                border-radius: 0px;
+                border: 1px solid rgba(255, 255, 255, 0.055);
+                border-top: 1px solid rgba(123, 82, 255, 0.35);
             }
         """)
         c_layout = QVBoxLayout(container)
@@ -128,17 +139,18 @@ class HomeTab(QWidget):
         badge = QLabel("PRÊT POUR L'ANALYSE")
         badge.setAlignment(Qt.AlignCenter)
         badge.setStyleSheet(
-            "background: rgba(137, 180, 250, 0.16); color: #cfe0ff; "
-            "border: 1px solid rgba(137, 180, 250, 0.25); "
-            "border-radius: 11px; padding: 6px 14px; font-size: 10px; "
-            "font-weight: 700; letter-spacing: 0.08em;"
+            "background: rgba(123, 82, 255, 0.14); color: #EEF2F7; "
+            "border: 1px solid rgba(123, 82, 255, 0.35); "
+            "border-radius: 0px; padding: 6px 14px; "
+            "font-family: 'Consolas', 'Cascadia Code', monospace; "
+            "font-size: 8.5pt; font-weight: 600; letter-spacing: 0.16em;"
         )
         c_layout.addWidget(badge, alignment=Qt.AlignHCenter)
 
         title = QLabel("FlowSOM MRD Analyzer")
         title.setFont(QFont("Segoe UI", 27, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("color: #dbe7ff; background: transparent;")
+        title.setStyleSheet("color: #EEF2F7; background: transparent;")
         c_layout.addWidget(title)
 
         sub = QLabel(
@@ -146,13 +158,16 @@ class HomeTab(QWidget):
             "L'accueil affichera automatiquement les résultats MRD dès la fin du calcul."
         )
         sub.setAlignment(Qt.AlignCenter)
-        sub.setStyleSheet("color: #b5c0e3; background: transparent; font-size: 14px;")
+        sub.setStyleSheet(
+            "color: #EEF2F7; background: transparent;"
+            "font-size: 11pt; font-family: 'Segoe UI', 'Segoe UI', sans-serif;"
+        )
         sub.setWordWrap(True)
         c_layout.addWidget(sub)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("color: rgba(137,180,250,0.14); max-height: 1px;")
+        sep.setStyleSheet("color: rgba(255,255,255,0.055); max-height: 1px;")
         c_layout.addWidget(sep)
 
         body = QWidget()
@@ -166,9 +181,10 @@ class HomeTab(QWidget):
         left.setObjectName("waitingLeftCard")
         left.setStyleSheet(
             "QWidget#waitingLeftCard {"
-            "background: rgba(24, 26, 42, 0.72);"
-            "border-radius: 12px;"
-            "border: 1px solid rgba(137, 180, 250, 0.11);"
+            "background: rgba(16, 24, 37, 0.88);"
+            "border-radius: 0px;"
+            "border: 1px solid rgba(255, 255, 255, 0.055);"
+            "border-top: 1px solid rgba(57, 255, 138, 0.30);"
             "}"
         )
         left_v = QVBoxLayout(left)
@@ -177,14 +193,18 @@ class HomeTab(QWidget):
 
         left_title = QLabel("Étapes avant lancement")
         left_title.setStyleSheet(
-            "color: #d5e2ff; font-size: 13px; font-weight: 700; background: transparent;"
+            "color: #EEF2F7; font-size: 9pt; font-weight: 700; background: transparent;"
+            "font-family: 'Consolas', 'Cascadia Code', monospace; letter-spacing: 0.12em;"
         )
         left_v.addWidget(left_title)
 
         def _step_line(num: str, text: str) -> QLabel:
             lbl = QLabel(f"{num}. {text}")
             lbl.setWordWrap(True)
-            lbl.setStyleSheet("color: #c3ceef; font-size: 13px; background: transparent;")
+            lbl.setStyleSheet(
+                "color: #EEF2F7; font-size: 9pt; background: transparent;"
+                "font-family: 'Consolas', 'Cascadia Code', monospace;"
+            )
             return lbl
 
         left_v.addWidget(_step_line("1", "Importer les dossiers FCS (sain et pathologique)."))
@@ -196,8 +216,10 @@ class HomeTab(QWidget):
         )
         tip.setWordWrap(True)
         tip.setStyleSheet(
-            "color: #9eaadb; font-size: 12px; background: rgba(137, 180, 250, 0.06);"
-            "border: 1px solid rgba(137, 180, 250, 0.12); border-radius: 10px; padding: 10px;"
+            "color: #EEF2F7; font-size: 8.5pt; "
+            "font-family: 'Consolas', 'Cascadia Code', monospace;"
+            "background: rgba(123, 82, 255, 0.08);"
+            "border: 1px solid rgba(123, 82, 255, 0.22); border-radius: 0px; padding: 10px;"
         )
         left_v.addWidget(tip)
         left_v.addStretch()
@@ -206,9 +228,10 @@ class HomeTab(QWidget):
         right.setObjectName("waitingRightCard")
         right.setStyleSheet(
             "QWidget#waitingRightCard {"
-            "background: rgba(20, 22, 36, 0.72);"
-            "border-radius: 12px;"
-            "border: 1px solid rgba(166, 227, 161, 0.10);"
+            "background: rgba(16, 24, 37, 0.88);"
+            "border-radius: 0px;"
+            "border: 1px solid rgba(255, 255, 255, 0.055);"
+            "border-top: 1px solid rgba(91, 170, 255, 0.30);"
             "}"
         )
         right_v = QVBoxLayout(right)
@@ -217,7 +240,8 @@ class HomeTab(QWidget):
 
         right_title = QLabel("Ce qui apparaîtra ici après calcul")
         right_title.setStyleSheet(
-            "color: #cff5cd; font-size: 13px; font-weight: 700; background: transparent;"
+            "color: #EEF2F7; font-size: 9pt; font-weight: 700; background: transparent;"
+            "font-family: 'Consolas', 'Cascadia Code', monospace; letter-spacing: 0.12em;"
         )
         right_v.addWidget(right_title)
 
@@ -230,7 +254,10 @@ class HomeTab(QWidget):
         for feat in features:
             lbl = QLabel(f"• {feat}")
             lbl.setWordWrap(True)
-            lbl.setStyleSheet("color: #c3ceef; font-size: 13px; background: transparent;")
+            lbl.setStyleSheet(
+                "color: #EEF2F7; font-size: 9pt; background: transparent;"
+                "font-family: 'Consolas', 'Cascadia Code', monospace;"
+            )
             right_v.addWidget(lbl)
 
         right_v.addStretch()
@@ -242,7 +269,9 @@ class HomeTab(QWidget):
         footer = QLabel("Statut actuel: en attente d'une exécution du pipeline")
         footer.setAlignment(Qt.AlignCenter)
         footer.setStyleSheet(
-            "color: #a8b8e6; background: transparent; font-size: 12px; font-weight: 600;"
+            "color: #EEF2F7; background: transparent;"
+            "font-size: 8.8pt; font-weight: 500;"
+            "font-family: 'Consolas', 'Cascadia Code', monospace; letter-spacing: 0.06em;"
         )
         c_layout.addWidget(footer)
 
@@ -354,9 +383,10 @@ class HomeTab(QWidget):
         bar.setObjectName("denomBar")
         bar.setStyleSheet(f"""
             QWidget#denomBar {{
-                background: rgba(34, 36, 56, 0.78);
-                border-radius: 10px;
-                border: 1px solid rgba(137, 180, 250, 0.18);
+                background: rgba(12, 18, 32, 0.92);
+                border-radius: 0px;
+                border: 1px solid rgba(255,255,255,0.055);
+                border-top: 1px solid rgba(91,170,255,0.35);
             }}
         """)
         layout = QHBoxLayout(bar)
@@ -365,20 +395,22 @@ class HomeTab(QWidget):
 
         icon_lbl = QLabel("÷")
         icon_lbl.setFont(QFont("Segoe UI", 14, QFont.Bold))
-        icon_lbl.setStyleSheet("color: #8ca2df; background: transparent;")
+        icon_lbl.setStyleSheet("color: #5BAAFF; background: transparent;")
         layout.addWidget(icon_lbl)
 
         lbl = QLabel("MODE DÉNOMINATEUR")
-        lbl.setFont(QFont("Segoe UI", 8, QFont.Bold))
-        lbl.setStyleSheet("color: #8f97c2; background: transparent; letter-spacing: 0.12em;")
+        lbl.setFont(QFont("Consolas", 8, QFont.Bold))
+        lbl.setStyleSheet(
+            "color: #EEF2F7; background: transparent; letter-spacing: 0.12em;"
+        )
         layout.addWidget(lbl)
 
         self.lbl_denom_active = QLabel("TOTAL PATHO")
         self.lbl_denom_active.setAlignment(Qt.AlignCenter)
         self.lbl_denom_active.setFixedHeight(24)
         self.lbl_denom_active.setStyleSheet(
-            "color: #dbe7ff; background: rgba(137,180,250,0.20); "
-            "border: 1px solid rgba(137,180,250,0.42); border-radius: 6px; "
+            "color: #EEF2F7; background: rgba(91,170,255,0.14); "
+            "border: 1px solid rgba(91,170,255,0.34); border-radius: 0px; "
             "padding: 0 10px; font-size: 10px; font-weight: 800; letter-spacing: 0.06em;"
         )
         layout.addWidget(self.lbl_denom_active)
@@ -387,12 +419,15 @@ class HomeTab(QWidget):
 
         self.lbl_denom_status = QLabel("Toutes cellules pathologiques")
         self.lbl_denom_status.setFont(QFont("Segoe UI", 10, QFont.DemiBold))
-        self.lbl_denom_status.setStyleSheet("color: #d3def9; background: transparent;")
+        self.lbl_denom_status.setStyleSheet(
+            "color: #EEF2F7; background: transparent;"
+        )
         layout.addWidget(self.lbl_denom_status)
 
         self.lbl_denom_count = QLabel("")
         self.lbl_denom_count.setStyleSheet(
-            "color: #b6c3ea; background: transparent; font-size: 10px; font-weight: 600;"
+            "color: #EEF2F7; background: transparent; font-size: 9px; "
+            "font-weight: 600; font-family: 'Consolas', 'Cascadia Code', monospace;"
         )
         layout.addWidget(self.lbl_denom_count)
 
@@ -403,22 +438,40 @@ class HomeTab(QWidget):
         self.btn_toggle_denom.setFixedHeight(30)
         self.btn_toggle_denom.setStyleSheet(f"""
             QPushButton {{
-                background: rgba(137, 180, 250, 0.18);
-                color: #d4e2ff;
-                border: 1px solid rgba(137, 180, 250, 0.45);
-                border-radius: 7px;
+                background: rgba(91,170,255,0.16);
+                color: #EEF2F7;
+                border: 1px solid rgba(91,170,255,0.42);
+                border-radius: 0px;
                 padding: 0 14px;
                 font-size: 10px;
                 font-weight: 700;
             }}
             QPushButton:hover {{
-                background: rgba(137, 180, 250, 0.30);
-                border-color: rgba(137, 180, 250, 0.65);
+                background: rgba(91,170,255,0.28);
+                border-color: rgba(91,170,255,0.60);
+            }}
+            QPushButton:pressed {{
+                background: rgba(91,170,255,0.34);
+                border-color: rgba(91,170,255,0.70);
+            }}
+            QPushButton:focus {{
+                background: rgba(91,170,255,0.24);
+                border-color: rgba(91,170,255,0.70);
+                outline: none;
             }}
             QPushButton:disabled {{
-                background: rgba(69, 71, 90, 0.3);
-                color: #646b93;
-                border-color: rgba(69, 71, 90, 0.4);
+                background: rgba(20,30,46,0.55);
+                color: #EEF2F7;
+                border-color: rgba(255,255,255,0.10);
+            }}
+            QPushButton:pressed {{
+                background: rgba(91,170,255,0.34);
+                border-color: rgba(91,170,255,0.70);
+            }}
+            QPushButton:focus {{
+                background: rgba(91,170,255,0.24);
+                border-color: rgba(91,170,255,0.70);
+                outline: none;
             }}
         """)
         self.btn_toggle_denom.clicked.connect(self._toggle_mrd_denominator)
@@ -433,10 +486,10 @@ class HomeTab(QWidget):
         card.setStyleSheet(f"""
             QWidget#patientCard {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(44, 46, 66, 0.75), stop:1 rgba(28, 30, 48, 0.7));
-                border-radius: 12px;
-                border: 1px solid rgba(137, 180, 250, 0.16);
-                border-top: 2px solid rgba(137, 180, 250, 0.28);
+                    stop:0 rgba(16,24,37,0.94), stop:1 rgba(12,18,32,0.94));
+                border-radius: 0px;
+                border: 1px solid rgba(255,255,255,0.055);
+                border-top: 1px solid rgba(91,170,255,0.30);
             }}
         """)
         layout = QHBoxLayout(card)
@@ -451,7 +504,7 @@ class HomeTab(QWidget):
             v.setSpacing(3)
             lbl = QLabel(label.upper())
             lbl.setStyleSheet(
-                f"color: #7f88b7; font-size: 9px; background: transparent; "
+                f"color: #EEF2F7; font-size: 8px; background: transparent; "
                 f"font-weight: 700; letter-spacing: 0.1em;"
             )
             val = QLabel("—")
@@ -467,21 +520,21 @@ class HomeTab(QWidget):
 
         sep1 = QFrame()
         sep1.setFrameShape(QFrame.VLine)
-        sep1.setStyleSheet("color: rgba(137,180,250,0.1);")
+        sep1.setStyleSheet("color: rgba(255,255,255,0.055);")
         layout.addWidget(sep1)
 
         layout.addWidget(_info_block("Date", "lbl_patient_date"))
 
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.VLine)
-        sep2.setStyleSheet("color: rgba(137,180,250,0.1);")
+        sep2.setStyleSheet("color: rgba(255,255,255,0.055);")
         layout.addWidget(sep2)
 
         layout.addWidget(_info_block("Cellules totales", "lbl_patient_cells"))
 
         sep3 = QFrame()
         sep3.setFrameShape(QFrame.VLine)
-        sep3.setStyleSheet("color: rgba(137,180,250,0.1);")
+        sep3.setStyleSheet("color: rgba(255,255,255,0.055);")
         layout.addWidget(sep3)
 
         layout.addWidget(_info_block("Cellules pathologiques", "lbl_patient_patho"))
@@ -489,7 +542,8 @@ class HomeTab(QWidget):
 
         self.lbl_run_time = QLabel("")
         self.lbl_run_time.setStyleSheet(
-            "color: #8792bf; font-size: 9px; background: transparent; font-weight: 600;"
+            "color: #EEF2F7; font-size: 8.5px; background: transparent;"
+            "font-weight: 600; font-family: 'Consolas', 'Cascadia Code', monospace;"
         )
         self.lbl_run_time.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         layout.addWidget(self.lbl_run_time)
@@ -503,10 +557,10 @@ class HomeTab(QWidget):
         card.setStyleSheet(f"""
             QWidget#summaryCard {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 rgba(42, 34, 66, 0.82), stop:1 rgba(25, 26, 46, 0.82));
-                border-radius: 12px;
-                border: 1px solid rgba(180, 190, 255, 0.20);
-                border-left: 4px solid rgba(180, 190, 255, 0.65);
+                    stop:0 rgba(20, 18, 36, 0.92), stop:1 rgba(12, 18, 32, 0.92));
+                border-radius: 0px;
+                border: 1px solid rgba(255,255,255,0.055);
+                border-left: 2px solid rgba(123,82,255,0.60);
             }}
         """)
         v = QVBoxLayout(card)
@@ -514,8 +568,10 @@ class HomeTab(QWidget):
         v.setSpacing(5)
 
         lbl = QLabel("DÉCISION CLINIQUE")
-        lbl.setFont(QFont("Segoe UI", 8, QFont.Bold))
-        lbl.setStyleSheet("color: #9ca7d8; background: transparent; letter-spacing: 0.12em;")
+        lbl.setFont(QFont("Consolas", 8, QFont.Bold))
+        lbl.setStyleSheet(
+            "color: #EEF2F7; background: transparent; letter-spacing: 0.12em;"
+        )
         v.addWidget(lbl)
 
         self.lbl_clinical = QLabel("—")
@@ -527,21 +583,21 @@ class HomeTab(QWidget):
         self.lbl_decision_ref = QLabel("")
         self.lbl_decision_ref.setWordWrap(True)
         self.lbl_decision_ref.setStyleSheet(
-            "color: #c9d5ff; background: transparent; font-size: 11px; font-weight: 600;"
+            "color: #EEF2F7; background: transparent; font-size: 10.5px; font-weight: 600;"
         )
         v.addWidget(self.lbl_decision_ref)
 
         self.lbl_decision_denom = QLabel("")
         self.lbl_decision_denom.setWordWrap(True)
         self.lbl_decision_denom.setStyleSheet(
-            "color: #b0bee8; background: transparent; font-size: 10.5px;"
+            "color: #EEF2F7; background: transparent; font-size: 10px;"
         )
         v.addWidget(self.lbl_decision_denom)
 
         self.lbl_clinical_detail = QLabel("")
         self.lbl_clinical_detail.setWordWrap(True)
         self.lbl_clinical_detail.setStyleSheet(
-            "color: #9aa7d3; background: transparent; font-size: 11px;"
+            "color: #EEF2F7; background: transparent; font-size: 10.5px;"
         )
         v.addWidget(self.lbl_clinical_detail)
 
@@ -755,12 +811,23 @@ class HomeTab(QWidget):
         recalculé après validation experte des nœuds.
         Toutes les gauges existantes JF/Flo/ELN sont conservées.
         """
-        # Chercher une jauge "Validé" déjà présente
-        curated_gauge: Optional[MRDGauge] = None
-        for g in self._gauges:
-            if g.method_name == "Curated":
-                curated_gauge = g
-                break
+        # Chercher une jauge validée déjà présente.
+        # NOTE: la carte est créée avec method_name="Validé".
+        # Ancien bug: recherche sur "Curated" uniquement => doublons à chaque clic.
+        curated_candidates: List[MRDGauge] = [
+            g for g in self._gauges if g.method_name in ("Validé", "Curated")
+        ]
+
+        curated_gauge: Optional[MRDGauge] = curated_candidates[0] if curated_candidates else None
+
+        # Défensif: si des doublons existent déjà, on conserve la première jauge
+        # et on supprime les autres de l'UI.
+        if len(curated_candidates) > 1:
+            for dup in curated_candidates[1:]:
+                self._gauge_row.removeWidget(dup)
+                if dup in self._gauges:
+                    self._gauges.remove(dup)
+                dup.deleteLater()
 
         if curated_gauge is None:
             curated_gauge = MRDGauge(method_name="Validé")
@@ -779,21 +846,25 @@ class HomeTab(QWidget):
                 "positivity_threshold": 0.01,
             }
         )
+        # Notifie MainWindow → patch HTML + inject curation
+        self.curation_changed.emit()
 
     def _on_manually_added_nodes_changed(self, manual_nodes: list) -> None:
         """
         Slot connecté à MRDNodeTable.manually_added_nodes_changed.
 
-        Appelé chaque fois que l'utilisateur valide des ajouts manuels
-        via ExpertFocusDialog. Peut être étendu pour :
-          - persister les ajouts dans un fichier de session,
-          - mettre à jour un indicateur visuel dans HomeTab,
-          - recalculer les spider plots.
+        Rafraîchit les spider plots avec l'état courant complet (inclus tous
+        les nœuds retenus, pas seulement les manuels) et émet curation_changed
+        pour que MainWindow mette à jour l'HTML + son _result interne.
         """
-        # Rafraîchir les spider plots pour inclure les nœuds manuels
-        if manual_nodes:
-            all_curated = self._node_table.get_human_curated_results()
-            self._refresh_spider_plots(all_curated, method_label="Manuel")
+        all_curated = self._node_table.get_human_curated_results()
+        # Rafraîchir les spider plots qu'il y ait des nœuds ou non
+        self._refresh_spider_plots(
+            all_curated,
+            method_label="Expert" if manual_nodes else "",
+        )
+        # Signale à MainWindow qu'une curation a eu lieu → patch HTML
+        self.curation_changed.emit()
 
     # ------------------------------------------------------------------
     # Toggle dénominateur MRD
@@ -862,6 +933,24 @@ class HomeTab(QWidget):
         self._update_gauges(new_gauges)
         self._update_summary(new_gauges, {"stem": self._last_patient_stem})
 
+        # Conserver la curation experte en cours (Expert Focus / cartes MRD)
+        # lors du changement de dénominateur : on recalcule le ratio validé
+        # sur les nœuds actuellement gardés, avec le dénominateur actif.
+        active_denom = self._get_active_patho_denominator(mrd)
+        curated_nodes = (
+            self._node_table.get_human_curated_results() if hasattr(self, "_node_table") else []
+        )
+        curated_cells = int(sum(int(n.get("n_patho", 0)) for n in curated_nodes))
+        curated_ratio = (curated_cells / max(active_denom, 1) * 100.0) if active_denom > 0 else 0.0
+
+        # Mettre à jour le dénominateur interne de la table pour que les
+        # recalculs suivants (clic GARDER/ÉCARTER) restent cohérents.
+        if hasattr(self, "_node_table"):
+            self._node_table._total_viable_cells = max(active_denom, 1)
+            self._node_table._refresh_ratio_badge()
+
+        self._on_curated_ratio_changed("Curated", curated_ratio, curated_cells)
+
         # Mettre à jour le compteur "Cellules pathologiques" dans la carte patient
         n_cd45pos = getattr(mrd, "n_patho_cd45pos", 0)
         n_pre = getattr(mrd, "n_patho_pre_cd45", 0)
@@ -870,6 +959,18 @@ class HomeTab(QWidget):
         if hasattr(self, "lbl_patient_patho") and displayed > 0:
             suffix = " (CD45+)" if self._denom_cd45_only else ""
             self.lbl_patient_patho.setText(f"{displayed:,}{suffix}")
+
+    def _get_active_patho_denominator(self, mrd: Any) -> int:
+        """Retourne le dénominateur pathologique actif selon le mode courant."""
+        n_pre = getattr(mrd, "n_patho_pre_cd45", 0)
+        total_patho = n_pre if n_pre > 0 else getattr(mrd, "total_cells_patho", 0)
+        n_cd45pos = getattr(mrd, "n_patho_cd45pos", 0)
+
+        if self._denom_cd45_only and n_cd45pos > 0:
+            return int(n_cd45pos)
+        if total_patho > 0:
+            return int(total_patho)
+        return 1
 
     def _recompute_gauges_with_denom(self, mrd: Any, method_used: str) -> List[Dict]:
         """
@@ -990,20 +1091,16 @@ class HomeTab(QWidget):
             result.append(m)
         return result
 
-    # Palette de couleurs distinctes par nœud (calquée sur Set3 de Plotly)
+    # Palette PRISMA v2.0 — cytometric channels, visuellement distincts sur fond sombre
     _NODE_COLORS = [
-        "#8dd3c7",
-        "#ffffb3",
-        "#bebada",
-        "#fb8072",
-        "#80b1d3",
-        "#fdb462",
-        "#b3de69",
-        "#fccde5",
-        "#d9d9d9",
-        "#bc80bd",
-        "#ccebc5",
-        "#ffed6f",
+        "#7B52FF",  # V450 · brand
+        "#39FF8A",  # FITC · accent
+        "#5BAAFF",  # V500 · info
+        "#FF9B3D",  # PE   · warm
+        "#FF3D6E",  # APC  · danger
+        "#FFE032",  # PerCP· warn
+        "#7EC8E3",  # SSC  · steel
+        "#E8F4FF",  # FSC  · light
     ]
 
     def _refresh_spider_plots(self, nodes: List[Dict], *, method_label: str = "") -> None:
@@ -1075,7 +1172,7 @@ class HomeTab(QWidget):
 
             # Widget conteneur (radar + label sous)
             container = QWidget()
-            container.setStyleSheet(f"background: {_SURFACE0}; border-radius: 8px;")
+            container.setStyleSheet(f"background: {_SURFACE0}; border-radius: 0px;")
             c_layout = QVBoxLayout(container)
             c_layout.setContentsMargins(6, 6, 6, 6)
             c_layout.setSpacing(3)
@@ -1084,26 +1181,27 @@ class HomeTab(QWidget):
             fig = Figure(figsize=(2.8, 2.8), dpi=88)
             fig.patch.set_facecolor(_SURFACE0)
             ax = fig.add_subplot(111, polar=True)
-            ax.set_facecolor("#1e1e2e")
+            ax.set_facecolor(_BASE)
 
-            # Tracé avec couleur distincte par nœud
-            ax.plot(angles_closed, vals, color=node_color, linewidth=2.0, zorder=3)
-            ax.fill(angles_closed, vals, color=node_color, alpha=0.20, zorder=2)
+            # Tracé avec couleur PRISMA distincte par nœud
+            ax.plot(angles_closed, vals, color=node_color, linewidth=2.2, zorder=3)
+            ax.fill(angles_closed, vals, color=node_color, alpha=0.18, zorder=2)
 
             # Grille radiale discrète
             ax.set_ylim(0, 1.05)
             ax.set_yticks([0.33, 0.66, 1.0])
             ax.set_yticklabels([])
-            ax.yaxis.grid(True, color=(1, 1, 1, 0.15), linewidth=0.5, linestyle=":")
-            ax.spines["polar"].set_color((1, 1, 1, 0.3))
-            ax.spines["polar"].set_linewidth(0.8)
+            ax.yaxis.grid(True, color=(1, 1, 1, 0.12), linewidth=0.5, linestyle=":")
+            ax.spines["polar"].set_color("rgba(255,255,255,0.10)" if False else (1, 1, 1, 0.10))
+            ax.spines["polar"].set_linewidth(0.6)
 
             ax.set_xticks(angles)
             ax.set_xticklabels(
                 short_labels,
                 fontsize=7,
                 color=_TEXT,
-                fontweight="bold",
+                fontweight="600",
+                fontfamily=_FONT_FALLBACK,
             )
             ax.tick_params(axis="x", pad=9)
 
@@ -1132,3 +1230,5 @@ class HomeTab(QWidget):
 
         self._spider_grid.addStretch()
         self._spider_section.show()
+
+

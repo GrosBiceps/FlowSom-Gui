@@ -9,12 +9,12 @@ LogConsole est un QPlainTextEdit enrichi avec :
     [SUCCESS] cyan, timestamps en gris
   - Méthode append_log(msg) qui parse et colore automatiquement
 
-Design System "Deep Medical Clarity" :
-  - [INFO]    → #2ECC71 (Vert Santé)
-  - [WARNING] → #F39C12 (Orange Alerte)
-  - [ERROR]   → #E74C3C (Rouge Alerte)
-  - [SUCCESS] → #00A3FF (Bleu Technologie)
-  - Timestamp → #45475a (Gris surface)
+Design System "PRISMA v2" :
+    - [INFO]    → #39FF8A (FITC / accent)
+    - [WARNING] → #FF9B3D (PE / warning)
+    - [ERROR]   → #FF3D6E (APC / danger)
+    - [SUCCESS] → #5BAAFF (V500 / info)
+    - Timestamp → rgba(238,242,247,0.28)
 """
 
 from __future__ import annotations
@@ -36,77 +36,77 @@ from PyQt5.QtGui import (
 
 _LOG_RULES: list[tuple[re.Pattern, str]] = [
     # Timestamps ISO : 2024-01-15 12:34:56
-    (re.compile(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}"), "#45475a"),
+    (re.compile(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}"), "#647088"),
     # Horodatage court : [12:34:56]
-    (re.compile(r"\[\d{2}:\d{2}:\d{2}\]"), "#45475a"),
+    (re.compile(r"\[\d{2}:\d{2}:\d{2}\]"), "#647088"),
     # Niveaux de log
-    (re.compile(r"\[INFO\]|\[info\]"), "#2ECC71"),  # Vert santé
-    (re.compile(r"\bINFO\b"), "#2ECC71"),  # Format logger sans []
-    (re.compile(r"\[SUCCESS\]|\[success\]"), "#00A3FF"),  # Bleu technologie
-    (re.compile(r"\bSUCCESS\b"), "#00A3FF"),
-    (re.compile(r"\[WARNING\]|\[warning\]|\[WARN\]|\[warn\]"), "#F39C12"),  # Orange
-    (re.compile(r"\bWARNING\b|\bWARN\b"), "#F39C12"),
-    (re.compile(r"\[ERROR\]|\[error\]|\[ERR\]|\[err\]"), "#E74C3C"),  # Rouge
-    (re.compile(r"\bERROR\b|\bERR\b|\bCRITICAL\b"), "#E74C3C"),
-    (re.compile(r"\[DEBUG\]|\[debug\]"), "#585b70"),  # Gris discret
-    (re.compile(r"\bDEBUG\b"), "#585b70"),
+    (re.compile(r"\[INFO\]|\[info\]"), "#39FF8A"),
+    (re.compile(r"\bINFO\b"), "#39FF8A"),
+    (re.compile(r"\[SUCCESS\]|\[success\]"), "#5BAAFF"),
+    (re.compile(r"\bSUCCESS\b"), "#5BAAFF"),
+    (re.compile(r"\[WARNING\]|\[warning\]|\[WARN\]|\[warn\]"), "#FF9B3D"),
+    (re.compile(r"\bWARNING\b|\bWARN\b"), "#FF9B3D"),
+    (re.compile(r"\[ERROR\]|\[error\]|\[ERR\]|\[err\]"), "#FF3D6E"),
+    (re.compile(r"\bERROR\b|\bERR\b|\bCRITICAL\b"), "#FF3D6E"),
+    (re.compile(r"\[DEBUG\]|\[debug\]"), "#8A95AD"),
+    (re.compile(r"\bDEBUG\b"), "#8A95AD"),
     # Marqueurs pipeline / gating importants
-    (re.compile(r"\bG[1-4]_[a-zA-Z0-9_]+\b|\bGate\s+[1-4]\b"), "#89b4fa"),
-    (re.compile(r"\b(MRD|KDE|RANSAC|GMM|UMAP|FlowSOM)\b", re.IGNORECASE), "#74c7ec"),
+    (re.compile(r"\bG[1-4]_[a-zA-Z0-9_]+\b|\bGate\s+[1-4]\b"), "#5BAAFF"),
+    (re.compile(r"\b(MRD|KDE|RANSAC|GMM|UMAP|FlowSOM)\b", re.IGNORECASE), "#7B52FF"),
     (
         re.compile(
             r"\b(Marqueurs\s+retenus\s+dans\s+le\s+panel\s+commun|Marqueurs\s+pour\s+FlowSOM)\b",
             re.IGNORECASE,
         ),
-        "#f9e2af",
+        "#FFE032",
     ),
-    (re.compile(r"\bD[ée]s[ée]quilibre\s+Ma[îi]tris[ée]\s+activ[ée]\b", re.IGNORECASE), "#fab387"),
-    (re.compile(r"\bfallback\b|\bfallbacks\b|\béchou[ée]\b", re.IGNORECASE), "#F39C12"),
-    (re.compile(r"\bPipeline\b|\bÉtape\b", re.IGNORECASE), "#74c7ec"),
+    (re.compile(r"\bD[ée]s[ée]quilibre\s+Ma[îi]tris[ée]\s+activ[ée]\b", re.IGNORECASE), "#FF9B3D"),
+    (re.compile(r"\bfallback\b|\bfallbacks\b|\béchou[ée]\b", re.IGNORECASE), "#FF9B3D"),
+    (re.compile(r"\bPipeline\b|\bÉtape\b", re.IGNORECASE), "#7B52FF"),
     # Valeurs numériques importantes (pourcentages, MRD)
-    (re.compile(r"\b\d+\.?\d*\s*%"), "#cba6f7"),  # Mauve — pourcentages
-    (re.compile(r"\bratio\s*=\s*\d+(?:\.\d+)?×\b", re.IGNORECASE), "#f38ba8"),
-    (re.compile(r"\bseed\s*=\s*\d+\b", re.IGNORECASE), "#89dceb"),
-    (re.compile(r"\([^)]*\)"), "#b4befe"),
-    (re.compile(r"\b\d[\d,]*\s*/\s*\d[\d,]*\b"), "#f9e2af"),  # Ratios n_kept/n_total
+    (re.compile(r"\b\d+\.?\d*\s*%"), "#7B52FF"),
+    (re.compile(r"\bratio\s*=\s*\d+(?:\.\d+)?×\b", re.IGNORECASE), "#FF3D6E"),
+    (re.compile(r"\bseed\s*=\s*\d+\b", re.IGNORECASE), "#5BAAFF"),
+    (re.compile(r"\([^)]*\)"), "#AAB6CB"),
+    (re.compile(r"\b\d[\d,]*\s*/\s*\d[\d,]*\b"), "#FFE032"),
     # Chemins de fichiers
-    (re.compile(r"[A-Za-z]:\\[^\s]+|/[^\s]+\.[a-z]+"), "#f9e2af"),  # Jaune doux
+    (re.compile(r"[A-Za-z]:\\[^\s]+|/[^\s]+\.[a-z]+"), "#FFE032"),
     # Flèches / transitions de comptage
-    (re.compile(r"→|->|=>|\|"), "#6c7086"),
+    (re.compile(r"→|->|=>|\|"), "#8491AA"),
     # Mots-clés état
-    (re.compile(r"\b(terminé|sauvegardé|chargé|exporté|conservées?)\b", re.IGNORECASE), "#a6e3a1"),
-    (re.compile(r"\b(absent|ignoré|déséquilibre|warning|erreur)\b", re.IGNORECASE), "#fab387"),
+    (re.compile(r"\b(terminé|sauvegardé|chargé|exporté|conservées?)\b", re.IGNORECASE), "#39FF8A"),
+    (re.compile(r"\b(absent|ignoré|déséquilibre|warning|erreur)\b", re.IGNORECASE), "#FF9B3D"),
     # Étapes pipelines (ex: "Étape 1/5" ou "Step 1 of 5")
-    (re.compile(r"[ÉEé]tape\s+\d+\s*/\s*\d+|Step\s+\d+\s+of\s+\d+"), "#89b4fa"),
+    (re.compile(r"[ÉEé]tape\s+\d+\s*/\s*\d+|Step\s+\d+\s+of\s+\d+"), "#5BAAFF"),
 ]
 
 _MAJOR_LINE_PATTERNS: list[tuple[re.Pattern, str, int]] = [
     # Blocs de séparation visuels
-    (re.compile(r"^\s*[=]{20,}\s*$"), "#94e2d5", 63),
-    (re.compile(r"^\s*[═]{10,}\s*$"), "#94e2d5", 63),
+    (re.compile(r"^\s*[=]{20,}\s*$"), "#5BAAFF", 63),
+    (re.compile(r"^\s*[═]{10,}\s*$"), "#5BAAFF", 63),
     # Démarrage / fin du pipeline
-    (re.compile(r"\bPIPELINE\b.*\bD[ÉE]MARRAGE\b", re.IGNORECASE), "#74c7ec", 75),
-    (re.compile(r"\bD[ÉE]MARRAGE\s+DU\s+PIPELINE\b", re.IGNORECASE), "#74c7ec", 75),
-    (re.compile(r"\bPIPELINE\b.*\bTERMIN[ÉE]\b", re.IGNORECASE), "#a6e3a1", 75),
+    (re.compile(r"\bPIPELINE\b.*\bD[ÉE]MARRAGE\b", re.IGNORECASE), "#7B52FF", 75),
+    (re.compile(r"\bD[ÉE]MARRAGE\s+DU\s+PIPELINE\b", re.IGNORECASE), "#7B52FF", 75),
+    (re.compile(r"\bPIPELINE\b.*\bTERMIN[ÉE]\b", re.IGNORECASE), "#39FF8A", 75),
     # Bloc d'analyse important
-    (re.compile(r"\bANALYSE\s+DES\s+CLUSTERS\s+EXCLUSIFS\b", re.IGNORECASE), "#f9e2af", 75),
+    (re.compile(r"\bANALYSE\s+DES\s+CLUSTERS\s+EXCLUSIFS\b", re.IGNORECASE), "#FFE032", 75),
     # Étapes du pipeline: colorer toute la ligne, pas seulement le token "Étape"
-    (re.compile(r"\b[ÉEé]tape\s+\d+\b.*", re.IGNORECASE), "#74c7ec", 75),
-    (re.compile(r"\bStep\s+\d+\b.*", re.IGNORECASE), "#74c7ec", 75),
+    (re.compile(r"\b[ÉEé]tape\s+\d+\b.*", re.IGNORECASE), "#5BAAFF", 75),
+    (re.compile(r"\bStep\s+\d+\b.*", re.IGNORECASE), "#5BAAFF", 75),
     # KPI finaux de synthèse
-    (re.compile(r"\bCellules\s*:", re.IGNORECASE), "#89dceb", 75),
-    (re.compile(r"\bMarqueurs\s*:", re.IGNORECASE), "#cba6f7", 75),
-    (re.compile(r"\bM[ée]taclusters\s*:", re.IGNORECASE), "#f38ba8", 75),
+    (re.compile(r"\bCellules\s*:", re.IGNORECASE), "#5BAAFF", 75),
+    (re.compile(r"\bMarqueurs\s*:", re.IGNORECASE), "#7B52FF", 75),
+    (re.compile(r"\bM[ée]taclusters\s*:", re.IGNORECASE), "#FF3D6E", 75),
     # Lignes stratégiques de sélection des marqueurs / balance
     (
         re.compile(r"\bMarqueurs\s+retenus\s+dans\s+le\s+panel\s+commun\b", re.IGNORECASE),
-        "#f9e2af",
+        "#FFE032",
         75,
     ),
-    (re.compile(r"\bMarqueurs\s+pour\s+FlowSOM\b", re.IGNORECASE), "#f5c2e7", 75),
+    (re.compile(r"\bMarqueurs\s+pour\s+FlowSOM\b", re.IGNORECASE), "#7B52FF", 75),
     (
         re.compile(r"\bD[ée]s[ée]quilibre\s+Ma[îi]tris[ée]\s+activ[ée]\b", re.IGNORECASE),
-        "#fab387",
+        "#FF9B3D",
         75,
     ),
 ]
@@ -140,35 +140,11 @@ class LogConsole(QPlainTextEdit):
         font.setStyleHint(QFont.Monospace)
         self.setFont(font)
 
-        # Style de base (complété par QSS global)
-        self.setStyleSheet("""
-            QPlainTextEdit#logConsole {
-                background: #0a0a14;
-                border: 1px solid rgba(137, 180, 250, 0.10);
-                border-radius: 10px;
-                color: #bac2de;
-                padding: 12px;
-                selection-background-color: rgba(137, 180, 250, 0.28);
-                line-height: 1.5;
-            }
-            QPlainTextEdit#logConsole QScrollBar:vertical {
-                background: #0d0d18;
-                width: 8px;
-                border: none;
-            }
-            QPlainTextEdit#logConsole QScrollBar::handle:vertical {
-                background: rgba(137, 180, 250, 0.2);
-                border-radius: 4px;
-                min-height: 20px;
-            }
-            QPlainTextEdit#logConsole QScrollBar::handle:vertical:hover {
-                background: rgba(137, 180, 250, 0.4);
-            }
-        """)
+        # Style visuel principal défini dans gui/styles.py
 
         # Format de texte par défaut (texte brut)
         self._default_format = QTextCharFormat()
-        self._default_format.setForeground(QBrush(QColor("#bac2de")))
+        self._default_format.setForeground(QBrush(QColor("#EEF2F7")))
 
         # Nettoyage visuel des préfixes doublés: "[hh:mm:ss] INFO [hh:mm:ss] INFO ..."
         self._dup_prefix_re = re.compile(
@@ -280,7 +256,7 @@ class LogConsole(QPlainTextEdit):
             or " ERR " in f" {line_up} "
             or " CRITICAL " in f" {line_up} "
         ):
-            fmt.setForeground(QBrush(QColor("#E74C3C")))
+            fmt.setForeground(QBrush(QColor("#FF3D6E")))
         elif (
             "[WARNING]" in line_up
             or "[WARN]" in line_up
@@ -288,15 +264,15 @@ class LogConsole(QPlainTextEdit):
             or " WARN " in f" {line_up} "
             or " FALLBACK" in line_up
         ):
-            fmt.setForeground(QBrush(QColor("#F39C12")))
+            fmt.setForeground(QBrush(QColor("#FF9B3D")))
         elif "[SUCCESS]" in line_up or " SUCCESS " in f" {line_up} ":
-            fmt.setForeground(QBrush(QColor("#00A3FF")))
+            fmt.setForeground(QBrush(QColor("#5BAAFF")))
         elif "[DEBUG]" in line_up or " DEBUG " in f" {line_up} ":
-            fmt.setForeground(QBrush(QColor("#585b70")))
+            fmt.setForeground(QBrush(QColor("#8A95AD")))
         elif " INFO " in f" {line_up} " or "[INFO]" in line_up:
-            fmt.setForeground(QBrush(QColor("#cdd6f4")))
+            fmt.setForeground(QBrush(QColor("#39FF8A")))
         else:
-            fmt.setForeground(QBrush(QColor("#bac2de")))
+            fmt.setForeground(QBrush(QColor("#EEF2F7")))
         return fmt
 
     def _major_line_format(self, line: str) -> Optional[QTextCharFormat]:

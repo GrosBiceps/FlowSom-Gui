@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 expert_focus_dialog.py — Vue "Expert Focus View" plein écran pour la validation experte.
 
@@ -20,6 +20,7 @@ Architecture : QDialog (plein écran) → QVBoxLayout
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Dict, List, Optional, Set
 
 from PyQt5.QtCore import Qt, pyqtSignal, QSize
@@ -40,26 +41,26 @@ from PyQt5.QtWidgets import (
     QLineEdit,
 )
 
-# ── Palette Catppuccin Mocha ─────────────────────────────────────────────────
+# ── Palette PRISMA v2 ─────────────────────────────────────────────────
 _C = {
-    "base": "#1e1e2e",
-    "mantle": "#181825",
-    "crust": "#11111b",
-    "surface0": "#313244",
-    "surface1": "#45475a",
-    "surface2": "#585b70",
-    "overlay0": "#6c7086",
-    "text": "#cdd6f4",
-    "subtext": "#a6adc8",
-    "blue": "#89b4fa",
-    "lavender": "#b4befe",
-    "mauve": "#cba6f7",
-    "green": "#a6e3a1",
-    "red": "#f38ba8",
-    "yellow": "#f9e2af",
-    "teal": "#94e2d5",
-    "peach": "#fab387",
-    "pink": "#f5c2e7",
+    "base": "#0C1220",
+    "mantle": "#080D18",
+    "crust": "#04070D",
+    "surface0": "#101825",
+    "surface1": "#141E2E",
+    "surface2": "#2A3342",
+    "overlay0": "rgba(238,242,247,0.35)",
+    "text": "#EEF2F7",
+    "subtext": "rgba(238,242,247,0.55)",
+    "blue": "#5BAAFF",
+    "lavender": "#7B52FF",
+    "mauve": "#7B52FF",
+    "green": "#39FF8A",
+    "red": "#FF3D6E",
+    "yellow": "#FFE032",
+    "teal": "#5BAAFF",
+    "peach": "#FF9B3D",
+    "pink": "#FF3D6E",
 }
 
 _METHOD_FLAG: Dict[str, str] = {
@@ -91,6 +92,11 @@ _TECHNICAL_MARKERS = {
     "fsc",
     "ssc",
 }
+
+
+def _outfit(size: int, weight: int = QFont.Normal) -> QFont:
+    """Police UI prioritaire: Outfit, avec fallback système géré par Qt."""
+    return QFont("Segoe UI", size, weight)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -155,14 +161,14 @@ class ExpertNodeCard(QFrame):
         header_row.setSpacing(6)
 
         node_id_lbl = QLabel(f"Nœud  {self._node_id}")
-        node_id_lbl.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        node_id_lbl.setFont(_outfit(10, QFont.Bold))
         node_id_lbl.setStyleSheet(f"color: {_C['mauve']}; background: transparent;")
         header_row.addWidget(node_id_lbl)
         header_row.addStretch()
 
         pct_patho = self._node.get("pct_patho", 0.0)
         pct_lbl = QLabel(f"{pct_patho:.1f} %")
-        pct_lbl.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        pct_lbl.setFont(_outfit(10, QFont.Bold))
         pct_col = (
             _C["red"] if pct_patho > 1.0 else (_C["yellow"] if pct_patho > 0.01 else _C["subtext"])
         )
@@ -221,7 +227,7 @@ class ExpertNodeCard(QFrame):
         n_patho = self._node.get("n_patho", 0)
         n_cells = self._node.get("n_cells", 0)
         info_lbl = QLabel(f"{n_patho:,} / {n_cells:,} cellules")
-        info_lbl.setFont(QFont("Segoe UI", 8))
+        info_lbl.setFont(_outfit(8, QFont.Light))
         info_lbl.setAlignment(Qt.AlignCenter)
         info_lbl.setStyleSheet(f"color: {_C['subtext']}; background: transparent;")
         root.addWidget(info_lbl)
@@ -259,17 +265,49 @@ class ExpertNodeCard(QFrame):
 
     def _build_radar(self) -> QWidget:
         try:
-            markers = self._filter_clinical_markers(self._marker_cols)
-            if (
-                self._mfi_data is not None
-                and markers
-                and len(markers) >= 3
-                and self._node_id in self._mfi_data.index
-            ):
+            if self._mfi_data is not None:
                 return self._build_radar_matplotlib()
         except Exception:
             pass
         return self._build_radar_placeholder()
+
+    def _resolve_mfi_index_key(self) -> Optional[Any]:
+        """
+        Résout une clé d'index DataFrame pour ce nœud, même si le format
+        diffère (int/str, offset 0-based/1-based, labels type C12/MC12/Node 12).
+        """
+        if self._mfi_data is None or not hasattr(self._mfi_data, "index"):
+            return None
+
+        idx = self._mfi_data.index
+
+        # 1) Correspondance directe (plus fiable)
+        if self._node_id in idx:
+            return self._node_id
+
+        # 2) Variantes courantes int/str + offset +/- 1
+        candidates: List[Any] = [
+            str(self._node_id),
+            self._node_id - 1,
+            self._node_id + 1,
+            str(self._node_id - 1),
+            str(self._node_id + 1),
+        ]
+        for cand in candidates:
+            if cand in idx:
+                return cand
+
+        # 3) Labels composites: C12, MC12, Node 12, etc.
+        for key in idx:
+            text = str(key).strip()
+            found = re.findall(r"\d+", text)
+            if not found:
+                continue
+            val = int(found[-1])
+            if val == self._node_id or val == self._node_id - 1 or val == self._node_id + 1:
+                return key
+
+        return None
 
     def _filter_clinical_markers(self, markers: List[str]) -> List[str]:
         """Retourne uniquement les marqueurs cliniques (exclut FSC/SSC/Time...)."""
@@ -286,9 +324,28 @@ class ExpertNodeCard(QFrame):
         from matplotlib.figure import Figure
         import numpy as np
 
-        markers = self._filter_clinical_markers(self._marker_cols)
-        row = self._mfi_data.loc[self._node_id, markers]
-        mfi_row = row.values.astype(float)
+        # Marqueurs réellement présents dans la matrice MFI
+        mfi_cols = [str(c) for c in list(getattr(self._mfi_data, "columns", []))]
+        markers = [m for m in self._filter_clinical_markers(self._marker_cols) if m in mfi_cols]
+
+        # Fallback : si marker_cols est incomplet, on reprend les colonnes MFI cliniques.
+        if len(markers) < 3:
+            markers = self._filter_clinical_markers(mfi_cols)
+
+        if len(markers) < 3:
+            raise ValueError("Pas assez de marqueurs cliniques pour le radar")
+
+        idx_key = self._resolve_mfi_index_key()
+        if idx_key is None:
+            raise KeyError(f"node_id {self._node_id} absent de la matrice MFI")
+
+        row = self._mfi_data.loc[idx_key, markers]
+        if hasattr(row, "ndim") and row.ndim > 1:
+            row = row.iloc[0]
+        mfi_row = np.asarray(row.values, dtype=float)
+
+        if mfi_row.size < 3:
+            raise ValueError("Profil MFI insuffisant pour radar")
 
         # Normalisation par noeud (identique aux bons radars HomeTab/HTML)
         v_min, v_max = float(mfi_row.min()), float(mfi_row.max())
@@ -305,29 +362,38 @@ class ExpertNodeCard(QFrame):
         angles += angles[:1]
         norm_values = list(norm_values) + [norm_values[0]]
 
-        # Couleur radar : mauve si algo, teal si manuel uniquement, gris si ni l'un ni l'autre
+        # Couleur PRISMA : brand violet si algo/sélectionné, accent vert si manuel, dim si inactif
         if self._is_algo:
-            radar_color = "#cba6f7"
+            radar_color = "#7B52FF"  # brand — V450
         elif self._is_manual:
-            radar_color = "#94e2d5"
+            radar_color = "#39FF8A"  # accent — FITC
         else:
-            radar_color = "#585b70"
+            # Matplotlib n'accepte pas les chaînes CSS "rgba(...)".
+            radar_color = (123 / 255.0, 82 / 255.0, 1.0, 0.30)  # brand dim
 
-        fig = Figure(figsize=(2.1, 2.1), facecolor="#12121e")
+        fig = Figure(figsize=(2.1, 2.1), facecolor="#080D18")
         ax = fig.add_subplot(111, polar=True)
-        ax.set_facecolor("#12121e")
+        ax.set_facecolor("#0C1220")
 
-        ax.plot(angles, norm_values, color=radar_color, linewidth=1.4)
-        ax.fill(angles, norm_values, color=radar_color, alpha=0.20)
+        ax.plot(angles, norm_values, color=radar_color, linewidth=1.6)
+        ax.fill(angles, norm_values, color=radar_color, alpha=0.18)
 
         ax.set_ylim(0, 1.05)
         ax.set_yticks([0.33, 0.66, 1.0])
         ax.set_xticks(angles[:-1])
-        ax.set_xticklabels(short_labels, fontsize=5, color="#a6adc8")
+        ax.set_xticklabels(
+            short_labels,
+            fontsize=5,
+            color="#EEF2F7",
+            fontfamily=["Segoe UI", "Arial", "Arial", "sans-serif"],
+        )
         ax.set_yticklabels([])
-        ax.yaxis.grid(True, color=(1, 1, 1, 0.15), linewidth=0.5, linestyle=":")
-        ax.spines["polar"].set_color("#313244")
-        ax.tick_params(pad=3)
+        # Axes/spokes plus lisibles en fond sombre (demande Expert Focus)
+        ax.yaxis.grid(True, color=(1, 1, 1, 0.26), linewidth=0.7, linestyle=":")
+        ax.xaxis.grid(True, color=(1, 1, 1, 0.22), linewidth=0.6, linestyle="-")
+        ax.spines["polar"].set_color((1, 1, 1, 0.52))
+        ax.spines["polar"].set_linewidth(0.9)
+        ax.tick_params(axis="x", pad=3, colors="#EEF2F7")
         fig.tight_layout(pad=0.3)
 
         canvas = FigureCanvas(fig)
@@ -385,6 +451,12 @@ class ExpertNodeCard(QFrame):
                 border-radius: 7px; font-weight: 700; font-size: 8pt;
             }}
             QPushButton:hover {{ background: rgba(166,227,161,0.32); }}
+            QPushButton:pressed {{ background: rgba(166,227,161,0.40); }}
+            QPushButton:focus {{
+                border-color: rgba(166,227,161,0.78);
+                background: rgba(166,227,161,0.34);
+                outline: none;
+            }}
         """
         keep_inactive = f"""
             QPushButton {{
@@ -393,6 +465,17 @@ class ExpertNodeCard(QFrame):
                 border-radius: 7px; font-weight: 600; font-size: 8pt;
             }}
             QPushButton:hover {{ background: rgba(69,71,90,0.6); color: {_C["subtext"]}; }}
+            QPushButton:pressed {{ background: rgba(69,71,90,0.72); }}
+            QPushButton:focus {{
+                border-color: rgba(123,82,255,0.65);
+                background: rgba(69,71,90,0.66);
+                outline: none;
+            }}
+            QPushButton:disabled {{
+                color: #EEF2F7;
+                border-color: rgba(255,255,255,0.05);
+                background: rgba(49,50,68,0.35);
+            }}
         """
         discard_active = f"""
             QPushButton {{
@@ -402,6 +485,12 @@ class ExpertNodeCard(QFrame):
                 border-radius: 7px; font-weight: 700; font-size: 8pt;
             }}
             QPushButton:hover {{ background: rgba(243,139,168,0.30); }}
+            QPushButton:pressed {{ background: rgba(243,139,168,0.38); }}
+            QPushButton:focus {{
+                border-color: rgba(243,139,168,0.72);
+                background: rgba(243,139,168,0.34);
+                outline: none;
+            }}
         """
         discard_inactive = f"""
             QPushButton {{
@@ -618,12 +707,13 @@ class ExpertFocusDialog(QDialog):
         badge.setStyleSheet(
             f"background: rgba(203,166,247,0.18); color: {_C['mauve']}; "
             f"border: 1px solid rgba(203,166,247,0.35); border-radius: 6px; "
-            f"padding: 3px 10px; font-size: 8pt; font-weight: 700; letter-spacing: 0.1em;"
+            f"padding: 3px 10px; font-size: 8pt; font-weight: 700; "
+            f"font-family: 'Segoe UI', 'Segoe UI', sans-serif; letter-spacing: 0.1em;"
         )
         title_col.addWidget(badge)
 
         title = QLabel("Validation Experte — Tous les Nœuds Patients")
-        title.setFont(QFont("Segoe UI", 15, QFont.Bold))
+        title.setFont(_outfit(15, QFont.Bold))
         title.setStyleSheet(f"color: {_C['text']};")
         title_col.addWidget(title)
 
@@ -632,7 +722,10 @@ class ExpertFocusDialog(QDialog):
             "sur GARDER. Réglez les nœuds non sélectionnés que vous souhaitez ajouter, puis validez."
         )
         sub.setWordWrap(True)
-        sub.setStyleSheet(f"color: {_C['subtext']}; font-size: 9pt;")
+        sub.setStyleSheet(
+            f"color: {_C['subtext']}; font-size: 9pt; font-weight: 300; "
+            f"font-family: 'Segoe UI', 'Segoe UI', sans-serif;"
+        )
         title_col.addWidget(sub)
 
         layout.addLayout(title_col, 1)
@@ -643,7 +736,10 @@ class ExpertFocusDialog(QDialog):
         legend.setAlignment(Qt.AlignTop | Qt.AlignRight)
 
         legend_title = QLabel("Légende méthodes")
-        legend_title.setStyleSheet(f"color: {_C['subtext']}; font-size: 8pt; font-weight: 600;")
+        legend_title.setStyleSheet(
+            f"color: {_C['subtext']}; font-size: 8pt; font-weight: 600; "
+            f"font-family: 'Segoe UI', 'Segoe UI', sans-serif;"
+        )
         legend.addWidget(legend_title, alignment=Qt.AlignRight)
 
         for method, color, desc in [
@@ -659,7 +755,10 @@ class ExpertFocusDialog(QDialog):
             dot.setStyleSheet(f"color: {color}; font-size: 10pt;")
             rl.addWidget(dot)
             lbl = QLabel(f"<b>{method}</b>  {desc}")
-            lbl.setStyleSheet(f"color: {_C['subtext']}; font-size: 8pt;")
+            lbl.setStyleSheet(
+                f"color: {_C['subtext']}; font-size: 8pt; "
+                f"font-family: 'Segoe UI', 'Segoe UI', sans-serif;"
+            )
             rl.addWidget(lbl)
             legend.addWidget(row_w)
 
@@ -674,7 +773,10 @@ class ExpertFocusDialog(QDialog):
 
         # Filtre méthode
         filter_lbl = QLabel("Afficher :")
-        filter_lbl.setStyleSheet(f"color: {_C['subtext']}; font-size: 9pt;")
+        filter_lbl.setStyleSheet(
+            f"color: {_C['subtext']}; font-size: 9pt; font-weight: 400; "
+            f"font-family: 'Segoe UI', 'Segoe UI', sans-serif;"
+        )
         layout.addWidget(filter_lbl)
 
         self._filter_combo = QComboBox()
@@ -695,6 +797,7 @@ class ExpertFocusDialog(QDialog):
                 border: 1px solid rgba(203,166,247,0.30);
                 border-radius: 8px; color: {_C["text"]};
                 padding: 0 10px; font-size: 9pt;
+                font-family: 'Segoe UI', 'Segoe UI', sans-serif;
             }}
             QComboBox:hover {{ border-color: rgba(203,166,247,0.55); }}
             QComboBox QAbstractItemView {{
@@ -720,6 +823,7 @@ class ExpertFocusDialog(QDialog):
                 border: 1px solid rgba(137,180,250,0.25);
                 border-radius: 8px; color: {_C["text"]};
                 padding: 0 10px; font-size: 9pt;
+                font-family: 'Segoe UI', 'Segoe UI', sans-serif;
             }}
             QLineEdit:focus {{ border-color: rgba(137,180,250,0.60); }}
         """)
@@ -730,7 +834,10 @@ class ExpertFocusDialog(QDialog):
 
         # Compteur
         self._lbl_count = QLabel("")
-        self._lbl_count.setStyleSheet(f"color: {_C['overlay0']}; font-size: 9pt;")
+        self._lbl_count.setStyleSheet(
+            f"color: {_C['overlay0']}; font-size: 9pt; "
+            f"font-family: 'Segoe UI', 'Segoe UI', sans-serif;"
+        )
         layout.addWidget(self._lbl_count)
 
         return widget
@@ -750,14 +857,18 @@ class ExpertFocusDialog(QDialog):
         layout.setSpacing(14)
 
         self._lbl_stats = QLabel("")
-        self._lbl_stats.setStyleSheet(f"color: {_C['subtext']}; font-size: 9pt;")
+        self._lbl_stats.setStyleSheet(
+            f"color: {_C['subtext']}; font-size: 9pt; font-weight: 300; "
+            f"font-family: 'Segoe UI', 'Segoe UI', sans-serif;"
+        )
         layout.addWidget(self._lbl_stats)
 
         self._lbl_manual_badge = QLabel("")
         self._lbl_manual_badge.setStyleSheet(
             f"background: rgba(148,226,213,0.14); color: {_C['teal']}; "
             f"border: 1px solid rgba(148,226,213,0.35); border-radius: 6px; "
-            f"padding: 2px 10px; font-size: 9pt; font-weight: 700;"
+            f"padding: 2px 10px; font-size: 9pt; font-weight: 700; "
+            f"font-family: 'Segoe UI', 'Segoe UI', sans-serif;"
         )
         self._lbl_manual_badge.hide()
         layout.addWidget(self._lbl_manual_badge)
@@ -987,6 +1098,19 @@ class ExpertFocusDialog(QDialog):
                 background: rgba(148,226,213,0.32);
                 border-color: rgba(148,226,213,0.75);
             }}
+            QPushButton:pressed {{
+                background: rgba(148,226,213,0.40);
+            }}
+            QPushButton:focus {{
+                border-color: rgba(148,226,213,0.90);
+                background: rgba(148,226,213,0.34);
+                outline: none;
+            }}
+            QPushButton:disabled {{
+                color: #EEF2F7;
+                border-color: rgba(255,255,255,0.06);
+                background: rgba(49,50,68,0.45);
+            }}
         """
 
     @staticmethod
@@ -1000,6 +1124,19 @@ class ExpertFocusDialog(QDialog):
             QPushButton:hover {{
                 background: rgba(69,71,90,0.80); color: {_C["text"]};
                 border-color: rgba(99,101,126,0.70);
+            }}
+            QPushButton:pressed {{
+                background: rgba(69,71,90,0.90);
+            }}
+            QPushButton:focus {{
+                border-color: rgba(123,82,255,0.65);
+                background: rgba(69,71,90,0.86);
+                outline: none;
+            }}
+            QPushButton:disabled {{
+                color: #EEF2F7;
+                border-color: rgba(255,255,255,0.05);
+                background: rgba(49,50,68,0.40);
             }}
         """
 
@@ -1015,3 +1152,5 @@ class ExpertFocusDialog(QDialog):
             if not (node.get("is_mrd_jf") or node.get("is_mrd_flo") or node.get("is_mrd_eln"))
             and self._initial_included.get(int(node.get("node_id", 0)), False)
         ]
+
+

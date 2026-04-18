@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 mrd_node_table.py — Grille de Validation par Cartes pour les nœuds SOM MRD positifs.
 
@@ -52,24 +52,24 @@ from PyQt5.QtWidgets import (
     QStyle,
 )
 
-# ── Palette Catppuccin Mocha ─────────────────────────────────────────────────
+# ── Palette PRISMA v2 ─────────────────────────────────────────────────
 _C = {
-    "surface0": "#313244",
-    "surface1": "#45475a",
-    "base": "#1e1e2e",
-    "mantle": "#181825",
-    "crust": "#11111b",
-    "text": "#cdd6f4",
-    "subtext": "#a6adc8",
-    "red": "#f38ba8",
-    "green": "#a6e3a1",
-    "yellow": "#f9e2af",
-    "blue": "#89b4fa",
-    "lavender": "#b4befe",
-    "mauve": "#cba6f7",
-    "overlay0": "#6c7086",
-    "pink": "#f5c2e7",
-    "teal": "#94e2d5",
+    "surface0": "#101825",
+    "surface1": "#141E2E",
+    "base": "#0C1220",
+    "mantle": "#080D18",
+    "crust": "#04070D",
+    "text": "#EEF2F7",
+    "subtext": "rgba(238,242,247,0.55)",
+    "red": "#FF3D6E",
+    "green": "#39FF8A",
+    "yellow": "#FFE032",
+    "blue": "#5BAAFF",
+    "lavender": "#7B52FF",
+    "mauve": "#7B52FF",
+    "overlay0": "rgba(238,242,247,0.36)",
+    "pink": "#FF3D6E",
+    "teal": "#5BAAFF",
 }
 
 # Colonnes (gardés pour rétrocompat du modèle, non utilisés dans la grille)
@@ -188,18 +188,18 @@ class MRDNodeCard(QFrame):
         # Méthodes actives
         methods = [m for m, key in _METHOD_FLAG.items() if self._node.get(key)]
         methods_lbl = QLabel("  ·  ".join(methods) if methods else "—")
-        methods_lbl.setFont(QFont("Segoe UI", 8))
+        methods_lbl.setFont(QFont("Consolas", 8))
         methods_lbl.setAlignment(Qt.AlignCenter)
         methods_lbl.setStyleSheet(
-            f"color: {_C['lavender']}; background: rgba(180,190,255,0.07); "
-            f"border-radius: 4px; padding: 2px 6px;"
+            f"color: {_C['lavender']}; background: rgba(123,82,255,0.12); "
+            f"border: 1px solid rgba(123,82,255,0.24); border-radius: 0px; padding: 2px 6px;"
         )
         root.addWidget(methods_lbl)
 
         # Séparateur
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("color: rgba(137,180,250,0.10); max-height:1px;")
+        sep.setStyleSheet("color: rgba(255,255,255,0.055); max-height:1px;")
         root.addWidget(sep)
 
         # ── Zone radar ───────────────────────────────────────────────────
@@ -210,7 +210,7 @@ class MRDNodeCard(QFrame):
         n_patho = self._node.get("n_patho", 0)
         n_cells = self._node.get("n_cells", 0)
         info_lbl = QLabel(f"{n_patho:,} / {n_cells:,} cellules")
-        info_lbl.setFont(QFont("Segoe UI", 8))
+        info_lbl.setFont(QFont("Consolas", 8))
         info_lbl.setAlignment(Qt.AlignCenter)
         info_lbl.setStyleSheet(f"color: {_C['subtext']}; background: transparent;")
         root.addWidget(info_lbl)
@@ -301,12 +301,12 @@ class MRDNodeCard(QFrame):
         angles += angles[:1]
         norm_values = list(norm_values) + [norm_values[0]]
 
-        fig = Figure(figsize=(2.1, 2.1), facecolor="#12121e")
+        fig = Figure(figsize=(2.1, 2.1), facecolor="#080D18")
         ax = fig.add_subplot(111, polar=True)
-        ax.set_facecolor("#12121e")
+        ax.set_facecolor("#0C1220")
 
-        ax.plot(angles, norm_values, color="#cba6f7", linewidth=1.4)
-        ax.fill(angles, norm_values, color="#cba6f7", alpha=0.20)
+        ax.plot(angles, norm_values, color="#7B52FF", linewidth=1.6)
+        ax.fill(angles, norm_values, color="#7B52FF", alpha=0.18)
 
         ax.set_ylim(0, 1.05)
         ax.set_yticks([0.33, 0.66, 1.0])
@@ -314,11 +314,12 @@ class MRDNodeCard(QFrame):
         ax.set_xticklabels(
             short_labels,
             fontsize=5,
-            color="#a6adc8",
+            color="#B0B8C8",
+            fontfamily=["Segoe UI", "Arial", "Arial", "sans-serif"],
         )
         ax.set_yticklabels([])
-        ax.yaxis.grid(True, color=(1, 1, 1, 0.15), linewidth=0.5, linestyle=":")
-        ax.spines["polar"].set_color("#313244")
+        ax.yaxis.grid(True, color=(1, 1, 1, 0.10), linewidth=0.5, linestyle=":")
+        ax.spines["polar"].set_color((1, 1, 1, 0.08))
         ax.tick_params(pad=3)
         fig.tight_layout(pad=0.3)
 
@@ -340,8 +341,9 @@ class MRDNodeCard(QFrame):
         ph.setMinimumHeight(120)
         ph.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
         ph.setStyleSheet(
-            f"color: {_C['overlay0']}; background: rgba(49,50,68,0.4); "
-            f"border-radius: 8px; font-size: 9pt; font-style: italic;"
+            f"color: {_C['overlay0']}; background: rgba(20,30,46,0.8); "
+            f"border: 1px solid rgba(255,255,255,0.06); border-radius: 0px;"
+            f"font-size: 9pt; font-style: italic;"
         )
         return ph
 
@@ -349,58 +351,81 @@ class MRDNodeCard(QFrame):
 
     def _apply_card_style(self, included: bool) -> None:
         if included:
-            border = "rgba(166, 227, 161, 0.55)"
-            bg_top = "rgba(22, 42, 28, 0.90)"
-            bg_bot = "rgba(16, 32, 20, 0.90)"
-            top_acc = "rgba(166, 227, 161, 0.75)"
+            border = "rgba(57,255,138,0.40)"
+            bg_top = "rgba(14, 36, 25, 0.92)"
+            bg_bot = "rgba(10, 27, 19, 0.92)"
+            top_acc = "rgba(57,255,138,0.62)"
         else:
-            border = "rgba(69, 71, 90, 0.55)"
-            bg_top = "rgba(26, 27, 40, 0.85)"
-            bg_bot = "rgba(20, 21, 32, 0.85)"
-            top_acc = "rgba(99, 101, 126, 0.5)"
+            border = "rgba(255,255,255,0.10)"
+            bg_top = "rgba(16, 24, 37, 0.90)"
+            bg_bot = "rgba(12, 18, 32, 0.90)"
+            top_acc = "rgba(123,82,255,0.45)"
         self.setStyleSheet(f"""
             QFrame#mrdNodeCard {{
                 background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
                     stop:0 {bg_top}, stop:1 {bg_bot});
                 border: 1px solid {border};
-                border-top: 2px solid {top_acc};
-                border-radius: 10px;
+                border-top: 1px solid {top_acc};
+                border-radius: 0px;
             }}
         """)
 
     def _apply_btn_styles(self, included: bool) -> None:
         keep_active = """
             QPushButton {
-                background: rgba(166, 227, 161, 0.22);
-                color: #a6e3a1;
-                border: 1px solid rgba(166,227,161,0.55);
-                border-radius: 7px;
+                background: rgba(57,255,138,0.18);
+                color: #39FF8A;
+                border: 1px solid rgba(57,255,138,0.48);
+                border-radius: 0px;
                 font-weight: 700;
                 font-size: 8pt;
             }
-            QPushButton:hover { background: rgba(166,227,161,0.32); }
+            QPushButton:hover { background: rgba(57,255,138,0.28); }
+            QPushButton:pressed { background: rgba(57,255,138,0.34); }
+            QPushButton:focus {
+                background: rgba(57,255,138,0.30);
+                border-color: rgba(57,255,138,0.70);
+                outline: none;
+            }
         """
         keep_inactive = """
             QPushButton {
-                background: rgba(49,50,68,0.5);
-                color: #45475a;
-                border: 1px solid rgba(69,71,90,0.4);
-                border-radius: 7px;
+                background: rgba(20,30,46,0.80);
+                color: #EEF2F7;
+                border: 1px solid rgba(255,255,255,0.10);
+                border-radius: 0px;
                 font-weight: 600;
                 font-size: 8pt;
             }
-            QPushButton:hover { background: rgba(69,71,90,0.6); color: #a6adc8; }
+            QPushButton:hover { background: rgba(20,30,46,0.95); color: #EEF2F7; }
+            QPushButton:pressed { background: rgba(20,30,46,1.0); }
+            QPushButton:focus {
+                border-color: rgba(123,82,255,0.60);
+                background: rgba(20,30,46,0.95);
+                outline: none;
+            }
+            QPushButton:disabled {
+                color: #EEF2F7;
+                border-color: rgba(255,255,255,0.05);
+                background: rgba(20,30,46,0.55);
+            }
         """
         discard_active = """
             QPushButton {
-                background: rgba(243,139,168,0.20);
-                color: #f38ba8;
-                border: 1px solid rgba(243,139,168,0.50);
-                border-radius: 7px;
+                background: rgba(255,61,110,0.18);
+                color: #FF3D6E;
+                border: 1px solid rgba(255,61,110,0.45);
+                border-radius: 0px;
                 font-weight: 700;
                 font-size: 8pt;
             }
-            QPushButton:hover { background: rgba(243,139,168,0.30); }
+            QPushButton:hover { background: rgba(255,61,110,0.28); }
+            QPushButton:pressed { background: rgba(255,61,110,0.34); }
+            QPushButton:focus {
+                background: rgba(255,61,110,0.30);
+                border-color: rgba(255,61,110,0.68);
+                outline: none;
+            }
         """
         discard_inactive = """
             QPushButton {
@@ -512,9 +537,9 @@ class MRDNodeTable(QWidget):
         header_widget.setStyleSheet("""
             QWidget {
                 background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                    stop:0 rgba(30,32,52,0.85), stop:1 rgba(22,24,40,0.85));
-                border-radius: 8px 8px 0px 0px;
-                border: 1px solid rgba(137,180,250,0.12);
+                    stop:0 rgba(16,24,37,0.95), stop:1 rgba(12,18,32,0.95));
+                border-radius: 0px;
+                border: 1px solid rgba(255,255,255,0.055);
                 border-bottom: none;
             }
         """)
@@ -524,8 +549,9 @@ class MRDNodeTable(QWidget):
 
         lbl_title = QLabel("VALIDATION NŒUDS MRD — DÉCISION EXPERTE")
         lbl_title.setStyleSheet(
-            "color: #cba6f7; font-size: 9pt; font-weight: 700; "
-            "letter-spacing: 0.1em; background: transparent;"
+            "color: #7B52FF; font-size: 8.8pt; font-weight: 700; "
+            "letter-spacing: 0.14em; background: transparent;"
+            "font-family: 'Consolas', 'Cascadia Code', monospace;"
         )
         hdr.addWidget(lbl_title)
         hdr.addStretch()
@@ -533,9 +559,10 @@ class MRDNodeTable(QWidget):
         # Badge ratio validé
         self._lbl_ratio = QLabel("")
         self._lbl_ratio.setStyleSheet(
-            "color: #a6e3a1; background: rgba(166,227,161,0.12); "
-            "border: 1px solid rgba(166,227,161,0.3); border-radius: 6px; "
-            "padding: 2px 10px; font-size: 9pt; font-weight: 700;"
+            "color: #39FF8A; background: rgba(57,255,138,0.10); "
+            "border: 1px solid rgba(57,255,138,0.30); border-radius: 0px; "
+            "padding: 2px 10px; font-size: 8.8pt; font-weight: 700;"
+            "font-family: 'Consolas', 'Cascadia Code', monospace;"
         )
         self._lbl_ratio.hide()
         hdr.addWidget(self._lbl_ratio)
@@ -552,17 +579,17 @@ class MRDNodeTable(QWidget):
         self.combo_filter.currentTextChanged.connect(self._on_filter_changed)
         self.combo_filter.setStyleSheet("""
             QComboBox {
-                background: rgba(49,50,68,0.95);
-                border: 1px solid rgba(203,166,247,0.35);
-                border-radius: 7px;
-                color: #cdd6f4;
+                background: rgba(16,24,37,0.95);
+                border: 1px solid rgba(123,82,255,0.35);
+                border-radius: 0px;
+                color: #EEF2F7;
                 padding: 6px 10px;
             }
-            QComboBox:hover { border-color: rgba(180,190,255,0.6); }
+            QComboBox:hover { border-color: rgba(123,82,255,0.55); }
             QComboBox QAbstractItemView {
-                background: #1e1e2e;
-                color: #cdd6f4;
-                selection-background-color: rgba(203,166,247,0.25);
+                background: #0C1220;
+                color: #EEF2F7;
+                selection-background-color: rgba(123,82,255,0.20);
             }
         """)
         hdr.addWidget(self.combo_filter)
@@ -570,7 +597,7 @@ class MRDNodeTable(QWidget):
         # ── Séparateur vertical ───────────────────────────────────────────
         sep_v = QFrame()
         sep_v.setFrameShape(QFrame.VLine)
-        sep_v.setStyleSheet("color: rgba(137,180,250,0.18); max-width: 1px;")
+        sep_v.setStyleSheet("color: rgba(255,255,255,0.055); max-width: 1px;")
         sep_v.setFixedHeight(24)
         hdr.addWidget(sep_v)
 
@@ -583,21 +610,21 @@ class MRDNodeTable(QWidget):
         )
         self._btn_expert_focus.setStyleSheet("""
             QPushButton {
-                background: rgba(148,226,213,0.14);
-                color: #94e2d5;
-                border: 1px solid rgba(148,226,213,0.35);
-                border-radius: 7px;
+                background: rgba(91,170,255,0.12);
+                color: #5BAAFF;
+                border: 1px solid rgba(91,170,255,0.34);
+                border-radius: 0px;
                 font-weight: 700;
                 font-size: 8pt;
                 padding: 0 12px;
             }
             QPushButton:hover {
-                background: rgba(148,226,213,0.26);
-                border-color: rgba(148,226,213,0.65);
-                color: #b8f5ef;
+                background: rgba(91,170,255,0.22);
+                border-color: rgba(91,170,255,0.60);
+                color: #B8D9FF;
             }
             QPushButton:pressed {
-                background: rgba(148,226,213,0.36);
+                background: rgba(91,170,255,0.30);
             }
         """)
         self._btn_expert_focus.clicked.connect(self._on_open_expert_focus)
@@ -606,8 +633,8 @@ class MRDNodeTable(QWidget):
         # Badge ajouts manuels (caché tant que 0)
         self._lbl_manual_badge = QLabel("")
         self._lbl_manual_badge.setStyleSheet(
-            "color: #94e2d5; background: rgba(148,226,213,0.18); "
-            "border: 1px solid rgba(148,226,213,0.40); border-radius: 6px; "
+            "color: #5BAAFF; background: rgba(91,170,255,0.14); "
+            "border: 1px solid rgba(91,170,255,0.38); border-radius: 0px; "
             "padding: 2px 8px; font-size: 8pt; font-weight: 700;"
         )
         self._lbl_manual_badge.hide()
@@ -628,19 +655,19 @@ class MRDNodeTable(QWidget):
         self._scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._scroll.setStyleSheet(f"""
             QScrollArea {{
-                background: rgba(24,24,37,0.96);
-                border: 1px solid rgba(137,180,250,0.16);
+                background: rgba(12,18,32,0.96);
+                border: 1px solid rgba(255,255,255,0.055);
                 border-top: none;
-                border-radius: 0px 0px 10px 10px;
+                border-radius: 0px;
             }}
             QScrollBar:vertical {{
                 background: {_C["surface0"]};
                 width: 6px;
-                border-radius: 3px;
+                border-radius: 0px;
             }}
             QScrollBar::handle:vertical {{
-                background: {_C["overlay0"]};
-                border-radius: 3px;
+                background: rgba(123,82,255,0.45);
+                border-radius: 0px;
             }}
         """)
 
@@ -862,15 +889,17 @@ class MRDNodeTable(QWidget):
             # Couleur selon seuil 0.01 %
             if ratio > 0.01:
                 self._lbl_ratio.setStyleSheet(
-                    "color: #f38ba8; background: rgba(243,139,168,0.14); "
-                    "border: 1px solid rgba(243,139,168,0.40); border-radius: 6px; "
-                    "padding: 2px 10px; font-size: 9pt; font-weight: 700;"
+                    "color: #FF3D6E; background: rgba(255,61,110,0.12); "
+                    "border: 1px solid rgba(255,61,110,0.40); border-radius: 0px; "
+                    "padding: 2px 10px; font-size: 8.8pt; font-weight: 700;"
+                    "font-family: 'Consolas', 'Cascadia Code', monospace;"
                 )
             else:
                 self._lbl_ratio.setStyleSheet(
-                    "color: #a6e3a1; background: rgba(166,227,161,0.12); "
-                    "border: 1px solid rgba(166,227,161,0.3); border-radius: 6px; "
-                    "padding: 2px 10px; font-size: 9pt; font-weight: 700;"
+                    "color: #39FF8A; background: rgba(57,255,138,0.10); "
+                    "border: 1px solid rgba(57,255,138,0.32); border-radius: 0px; "
+                    "padding: 2px 10px; font-size: 8.8pt; font-weight: 700;"
+                    "font-family: 'Consolas', 'Cascadia Code', monospace;"
                 )
             self._lbl_ratio.show()
         else:
@@ -1037,3 +1066,5 @@ class MRDMethodFilterProxy(QSortFilterProxyModel):
             return False
         flag_key = _METHOD_FLAG.get(self._method, "")
         return bool(node.get(flag_key, False)) if flag_key else True
+
+

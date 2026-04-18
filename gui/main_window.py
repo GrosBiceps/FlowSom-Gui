@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 main_window.py — Interface graphique FlowSomAnalyzerPro v3 (Wizard / Stepper).
 
@@ -12,7 +12,7 @@ Architecture UX en 5 étapes (QStackedWidget) :
 Design :
   - Sidebar de navigation (StepSidebar) avec indicateurs d'état colorés
   - Boutons avec icônes qtawesome (fa5s)
-  - Flat Design Catppuccin Mocha (styles.py)
+    - Flat Design PRISMA v2 (styles.py)
   - Police Segoe UI / Inter / Roboto
 """
 
@@ -58,14 +58,18 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QTextEdit,
     QSizePolicy,
-    QGraphicsDropShadowEffect,
     QListWidget,
     QListWidgetItem,
     QAbstractItemView,
     QLineEdit,
 )
-from PyQt5.QtCore import Qt, QSize, QMimeData, QUrl
-from PyQt5.QtGui import QFont, QColor, QDragEnterEvent, QDropEvent
+from PyQt5.QtCore import Qt, QSize, QMimeData, QUrl, QByteArray
+from PyQt5.QtGui import QFont, QColor, QDragEnterEvent, QDropEvent, QIcon, QFontDatabase, QFontInfo
+try:
+    from PyQt5.QtSvg import QSvgWidget
+    _SVG_AVAILABLE = True
+except ImportError:
+    _SVG_AVAILABLE = False
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
@@ -75,6 +79,31 @@ import matplotlib
 matplotlib.use("Qt5Agg")
 
 from flowsom_pipeline_pro.gui.styles import STYLESHEET, COLORS
+from flowsom_pipeline_pro.gui.prisma_icons import get_prisma_icon
+
+
+def _asset_path(filename: str) -> Path:
+    """Resolve asset path whether running from source or PyInstaller bundle."""
+    if getattr(sys, "frozen", False):
+        base = Path(sys._MEIPASS)  # type: ignore[attr-defined]
+    else:
+        base = Path(__file__).parent.parent
+    return base / "assets" / filename
+
+
+def _register_embedded_fonts() -> None:
+    """Register project fonts (assets/fonts) for deterministic rendering."""
+    # Variable font covers all requested Outfit weights (200..900).
+    font_files = [
+        "fonts/Outfit[wght].ttf",
+    ]
+    for rel_path in font_files:
+        font_path = _asset_path(rel_path)
+        if not font_path.exists():
+            continue
+        QFontDatabase.addApplicationFont(str(font_path))
+
+
 from flowsom_pipeline_pro.gui.workers import PipelineWorker, SpiderPlotWorker
 from flowsom_pipeline_pro.gui.tabs.home_tab import HomeTab
 from flowsom_pipeline_pro.gui.widgets.log_console import LogConsole
@@ -106,8 +135,13 @@ else:
 # ══════════════════════════════════════════════════════════════════════
 
 
-def _icon(name: str, color: str = "#cdd6f4", size: int = 16) -> Any:
-    """Renvoie un QIcon qtawesome ou None si non disponible."""
+def _icon(name: str, color: str = "#EEF2F7", size: int = 16) -> Any:
+    """Renvoie un QIcon PRISMA, sinon qtawesome, sinon None."""
+    if name.startswith("prisma."):
+        custom = get_prisma_icon(name.split(".", 1)[1], size=size, color=color)
+        if custom is not None:
+            return custom
+
     if _QTA:
         try:
             return qta.icon(name, color=color)
@@ -130,7 +164,7 @@ class MatplotlibCanvas(FigureCanvas):
 
     def __init__(self, parent: Optional[QWidget] = None, width: int = 8, height: int = 6) -> None:
         self.fig = Figure(figsize=(width, height), dpi=100)
-        self.fig.patch.set_facecolor(COLORS["base"])
+        self.fig.patch.set_facecolor(COLORS["surface"])
         self.axes = self.fig.add_subplot(111)
         self._style_axes(self.axes)
         super().__init__(self.fig)
@@ -138,10 +172,10 @@ class MatplotlibCanvas(FigureCanvas):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
     def _style_axes(self, ax: Any) -> None:
-        ax.set_facecolor(COLORS["base"])
-        ax.tick_params(colors=COLORS["subtext"])
+        ax.set_facecolor(COLORS["surface"])
+        ax.tick_params(colors=COLORS["paper"])
         for spine in ax.spines.values():
-            spine.set_color(COLORS["surface1"])
+            spine.set_color(COLORS["raised"])
 
     def clear_and_reset(self) -> None:
         self.fig.clear()
@@ -156,7 +190,7 @@ class MatplotlibCanvas(FigureCanvas):
         self.fig = fig
         self.figure = fig
         self.fig.set_canvas(self)
-        self.fig.patch.set_facecolor(COLORS["base"])
+        self.fig.patch.set_facecolor(COLORS["surface"])
         dpi = self.fig.get_dpi() or 100
         w_px, h_px = max(1, self.width()), max(1, self.height())
         self.fig.set_size_inches(w_px / dpi, h_px / dpi)
@@ -248,11 +282,11 @@ _STEPS = [
 ]
 
 _STEP_ICONS = [
-    "fa5s.home",
-    "fa5s.folder-open",
-    "fa5s.sliders-h",
-    "fa5s.play-circle",
-    "fa5s.chart-bar",
+    "prisma.dot-plot",
+    "prisma.fcs-file",
+    "prisma.som-grid",
+    "prisma.batch-cohort",
+    "prisma.heatmap",
 ]
 
 
@@ -281,31 +315,55 @@ class StepSidebar(QWidget):
         # ── Header logo ──
         header = QWidget()
         header.setObjectName("sidebarHeader")
-        header.setStyleSheet("""
-            QWidget#sidebarHeader {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(22, 24, 40, 1.0), stop:1 rgba(18, 20, 34, 1.0));
-                border-bottom: 1px solid rgba(137, 180, 250, 0.16);
-            }
-        """)
         h_layout = QVBoxLayout(header)
-        h_layout.setContentsMargins(18, 18, 18, 14)
+        h_layout.setContentsMargins(12, 16, 12, 14)
         h_layout.setSpacing(4)
 
-        lbl_app = QLabel("FlowSOM")
-        lbl_app.setFont(QFont("Segoe UI", 16, QFont.Bold))
-        lbl_app.setStyleSheet("color: #d9e7ff; background: transparent; letter-spacing: -0.02em;")
-        h_layout.addWidget(lbl_app)
+        _LOGO_SVG = b"""<svg width="196" height="56" viewBox="0 0 196 56" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="lg1s" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="white" stop-opacity=".5"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <polygon points="26,4 48,50 4,50" fill="rgba(255,255,255,.025)" stroke="rgba(255,255,255,.18)" stroke-width="1.1"/>
+  <circle cx="26" cy="27" r="2" fill="white" opacity=".35"/>
+  <circle cx="26" cy="27" r="5.5" fill="url(#lg1s)"/>
+  <line x1="26" y1="27" x2="56" y2="10" stroke="#7B52FF" stroke-width="1" opacity=".7"/>
+  <line x1="26" y1="27" x2="56" y2="19" stroke="#5BAAFF" stroke-width=".9" opacity=".55"/>
+  <line x1="26" y1="27" x2="56" y2="27" stroke="#39FF8A" stroke-width="1.3" opacity=".8"/>
+  <line x1="26" y1="27" x2="56" y2="36" stroke="#FF9B3D" stroke-width=".9" opacity=".6"/>
+  <line x1="26" y1="27" x2="56" y2="45" stroke="#FF3D6E" stroke-width="1" opacity=".7"/>
+  <circle cx="58" cy="9" r="2.5" fill="#7B52FF"/><circle cx="65" cy="6" r="1.8" fill="#7B52FF" opacity=".55"/>
+  <circle cx="61" cy="15" r="1.5" fill="#7B52FF" opacity=".4"/>
+  <circle cx="58" cy="18" r="2.2" fill="#5BAAFF" opacity=".8"/><circle cx="65" cy="14" r="1.5" fill="#5BAAFF" opacity=".45"/>
+  <circle cx="59" cy="26" r="3" fill="#39FF8A"/><circle cx="67" cy="23" r="1.8" fill="#39FF8A" opacity=".6"/>
+  <circle cx="65" cy="30" r="1.5" fill="#39FF8A" opacity=".5"/>
+  <circle cx="58" cy="36" r="2.5" fill="#FF9B3D" opacity=".88"/><circle cx="66" cy="32" r="1.5" fill="#FF9B3D" opacity=".5"/>
+  <circle cx="64" cy="40" r="1.8" fill="#FF9B3D" opacity=".45"/>
+  <circle cx="58" cy="44" r="2.2" fill="#FF3D6E"/><circle cx="65" cy="41" r="1.2" fill="#FF3D6E" opacity=".5"/>
+  <text x="76" y="34" font-family="Segoe UI, sans-serif" font-weight="900" font-size="26" fill="white" letter-spacing="-1.5">PRISM</text>
+  <text x="162" y="34" font-family="Segoe UI, sans-serif" font-weight="900" font-size="26" fill="none" stroke="#39FF8A" stroke-width="1.5" letter-spacing="-1.5">A</text>
+</svg>"""
 
-        lbl_sub = QLabel("MRD Analyzer Pro")
-        lbl_sub.setStyleSheet(
-            "color: #7f8fbe; font-size: 10pt; background: transparent; font-weight: 500;"
-        )
+        if _SVG_AVAILABLE:
+            logo_widget = QSvgWidget()
+            logo_widget.load(QByteArray(_LOGO_SVG))
+            logo_widget.setFixedSize(196, 56)
+            logo_widget.setStyleSheet("background: transparent;")
+            h_layout.addWidget(logo_widget, alignment=Qt.AlignLeft)
+        else:
+            lbl_app = QLabel("PRISMA")
+            lbl_app.setObjectName("brandTitle")
+            h_layout.addWidget(lbl_app)
+
+        lbl_sub = QLabel("CYTOMETRY · ANALYSIS SUITE")
+        lbl_sub.setObjectName("brandSubtitle")
         h_layout.addWidget(lbl_sub)
 
         sep = QFrame()
+        sep.setObjectName("sidebarSeparator")
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("color: rgba(137, 180, 250, 0.14);")
         h_layout.addWidget(sep)
 
         root.addWidget(header)
@@ -327,10 +385,8 @@ class StepSidebar(QWidget):
         root.addStretch()
 
         # Version
-        lbl_ver = QLabel("v3.0 · Magne Florian")
-        lbl_ver.setStyleSheet(
-            "color: #1e2038; font-size: 8pt; background: transparent; padding: 8px 18px;"
-        )
+        lbl_ver = QLabel("V3.0 · MAGNE FLORIAN")
+        lbl_ver.setObjectName("versionLabel")
         lbl_ver.setAlignment(Qt.AlignLeft)
         root.addWidget(lbl_ver)
 
@@ -341,20 +397,20 @@ class StepSidebar(QWidget):
         # Icône (qtawesome)
         ic_name = _STEP_ICONS[idx]
         if state == self.STATE_DONE:
-            ic_color = "#a6e3a1"
-            ic_name = "fa5s.check-circle"
+            ic_color = "#39FF8A"
+            ic_name = "prisma.check-circle"
         elif state == self.STATE_ERROR:
-            ic_color = "#f38ba8"
-            ic_name = "fa5s.exclamation-circle"
+            ic_color = "#FF3D6E"
+            ic_name = "prisma.alert-triangle"
         elif state == self.STATE_ACTIVE:
-            ic_color = "#89b4fa"
+            ic_color = "#5BAAFF"
         else:
-            ic_color = "#45475a"
+            ic_color = "#2A3342"
 
-        ico = _icon(ic_name, ic_color)
+        ico = _icon(ic_name, ic_color, 24)
         if ico:
             btn.setIcon(ico)
-            btn.setIconSize(QSize(16, 16))
+            btn.setIconSize(QSize(24, 24))
 
         btn.setText(f"  {title}\n  {sub}")
         btn.setFont(QFont("Segoe UI", 9))
@@ -413,9 +469,15 @@ class FlowSomAnalyzerPro(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("FlowSOM  —  MRD Analyzer Pro")
+        self.setWindowTitle("PRISMA")
         self.setMinimumSize(1280, 820)
         self.resize(1600, 960)
+
+        # App icon — works both from source and PyInstaller bundle
+        _ico = _asset_path("prisma_logo.ico")
+        if _ico.exists():
+            self.setWindowIcon(QIcon(str(_ico)))
+
         self.setStyleSheet(STYLESHEET)
 
         # État interne
@@ -498,117 +560,124 @@ class FlowSomAnalyzerPro(QMainWindow):
     def _build_step0_welcome(self) -> QWidget:
         page = QWidget()
         page.setObjectName("welcomePage")
-        page.setStyleSheet(
-            "QWidget#welcomePage {"
-            "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-            "stop:0 #0d0d17, stop:1 #0a0a14);"
-            "}"
-        )
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(44, 34, 44, 34)
-        layout.setSpacing(20)
+        layout.setContentsMargins(52, 28, 52, 28)
+        layout.setSpacing(18)
         layout.setAlignment(Qt.AlignCenter)
 
         card = QWidget()
         card.setObjectName("welcomeCard")
-        card.setMinimumWidth(860)
-        card.setMaximumWidth(1020)
-        card.setStyleSheet(
-            "QWidget#welcomeCard {"
-            "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-            "stop:0 rgba(36, 38, 60, 0.84), stop:1 rgba(20, 22, 36, 0.80));"
-            "border-radius: 18px;"
-            "border: 1px solid rgba(137, 180, 250, 0.14);"
-            "}"
-        )
-        c = QVBoxLayout(card)
-        c.setContentsMargins(42, 34, 42, 30)
-        c.setSpacing(18)
+        card.setMinimumWidth(880)
+        card.setMaximumWidth(1040)
 
-        badge = QLabel("BIENVENUE")
+        c = QVBoxLayout(card)
+        c.setContentsMargins(36, 28, 36, 24)
+        c.setSpacing(14)
+
+        top_spectrum = QFrame()
+        top_spectrum.setObjectName("welcomeSpectrum")
+        top_spectrum.setFixedHeight(1)
+        c.addWidget(top_spectrum)
+
+        badge = QLabel("CYTOMETRY · UNSUPERVISED ANALYSIS · RESEARCH TOOL")
+        badge.setObjectName("welcomeEyebrow")
         badge.setAlignment(Qt.AlignCenter)
-        badge.setStyleSheet(
-            "background: rgba(137, 180, 250, 0.16); color: #d7e6ff; "
-            "border: 1px solid rgba(137, 180, 250, 0.24);"
-            "border-radius: 11px; padding: 6px 14px; font-size: 10px; font-weight: 700;"
-        )
         c.addWidget(badge, alignment=Qt.AlignHCenter)
 
-        title = QLabel("FlowSOM MRD Analyzer Pro")
-        title.setObjectName("titleLabel")
+        title = QLabel(
+            "<span style='color:#EEF2F7;'>PRISM</span><span style='color:#39FF8A;'>A</span>"
+        )
+        title.setObjectName("welcomeHeroTitle")
         title.setAlignment(Qt.AlignCenter)
+        title.setTextFormat(Qt.RichText)
         c.addWidget(title)
 
-        sub = QLabel(
-            "Lancez une analyse de cytométrie en flux en 3 étapes simples :\n"
-            "import des données FCS, paramétrage du pipeline, puis exécution."
+        expansion = QLabel(
+            "<b>P</b>ipeline for <b>R</b>apid <b>I</b>dentification, <b>S</b>ingle-cell "
+            "<b>M</b>apping &amp; <b>A</b>nalysis"
         )
+        expansion.setObjectName("welcomeExpansion")
+        expansion.setAlignment(Qt.AlignCenter)
+        expansion.setTextFormat(Qt.RichText)
+        c.addWidget(expansion)
+
+        sub = QLabel('"Resolve the unseen." — unsupervised cytometry pipeline in 3 steps.')
+        sub.setObjectName("welcomeSub")
         sub.setAlignment(Qt.AlignCenter)
-        sub.setStyleSheet("color: #b8c4e6; font-size: 12pt; background: transparent;")
         c.addWidget(sub)
+
+        ch_row = QWidget()
+        ch_row.setObjectName("welcomeChannelRow")
+        ch_h = QHBoxLayout(ch_row)
+        ch_h.setContentsMargins(0, 2, 0, 4)
+        ch_h.setSpacing(8)
+        ch_h.addStretch()
+
+        for channel, label in (
+            ("fitc", "FITC · MONO"),
+            ("pe", "PE · GRANULO"),
+            ("apc", "APC · MRD"),
+            ("v450", "V450 · LYMPHO"),
+        ):
+            tag = QLabel(label)
+            tag.setObjectName("welcomeChannelBadge")
+            tag.setProperty("channel", channel)
+            tag.setAlignment(Qt.AlignCenter)
+            ch_h.addWidget(tag)
+
+        ch_h.addStretch()
+        c.addWidget(ch_row)
 
         body = QWidget()
         body.setObjectName("welcomeBody")
-        body.setStyleSheet("QWidget#welcomeBody { background: transparent; }")
         body_h = QHBoxLayout(body)
         body_h.setContentsMargins(0, 0, 0, 0)
-        body_h.setSpacing(14)
+        body_h.setSpacing(2)
 
         col_left = QWidget()
         col_left.setObjectName("welcomeColLeft")
-        col_left.setStyleSheet(
-            "QWidget#welcomeColLeft {"
-            "background: rgba(24, 26, 42, 0.66);"
-            "border-radius: 12px;"
-            "border: 1px solid rgba(137, 180, 250, 0.10);"
-            "}"
-        )
         l = QVBoxLayout(col_left)
-        l.setContentsMargins(16, 14, 16, 14)
-        l.setSpacing(8)
+        l.setContentsMargins(22, 20, 22, 20)
+        l.setSpacing(10)
 
-        l_title = QLabel("Parcours guidé")
-        l_title.setStyleSheet(
-            "color: #d2ddff; font-size: 11pt; font-weight: 700; background: transparent;"
-        )
+        l_title = QLabel("GUIDED PATH")
+        l_title.setObjectName("welcomeColTitle")
         l.addWidget(l_title)
-        for item in [
-            "1. Sélection des dossiers FCS",
-            "2. Paramétrage du pipeline",
-            "3. Exécution et visualisation des résultats",
+        for idx, item in [
+            ("01", "Import FCS folders"),
+            ("02", "Configure pipeline"),
+            ("03", "Execute & visualize"),
         ]:
-            lbl = QLabel(item)
+            lbl = QLabel(
+                f"<span style='color:#39FF8A;'>{idx}</span>"
+                f" <span style='color:#EEF2F7;'>· {item}</span>"
+            )
+            lbl.setObjectName("welcomeColItem")
+            lbl.setProperty("lane", "left")
+            lbl.setTextFormat(Qt.RichText)
             lbl.setWordWrap(True)
-            lbl.setStyleSheet("color: #bcc8ec; font-size: 10.5pt; background: transparent;")
             l.addWidget(lbl)
         l.addStretch()
 
         col_right = QWidget()
         col_right.setObjectName("welcomeColRight")
-        col_right.setStyleSheet(
-            "QWidget#welcomeColRight {"
-            "background: rgba(20, 22, 36, 0.66);"
-            "border-radius: 12px;"
-            "border: 1px solid rgba(166, 227, 161, 0.09);"
-            "}"
-        )
         r = QVBoxLayout(col_right)
-        r.setContentsMargins(16, 14, 16, 14)
-        r.setSpacing(8)
+        r.setContentsMargins(22, 20, 22, 20)
+        r.setSpacing(10)
 
-        r_title = QLabel("Résultats disponibles")
-        r_title.setStyleSheet(
-            "color: #cff4cd; font-size: 11pt; font-weight: 700; background: transparent;"
-        )
+        r_title = QLabel("AVAILABLE OUTPUTS")
+        r_title.setObjectName("welcomeColTitle")
         r.addWidget(r_title)
         for item in [
-            "Gauges MRD (JF / Flo / ELN)",
-            "Conclusion clinique synthétique",
-            "Clusters, visualisations et exports",
+            "▹ MRD gauges (JF / Flo / ELN)",
+            "▹ Synthetic clinical conclusion",
+            "▹ Clusters, visualizations & exports",
         ]:
-            lbl = QLabel(f"• {item}")
+            lbl = QLabel(f"<span style='color:#5BAAFF;'>▹</span> {item[2:]}")
+            lbl.setObjectName("welcomeColItem")
+            lbl.setProperty("lane", "right")
+            lbl.setTextFormat(Qt.RichText)
             lbl.setWordWrap(True)
-            lbl.setStyleSheet("color: #bfcaed; font-size: 10.5pt; background: transparent;")
             r.addWidget(lbl)
         r.addStretch()
 
@@ -617,29 +686,63 @@ class FlowSomAnalyzerPro(QMainWindow):
         c.addWidget(body)
 
         info = QLabel(
-            "Après exécution, vous accéderez automatiquement aux résultats MRD,\n"
-            "aux visualisations, aux clusters et aux exports HTML/CSV/FCS."
+            "After execution: MRD results, visualizations, clusters and HTML/CSV/FCS exports."
         )
+        info.setObjectName("welcomeInfo")
         info.setAlignment(Qt.AlignCenter)
         info.setWordWrap(True)
-        info.setStyleSheet("color: #aab7df; font-size: 10.5pt; background: transparent;")
         c.addWidget(info)
 
-        c.addSpacing(6)
-        btn_start = QPushButton("  Commencer la sélection des fichiers")
-        btn_start.setObjectName("primaryBtn")
-        btn_start.setMinimumHeight(48)
+        stats = QWidget()
+        stats.setObjectName("welcomeStatsRow")
+        stats_h = QHBoxLayout(stats)
+        stats_h.setContentsMargins(0, 0, 0, 0)
+        stats_h.setSpacing(2)
+
+        def _stat_block(value: str, key: str, tone: str) -> QWidget:
+            w = QWidget()
+            w.setObjectName("welcomeStatCard")
+            v = QVBoxLayout(w)
+            v.setContentsMargins(14, 12, 14, 10)
+            v.setSpacing(3)
+
+            lbl_v = QLabel(value)
+            lbl_v.setObjectName("welcomeStatValue")
+            lbl_v.setProperty("tone", tone)
+            v.addWidget(lbl_v)
+
+            lbl_k = QLabel(key)
+            lbl_k.setObjectName("welcomeStatKey")
+            v.addWidget(lbl_k)
+            return w
+
+        stats_h.addWidget(_stat_block("<0.1%", "MRD sensitivity", "accent"), 1)
+        stats_h.addWidget(_stat_block("42k+", "Events / sample", "info"), 1)
+        stats_h.addWidget(_stat_block("20×20", "Max SOM grid", "brand"), 1)
+        stats_h.addWidget(_stat_block("0 ms", "Manual gating", "warm"), 1)
+        c.addWidget(stats)
+
+        c.addSpacing(2)
+        btn_start = QPushButton("  START FILE SELECTION  →")
+        btn_start.setObjectName("welcomeCta")
+        btn_start.setMinimumHeight(46)
         btn_start.setMinimumWidth(320)
-        ico_next = _icon("fa5s.arrow-right", "#eef4ff")
+        ico_next = _icon("prisma.arrow-right", "#FFFFFF")
         if ico_next:
             btn_start.setIcon(ico_next)
+            btn_start.setIconSize(QSize(16, 16))
         btn_start.clicked.connect(lambda: self._navigate_to_step(1))
         c.addWidget(btn_start, alignment=Qt.AlignHCenter)
 
-        hint = QLabel("Conseil : utilisez le glisser-déposer pour accélérer l'import FCS.")
+        hint = QLabel("Tip · drag-and-drop folders to speed up FCS import.")
+        hint.setObjectName("welcomeHint")
         hint.setAlignment(Qt.AlignCenter)
-        hint.setStyleSheet("color: #8c98c7; font-size: 9.5pt; background: transparent;")
         c.addWidget(hint)
+
+        bottom_spectrum = QFrame()
+        bottom_spectrum.setObjectName("welcomeSpectrum")
+        bottom_spectrum.setFixedHeight(1)
+        c.addWidget(bottom_spectrum)
 
         layout.addWidget(card, alignment=Qt.AlignCenter)
         return page
@@ -684,10 +787,12 @@ class FlowSomAnalyzerPro(QMainWindow):
 
             btn = QPushButton("  Parcourir…")
             btn.setObjectName("ghostBtn")
-            btn.setMaximumWidth(120)
-            ico = _icon("fa5s.folder-open", "#89b4fa")
+            btn.setMinimumWidth(130)
+            btn.setMaximumWidth(150)
+            ico = _icon("prisma.folder-open", "#5BAAFF")
             if ico:
                 btn.setIcon(ico)
+                btn.setIconSize(QSize(16, 16))
             btn.clicked.connect(browse_slot)
             grid.addWidget(btn, row, 1, Qt.AlignTop)
             return drop
@@ -722,7 +827,7 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.btn_open_preview = QPushButton("  Aperçu fichiers FCS")
         self.btn_open_preview.setObjectName("ghostBtn")
         self.btn_open_preview.setMinimumHeight(44)
-        ico_preview = _icon("fa5s.table", "#89b4fa")
+        ico_preview = _icon("prisma.dot-plot", "#5BAAFF", 18)
         if ico_preview:
             self.btn_open_preview.setIcon(ico_preview)
             self.btn_open_preview.setIconSize(QSize(18, 18))
@@ -737,7 +842,7 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.btn_open_rename = QPushButton("  Renommer colonnes FCS  ·  Kaluza")
         self.btn_open_rename.setObjectName("ghostBtn")
         self.btn_open_rename.setMinimumHeight(44)
-        ico_rename = _icon("fa5s.exchange-alt", "#cba6f7")
+        ico_rename = _icon("prisma.gate-strategy", "#cba6f7", 18)
         if ico_rename:
             self.btn_open_rename.setIcon(ico_rename)
             self.btn_open_rename.setIconSize(QSize(18, 18))
@@ -756,17 +861,13 @@ class FlowSomAnalyzerPro(QMainWindow):
             "Sélectionnez les dossiers FCS ci-dessus, puis cliquez sur «Aperçu» pour vérifier les fichiers."
         )
         self.lbl_preview_summary.setWordWrap(True)
-        self.lbl_preview_summary.setStyleSheet(
-            "color: #6c7086; font-size: 9.5pt; padding: 4px 2px;"
-        )
+        self.lbl_preview_summary.setObjectName("summaryLabel")
         layout.addWidget(self.lbl_preview_summary)
 
         # Badge renommage (nombre de règles actives)
         self.lbl_rename_summary = QLabel("Renommage colonnes : aucune règle configurée.")
         self.lbl_rename_summary.setWordWrap(True)
-        self.lbl_rename_summary.setStyleSheet(
-            "color: #6c7086; font-size: 9.5pt; padding: 0px 2px 4px 2px;"
-        )
+        self.lbl_rename_summary.setObjectName("summaryLabel")
         layout.addWidget(self.lbl_rename_summary)
 
         # Table de renommage (cachée — stockage interne uniquement)
@@ -783,9 +884,10 @@ class FlowSomAnalyzerPro(QMainWindow):
         btn_next = QPushButton("  Paramétrage")
         btn_next.setObjectName("primaryBtn")
         btn_next.setMinimumHeight(42)
-        ico_next = _icon("fa5s.arrow-right", "#11111b")
+        ico_next = _icon("prisma.arrow-right", "#11111b")
         if ico_next:
             btn_next.setIcon(ico_next)
+            btn_next.setIconSize(QSize(16, 16))
         btn_next.clicked.connect(lambda: self._navigate_to_step(2))
         nav.addWidget(btn_next)
         layout.addLayout(nav)
@@ -804,13 +906,9 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         # Titre fixe
         title_bar = QWidget()
-        title_bar.setStyleSheet(
-            "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-            "stop:0 #181825, stop:1 #141420); "
-            "border-bottom: 1px solid rgba(137,180,250,0.1);"
-        )
+        title_bar.setObjectName("titleBar")
         tbl = QHBoxLayout(title_bar)
-        tbl.setContentsMargins(32, 16, 32, 16)
+        tbl.setContentsMargins(40, 20, 40, 20)
         tl = QLabel("Paramétrage du pipeline")
         tl.setObjectName("titleLabel")
         tbl.addWidget(tl)
@@ -861,19 +959,16 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         # Barre de navigation
         nav_bar = QWidget()
-        nav_bar.setStyleSheet(
-            "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-            "stop:0 #141420, stop:1 #181825); "
-            "border-top: 1px solid rgba(137,180,250,0.1);"
-        )
+        nav_bar.setObjectName("navBar")
         nbl = QHBoxLayout(nav_bar)
-        nbl.setContentsMargins(32, 12, 32, 12)
+        nbl.setContentsMargins(40, 14, 40, 14)
 
         btn_back = QPushButton("  Import")
         btn_back.setObjectName("ghostBtn")
-        ico_back = _icon("fa5s.arrow-left", "#89b4fa")
+        ico_back = _icon("prisma.arrow-left", "#5BAAFF")
         if ico_back:
             btn_back.setIcon(ico_back)
+            btn_back.setIconSize(QSize(16, 16))
         btn_back.clicked.connect(lambda: self._navigate_to_step(1))
         nbl.addWidget(btn_back)
 
@@ -883,9 +978,10 @@ class FlowSomAnalyzerPro(QMainWindow):
         btn_launch.setObjectName("primaryBtn")
         btn_launch.setMinimumHeight(42)
         btn_launch.setMinimumWidth(180)
-        ico_play = _icon("fa5s.play", "#cdd6f4")
+        ico_play = _icon("prisma.play", "#EEF2F7")
         if ico_play:
             btn_launch.setIcon(ico_play)
+            btn_launch.setIconSize(QSize(16, 16))
         btn_launch.clicked.connect(self._run_pipeline)
         nbl.addWidget(btn_launch)
 
@@ -1387,25 +1483,28 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         btn_back2 = QPushButton("  Paramétrage")
         btn_back2.setObjectName("ghostBtn")
-        ico_back = _icon("fa5s.arrow-left", "#89b4fa")
+        ico_back = _icon("prisma.arrow-left", "#5BAAFF")
         if ico_back:
             btn_back2.setIcon(ico_back)
+            btn_back2.setIconSize(QSize(16, 16))
         btn_back2.clicked.connect(lambda: self._navigate_to_step(2))
         btn_row.addWidget(btn_back2)
 
         btn_clear_log = QPushButton("  Effacer")
         btn_clear_log.setObjectName("ghostBtn")
-        ico_clear = _icon("fa5s.trash-alt", "#a6adc8")
+        ico_clear = _icon("prisma.trash", "#a6adc8")
         if ico_clear:
             btn_clear_log.setIcon(ico_clear)
+            btn_clear_log.setIconSize(QSize(16, 16))
         btn_clear_log.clicked.connect(lambda: self.log_output.clear())
         btn_row.addWidget(btn_clear_log)
 
         btn_copy_log = QPushButton("  Copier")
         btn_copy_log.setObjectName("ghostBtn")
-        ico_copy = _icon("fa5s.copy", "#a6adc8")
+        ico_copy = _icon("prisma.copy", "#a6adc8")
         if ico_copy:
             btn_copy_log.setIcon(ico_copy)
+            btn_copy_log.setIconSize(QSize(16, 16))
         btn_copy_log.clicked.connect(
             lambda: QApplication.clipboard().setText(self.log_output.toPlainText())
         )
@@ -1417,9 +1516,10 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.btn_stop = QPushButton("  Arrêter")
         self.btn_stop.setObjectName("dangerBtn")
         self.btn_stop.setEnabled(False)
-        ico_stop = _icon("fa5s.stop-circle", "#11111b")
+        ico_stop = _icon("prisma.stop-circle", "#11111b")
         if ico_stop:
             self.btn_stop.setIcon(ico_stop)
+            self.btn_stop.setIconSize(QSize(16, 16))
         self.btn_stop.clicked.connect(self._stop_pipeline)
         btn_row.addWidget(self.btn_stop)
 
@@ -1427,9 +1527,10 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.btn_run_step3 = QPushButton("  Lancer le Pipeline")
         self.btn_run_step3.setObjectName("primaryBtn")
         self.btn_run_step3.setMinimumHeight(40)
-        ico_play = _icon("fa5s.play", "#cdd6f4")
+        ico_play = _icon("prisma.play", "#EEF2F7")
         if ico_play:
             self.btn_run_step3.setIcon(ico_play)
+            self.btn_run_step3.setIconSize(QSize(16, 16))
         self.btn_run_step3.clicked.connect(self._run_pipeline)
         btn_row.addWidget(self.btn_run_step3)
 
@@ -1448,43 +1549,43 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         # Barre d'actions en haut
         action_bar = QWidget()
-        action_bar.setStyleSheet(
-            "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-            "stop:0 #181825, stop:1 #141420); "
-            "border-bottom: 1px solid rgba(137,180,250,0.1);"
-        )
+        action_bar.setObjectName("actionBar")
         abl = QHBoxLayout(action_bar)
-        abl.setContentsMargins(20, 10, 20, 10)
+        abl.setContentsMargins(24, 12, 24, 12)
         abl.setSpacing(8)
 
         btn_fcs = QPushButton("  Export FCS")
         btn_fcs.setObjectName("exportBtn")
-        ico_fcs = _icon("fa5s.file-export", "#cba6f7")
+        ico_fcs = _icon("prisma.fcs-file", "#cba6f7", 16)
         if ico_fcs:
             btn_fcs.setIcon(ico_fcs)
+            btn_fcs.setIconSize(QSize(16, 16))
         btn_fcs.clicked.connect(self._export_fcs)
         abl.addWidget(btn_fcs)
 
         btn_csv = QPushButton("  Export CSV")
         btn_csv.setObjectName("exportBtn")
-        ico_csv = _icon("fa5s.file-csv", "#cba6f7")
+        ico_csv = _icon("prisma.export-fig", "#cba6f7", 16)
         if ico_csv:
             btn_csv.setIcon(ico_csv)
+            btn_csv.setIconSize(QSize(16, 16))
         btn_csv.clicked.connect(self._export_csv)
         abl.addWidget(btn_csv)
 
         btn_report = QPushButton("  Rapport HTML")
         btn_report.setObjectName("exportBtn")
-        ico_rep = _icon("fa5s.file-alt", "#cba6f7")
+        ico_rep = _icon("prisma.export-fig", "#cba6f7", 16)
         if ico_rep:
             btn_report.setIcon(ico_rep)
+            btn_report.setIconSize(QSize(16, 16))
         btn_report.clicked.connect(self._open_html_report)
         abl.addWidget(btn_report)
 
         btn_folder = QPushButton("  Ouvrir dossier")
-        ico_fol = _icon("fa5s.folder-open", "#cdd6f4")
+        ico_fol = _icon("prisma.folder-open", "#EEF2F7")
         if ico_fol:
             btn_folder.setIcon(ico_fol)
+            btn_folder.setIconSize(QSize(16, 16))
         btn_folder.clicked.connect(self._open_output_folder)
         abl.addWidget(btn_folder)
 
@@ -1500,40 +1601,36 @@ class FlowSomAnalyzerPro(QMainWindow):
         # ── Bandeau avertissement clinique (P3.6) ─────────────────────
         clinical_warning = QWidget()
         clinical_warning.setObjectName("clinicalWarningBanner")
-        clinical_warning.setStyleSheet(
-            "QWidget#clinicalWarningBanner {"
-            "background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            "stop:0 rgba(243,139,168,0.12), stop:1 rgba(250,179,135,0.08));"
-            "border-bottom: 1px solid rgba(243,139,168,0.22);"
-            "}"
-        )
         cw_layout = QHBoxLayout(clinical_warning)
-        cw_layout.setContentsMargins(16, 7, 16, 7)
-        cw_layout.setSpacing(10)
+        cw_layout.setContentsMargins(20, 9, 20, 9)
+        cw_layout.setSpacing(12)
 
-        ico_warn = _icon("fa5s.exclamation-triangle", "#f38ba8")
+        ico_warn = _icon("prisma.alert-triangle", "#FF3D6E")
         if ico_warn:
             lbl_ico = QLabel()
             lbl_ico.setPixmap(ico_warn.pixmap(14, 14))
-            lbl_ico.setStyleSheet("background: transparent;")
             cw_layout.addWidget(lbl_ico)
 
         lbl_warn = QLabel(
-            "<b style='color:#f38ba8;'>OUTIL DE RECHERCHE — USAGE NON CLINIQUE</b>"
-            "  <span style='color:#bac2de;'>Ce logiciel est une aide à l'analyse et à la visualisation."
-            " Il ne remplace pas l'interprétation d'un expert biologiste ou médecin,"
-            " ni les procédures AQ du laboratoire."
+            "<b style='color:#FF3D6E; letter-spacing:0.12em;'>⚠ RESEARCH TOOL · NOT FOR CLINICAL USE</b>"
+            "  <span style='color: #EEF2F7;'>Aide à l'analyse et à la visualisation."
+            " Ne remplace pas l'expert biologiste/médecin ni les procédures AQ du laboratoire."
             " Les seuils de scoring blastique sont des heuristiques non validées cliniquement.</span>"
         )
+        lbl_warn.setObjectName("clinicalWarningText")
         lbl_warn.setTextFormat(Qt.RichText)
         lbl_warn.setWordWrap(True)
-        lbl_warn.setStyleSheet("background: transparent; font-size: 9pt;")
         cw_layout.addWidget(lbl_warn, 1)
 
         layout.addWidget(clinical_warning)
 
         # Onglets résultats
         self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.setUsesScrollButtons(True)
+        self.tabs.tabBar().setElideMode(Qt.ElideNone)
+        self.tabs.tabBar().setExpanding(False)
+        self.tabs.setIconSize(QSize(16, 16))
         self._build_home_tab()  # 0 — Accueil MRD
         self._build_viz_tab()  # 1 — Visualisation
         self._build_pregate_tab()  # 2 — Représentations
@@ -1548,7 +1645,8 @@ class FlowSomAnalyzerPro(QMainWindow):
 
     def _build_home_tab(self) -> None:
         self._home_tab = HomeTab()
-        self.tabs.addTab(self._home_tab, "  Accueil MRD")
+        _ico_home = _icon("prisma.dot-plot", "#39FF8A", 16)
+        self.tabs.addTab(self._home_tab, _ico_home or QIcon(), "ACCUEIL MRD")
 
     def _build_viz_tab(self) -> None:
         tab = QWidget()
@@ -1581,17 +1679,19 @@ class FlowSomAnalyzerPro(QMainWindow):
         selector_layout.addWidget(self.combo_plot, 1)
 
         btn_refresh = QPushButton("  Rafraîchir")
-        ico_ref = _icon("fa5s.sync-alt", "#cdd6f4")
+        ico_ref = _icon("prisma.mrd-kinetics", "#EEF2F7", 16)
         if ico_ref:
             btn_refresh.setIcon(ico_ref)
+            btn_refresh.setIconSize(QSize(16, 16))
         btn_refresh.clicked.connect(self._refresh_current_plot)
         selector_layout.addWidget(btn_refresh)
 
         btn_browser = QPushButton("  Navigateur")
         btn_browser.setObjectName("successBtn")
-        ico_nav = _icon("fa5s.external-link-alt", "#11111b")
+        ico_nav = _icon("prisma.external-link", "#11111b")
         if ico_nav:
             btn_browser.setIcon(ico_nav)
+            btn_browser.setIconSize(QSize(16, 16))
         btn_browser.clicked.connect(self._open_current_plot_browser)
         selector_layout.addWidget(btn_browser)
 
@@ -1603,9 +1703,7 @@ class FlowSomAnalyzerPro(QMainWindow):
         png_layout.setContentsMargins(0, 0, 0, 0)
         self.canvas = MatplotlibCanvas(tab, width=10, height=7)
         self.toolbar = NavigationToolbar(self.canvas, tab)
-        self.toolbar.setStyleSheet(
-            "background: rgba(24,24,37,0.8); border-radius: 6px; padding: 3px;"
-        )
+        self.toolbar.setObjectName("matplotlibToolbar")
         png_layout.addWidget(self.toolbar)
         png_layout.addWidget(self.canvas, 1)
         self._viz_stack.addWidget(png_widget)
@@ -1619,7 +1717,8 @@ class FlowSomAnalyzerPro(QMainWindow):
         self._viz_stack.addWidget(html_placeholder)
 
         layout.addWidget(self._viz_stack, 1)
-        self.tabs.addTab(tab, "  Visualisation")
+        _ico_viz = _icon("prisma.umap-embed", "#5BAAFF", 16)
+        self.tabs.addTab(tab, _ico_viz or QIcon(), "VISUALISATION")
 
     def _build_pregate_tab(self) -> None:
         tab = QWidget()
@@ -1635,18 +1734,17 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         btn_gate_browser = QPushButton("  Navigateur")
         btn_gate_browser.setObjectName("successBtn")
-        ico_nav = _icon("fa5s.external-link-alt", "#11111b")
+        ico_nav = _icon("prisma.external-link", "#11111b")
         if ico_nav:
             btn_gate_browser.setIcon(ico_nav)
+            btn_gate_browser.setIconSize(QSize(16, 16))
         btn_gate_browser.clicked.connect(self._open_current_repr_browser)
         selector_row.addWidget(btn_gate_browser)
         layout.addLayout(selector_row)
 
         self.gate_canvas = MatplotlibCanvas(tab, width=10, height=6)
         gate_toolbar = NavigationToolbar(self.gate_canvas, tab)
-        gate_toolbar.setStyleSheet(
-            "background: rgba(24,24,37,0.8); border-radius: 6px; padding: 3px;"
-        )
+        gate_toolbar.setObjectName("matplotlibToolbar")
         layout.addWidget(gate_toolbar)
         layout.addWidget(self.gate_canvas, 1)
 
@@ -1692,7 +1790,8 @@ class FlowSomAnalyzerPro(QMainWindow):
             "Vue Combinée Nœuds SOM": ["som_node_combined"],
         }
         self.combo_gate_plot.addItems(list(self._gate_plot_keys.keys()))
-        self.tabs.addTab(tab, "  Représentations")
+        _ico_rep = _icon("prisma.gate-strategy", "#7B52FF", 16)
+        self.tabs.addTab(tab, _ico_rep or QIcon(), "REPRÉSENTATIONS")
 
     def _build_clusters_tab(self) -> None:
         tab = QWidget()
@@ -1731,16 +1830,18 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         btn_spider = QPushButton("  Générer Spider Plot")
         btn_spider.setObjectName("primaryBtn")
-        ico_sp = _icon("fa5s.asterisk", "#11111b")
+        ico_sp = _icon("prisma.metacluster", "#11111b", 16)
         if ico_sp:
             btn_spider.setIcon(ico_sp)
+            btn_spider.setIconSize(QSize(16, 16))
         btn_spider.clicked.connect(self._generate_spider_plot)
         left.addWidget(btn_spider)
 
         layout.addLayout(left)
         self.star_canvas = MatplotlibCanvas(tab, width=7, height=7)
         layout.addWidget(self.star_canvas, 1)
-        self.tabs.addTab(tab, "  Clusters")
+        _ico_clust = _icon("prisma.metacluster", "#FF9B3D", 16)
+        self.tabs.addTab(tab, _ico_clust or QIcon(), "CLUSTERS")
 
     def _build_results_tab(self) -> None:
         tab = QWidget()
@@ -1755,9 +1856,10 @@ class FlowSomAnalyzerPro(QMainWindow):
         hdr.addStretch()
         btn_export_txt = QPushButton("  Exporter .txt")
         btn_export_txt.setObjectName("exportBtn")
-        ico_exp = _icon("fa5s.file-download", "#cba6f7")
+        ico_exp = _icon("prisma.export-fig", "#cba6f7")
         if ico_exp:
             btn_export_txt.setIcon(ico_exp)
+            btn_export_txt.setIconSize(QSize(16, 16))
         btn_export_txt.clicked.connect(self._export_cluster_txt)
         hdr.addWidget(btn_export_txt)
         layout.addLayout(hdr)
@@ -1781,9 +1883,10 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.btn_open_combined = QPushButton("  Ouvrir interactif")
         self.btn_open_combined.setObjectName("successBtn")
         self.btn_open_combined.setEnabled(False)
-        ico_oc = _icon("fa5s.external-link-alt", "#11111b")
+        ico_oc = _icon("prisma.external-link", "#11111b")
         if ico_oc:
             self.btn_open_combined.setIcon(ico_oc)
+            self.btn_open_combined.setIconSize(QSize(16, 16))
         self.btn_open_combined.clicked.connect(self._open_combined_html)
         hdr2.addWidget(self.btn_open_combined)
         layout.addLayout(hdr2)
@@ -1791,9 +1894,7 @@ class FlowSomAnalyzerPro(QMainWindow):
         self._results_web = None
         self._combined_canvas = MatplotlibCanvas(tab, width=10, height=5)
         self._combined_toolbar = NavigationToolbar(self._combined_canvas, tab)
-        self._combined_toolbar.setStyleSheet(
-            "background: rgba(24,24,37,0.8); border-radius: 6px; padding: 3px;"
-        )
+        self._combined_toolbar.setObjectName("matplotlibToolbar")
         layout.addWidget(self._combined_toolbar)
         layout.addWidget(self._combined_canvas, 1)
 
@@ -1803,7 +1904,8 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.txt_summary.setPlaceholderText("Le résumé de l'analyse apparaîtra ici…")
         layout.addWidget(self.txt_summary)
 
-        self.tabs.addTab(tab, "  Résultats")
+        _ico_res = _icon("prisma.heatmap", "#FF3D6E", 16)
+        self.tabs.addTab(tab, _ico_res or QIcon(), "RÉSULTATS")
 
     def _build_fcs_viewer_tab(self) -> None:
         tab = QWidget()
@@ -1818,9 +1920,10 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         self.btn_load_fcs_viz = QPushButton("  Charger FCS")
         self.btn_load_fcs_viz.setObjectName("primaryBtn")
-        ico_fcs = _icon("fa5s.file-import", "#11111b")
+        ico_fcs = _icon("prisma.fcs-file", "#11111b")
         if ico_fcs:
             self.btn_load_fcs_viz.setIcon(ico_fcs)
+            self.btn_load_fcs_viz.setIconSize(QSize(16, 16))
         self.btn_load_fcs_viz.clicked.connect(self._load_fcs_for_visualization)
         ctrl_layout.addWidget(self.btn_load_fcs_viz)
 
@@ -1867,9 +1970,10 @@ class FlowSomAnalyzerPro(QMainWindow):
         ctrl_layout.addWidget(self.chk_fcs_jitter)
 
         btn_refresh = QPushButton("  Rafraichir")
-        ico_ref = _icon("fa5s.sync-alt", "#cdd6f4")
+        ico_ref = _icon("prisma.sync", "#EEF2F7")
         if ico_ref:
             btn_refresh.setIcon(ico_ref)
+            btn_refresh.setIconSize(QSize(16, 16))
         btn_refresh.clicked.connect(self._update_fcs_plot)
         ctrl_layout.addWidget(btn_refresh)
 
@@ -1879,14 +1983,16 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.fcs_viz_canvas = MatplotlibCanvas(tab, width=10, height=8)
         self.fcs_viz_canvas.setMinimumHeight(480)
         fcs_toolbar = NavigationToolbar(self.fcs_viz_canvas, tab)
+        fcs_toolbar.setObjectName("matplotlibToolbar")
         layout.addWidget(fcs_toolbar)
         layout.addWidget(self.fcs_viz_canvas)
 
         self.lbl_fcs_info = QLabel("Chargez un fichier FCS pour visualiser")
-        self.lbl_fcs_info.setStyleSheet("color: #a6adc8; padding: 4px;")
+        self.lbl_fcs_info.setObjectName("fcsInfoLabel")
         layout.addWidget(self.lbl_fcs_info)
 
-        self.tabs.addTab(tab, "  Viewer FCS")
+        _ico_fcs = _icon("prisma.fcs-file", "#7EC8E3", 16)
+        self.tabs.addTab(tab, _ico_fcs or QIcon(), "VIEWER FCS")
 
     # ==================================================================
     # LOGIQUE : Chargement config
@@ -2263,14 +2369,15 @@ class FlowSomAnalyzerPro(QMainWindow):
         # En-tête
         hdr = QHBoxLayout()
         lbl_title = QLabel("Fichiers FCS détectés")
-        lbl_title.setStyleSheet("color: #cdd6f4; font-size: 13pt; font-weight: 700;")
+        lbl_title.setObjectName("dialogTitle")
         hdr.addWidget(lbl_title)
         hdr.addStretch()
         btn_refresh = QPushButton("  Actualiser")
         btn_refresh.setObjectName("ghostBtn")
-        ico_r = _icon("fa5s.sync-alt", "#89b4fa")
+        ico_r = _icon("prisma.sync", "#5BAAFF")
         if ico_r:
             btn_refresh.setIcon(ico_r)
+            btn_refresh.setIconSize(QSize(16, 16))
         hdr.addWidget(btn_refresh)
         vbox.addLayout(hdr)
 
@@ -2292,7 +2399,7 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         # Label résumé
         lbl_sum = QLabel("")
-        lbl_sum.setStyleSheet("color: #a6adc8; font-size: 9.5pt;")
+        lbl_sum.setObjectName("dialogCount")
         vbox.addWidget(lbl_sum)
 
         def _populate():
@@ -2307,7 +2414,7 @@ class FlowSomAnalyzerPro(QMainWindow):
             for i, (fname, cond, n_ev, n_ch, markers) in enumerate(rows):
                 table.setItem(i, 0, QTableWidgetItem(fname))
                 cond_item = QTableWidgetItem(cond)
-                cond_item.setForeground(QColor("#a6e3a1") if cond == "Sain" else QColor("#f38ba8"))
+                cond_item.setForeground(QColor("#39FF8A") if cond == "Sain" else QColor("#FF3D6E"))
                 table.setItem(i, 1, cond_item)
 
                 ev_item = QTableWidgetItem(f"{n_ev:,}" if isinstance(n_ev, int) else str(n_ev))
@@ -2364,7 +2471,7 @@ class FlowSomAnalyzerPro(QMainWindow):
 
         # Titre + description
         lbl_title = _QL("Renommage colonnes FCS  →  Kaluza")
-        lbl_title.setStyleSheet("color: #cdd6f4; font-size: 13pt; font-weight: 700;")
+        lbl_title.setObjectName("dialogTitle")
         vbox.addWidget(lbl_title)
 
         lbl_desc = _QL(
@@ -2375,26 +2482,27 @@ class FlowSomAnalyzerPro(QMainWindow):
             "Ces règles sont appliquées avant toute harmonisation automatique."
         )
         lbl_desc.setWordWrap(True)
-        lbl_desc.setStyleSheet("color: #a6adc8; font-size: 9.5pt; padding-bottom: 4px;")
+        lbl_desc.setObjectName("dialogDesc")
         vbox.addWidget(lbl_desc)
 
         # Barre d'outils
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
 
-        def _mk_btn(label, icon_name, color="#89b4fa"):
+        def _mk_btn(label, icon_name, color="#5BAAFF"):
             b = QPushButton(f"  {label}")
             b.setObjectName("ghostBtn")
             b.setMinimumHeight(34)
             ico = _icon(icon_name, color)
             if ico:
                 b.setIcon(ico)
+                b.setIconSize(QSize(16, 16))
             return b
 
-        btn_detect = _mk_btn("Détecter colonnes FCS", "fa5s.search", "#89b4fa")
-        btn_add = _mk_btn("Ajouter ligne", "fa5s.plus", "#a6e3a1")
-        btn_del = _mk_btn("Supprimer sélection", "fa5s.trash-alt", "#f38ba8")
-        btn_clear = _mk_btn("Tout effacer", "fa5s.eraser", "#f9e2af")
+        btn_detect = _mk_btn("Détecter colonnes FCS", "prisma.search", "#5BAAFF")
+        btn_add = _mk_btn("Ajouter ligne", "prisma.plus", "#39FF8A")
+        btn_del = _mk_btn("Supprimer sélection", "prisma.trash", "#FF3D6E")
+        btn_clear = _mk_btn("Tout effacer", "prisma.eraser", "#f9e2af")
 
         toolbar.addWidget(btn_detect)
         toolbar.addWidget(btn_add)
@@ -2403,7 +2511,7 @@ class FlowSomAnalyzerPro(QMainWindow):
         toolbar.addStretch()
 
         lbl_count = _QL("0 règle(s)")
-        lbl_count.setStyleSheet("color: #a6adc8; font-size: 9pt;")
+        lbl_count.setObjectName("dialogCount")
         toolbar.addWidget(lbl_count)
         vbox.addLayout(toolbar)
 
@@ -2537,9 +2645,10 @@ class FlowSomAnalyzerPro(QMainWindow):
         btn_apply.setObjectName("primaryBtn")
         btn_apply.setMinimumHeight(38)
         btn_apply.setMinimumWidth(140)
-        ico_ok = _icon("fa5s.check", "#11111b")
+        ico_ok = _icon("prisma.check", "#11111b")
         if ico_ok:
             btn_apply.setIcon(ico_ok)
+            btn_apply.setIconSize(QSize(16, 16))
         btn_row_layout.addWidget(btn_apply)
         vbox.addLayout(btn_row_layout)
 
@@ -2571,14 +2680,12 @@ class FlowSomAnalyzerPro(QMainWindow):
                     f"Renommage colonnes : {active} règle(s) active(s). "
                     f"Cliquez sur «Renommer colonnes» pour modifier."
                 )
-                self.lbl_rename_summary.setStyleSheet(
-                    "color: #cba6f7; font-size: 9.5pt; padding: 0px 2px 4px 2px; font-weight: 600;"
-                )
+                self.lbl_rename_summary.setObjectName("summaryLabelActive")
             else:
                 self.lbl_rename_summary.setText("Renommage colonnes : aucune règle configurée.")
-                self.lbl_rename_summary.setStyleSheet(
-                    "color: #6c7086; font-size: 9.5pt; padding: 0px 2px 4px 2px;"
-                )
+                self.lbl_rename_summary.setObjectName("summaryLabel")
+            self.lbl_rename_summary.style().unpolish(self.lbl_rename_summary)
+            self.lbl_rename_summary.style().polish(self.lbl_rename_summary)
             dlg.accept()
 
         btn_apply.clicked.connect(_apply)
@@ -2743,7 +2850,9 @@ class FlowSomAnalyzerPro(QMainWindow):
         self.progress_bar.setValue(0)
         self.log_output.clear()
 
-        self._log("═══════════════════════════════════════════════")
+        self._log(
+            "═══════════════════════════════════════════════"
+        )
         self._log(f"Pipeline FlowSOM Pro — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         self._log(f"Grille : {self._config.flowsom.xdim}×{self._config.flowsom.ydim}")
         self._log(f"Métaclusters : {self._config.flowsom.n_metaclusters}")
@@ -2751,7 +2860,9 @@ class FlowSomAnalyzerPro(QMainWindow):
         self._log(f"GPU : {'Oui' if self._config.gpu.enabled else 'Non'}")
         if self._config.batch.enabled:
             self._log("Mode : Batch (traitement par lots)")
-        self._log("═══════════════════════════════════════════════")
+        self._log(
+            "═══════════════════════════════════════════════"
+        )
 
         if self._config.batch.enabled:
             from flowsom_pipeline_pro.gui.workers import BatchWorker
@@ -2825,7 +2936,7 @@ class FlowSomAnalyzerPro(QMainWindow):
             names = ", ".join(fallbacks[:3])
             if len(fallbacks) > 3:
                 names += f" +{len(fallbacks) - 3}"
-            lines.append(f"<span style='color:#f38ba8;'>⚠ Fallbacks : {names}</span>")
+            lines.append(f"<span style='color:#FF3D6E;'>⚠ Fallbacks : {names}</span>")
 
         msg = QMessageBox(self)
         msg.setWindowTitle("Validation pré-gating")
@@ -2833,15 +2944,6 @@ class FlowSomAnalyzerPro(QMainWindow):
         msg.setText("<br>".join(lines))
         msg.setStandardButtons(QMessageBox.Ok)
         msg.setWindowModality(Qt.NonModal)
-
-        # Style Catppuccin Mocha
-        msg.setStyleSheet(
-            "QMessageBox { background-color: #1e1e2e; color: #cdd6f4; }"
-            "QLabel { color: #cdd6f4; }"
-            "QPushButton { background-color: #313244; color: #cdd6f4; "
-            "border: 1px solid #45475a; border-radius: 4px; padding: 4px 12px; }"
-            "QPushButton:hover { background-color: #45475a; }"
-        )
         msg.show()
 
         # Log également dans le panneau de logs
@@ -2879,6 +2981,12 @@ class FlowSomAnalyzerPro(QMainWindow):
             self._load_output_plots(result)
             method_used = self.combo_mrd_method.currentText()
             self._home_tab.load_result(result, method_used)
+            # Connecter le signal de curation experte → patch HTML temps réel
+            try:
+                self._home_tab.curation_changed.disconnect()
+            except Exception:
+                pass
+            self._home_tab.curation_changed.connect(self._on_curation_changed)
             # Aller automatiquement aux résultats
             self._navigate_to_step(4)
             self._sidebar.set_done(4)
@@ -3266,7 +3374,7 @@ class FlowSomAnalyzerPro(QMainWindow):
                 ax = self._combined_canvas.fig.add_subplot(111)
                 ax.imshow(mpimg.imread(combined_png))
                 ax.axis("off")
-                self._combined_canvas.fig.patch.set_facecolor(COLORS["base"])
+                self._combined_canvas.fig.patch.set_facecolor(COLORS["surface"])
                 self._combined_canvas.fig.tight_layout(pad=0.3)
                 self._combined_canvas.draw()
             except Exception as e:
@@ -3323,7 +3431,7 @@ class FlowSomAnalyzerPro(QMainWindow):
             ax = self.canvas.fig.add_subplot(111)
             ax.imshow(mpimg.imread(path))
             ax.axis("off")
-            self.canvas.fig.patch.set_facecolor(COLORS["base"])
+            self.canvas.fig.patch.set_facecolor(COLORS["surface"])
             self.canvas.fig.tight_layout(pad=0.5)
             self.canvas.draw()
         except Exception as e:
@@ -3344,7 +3452,7 @@ class FlowSomAnalyzerPro(QMainWindow):
             ha="center",
             va="center",
             fontsize=13,
-            color=COLORS["subtext"],
+            color=COLORS["paper"],
             style="italic",
             wrap=True,
         )
@@ -3398,7 +3506,7 @@ class FlowSomAnalyzerPro(QMainWindow):
                     ha="center",
                     va="center",
                     fontsize=11,
-                    color=COLORS["subtext"],
+                    color=COLORS["paper"],
                     style="italic",
                 )
                 self.gate_canvas.axes.axis("off")
@@ -3411,7 +3519,7 @@ class FlowSomAnalyzerPro(QMainWindow):
                     ax = self.gate_canvas.fig.add_subplot(111)
                     ax.imshow(mpimg.imread(path))
                     ax.axis("off")
-                    self.gate_canvas.fig.patch.set_facecolor(COLORS["base"])
+                    self.gate_canvas.fig.patch.set_facecolor(COLORS["surface"])
                     self.gate_canvas.fig.tight_layout(pad=0.3)
                     self.gate_canvas.draw()
                 except Exception as e:
@@ -3426,7 +3534,7 @@ class FlowSomAnalyzerPro(QMainWindow):
                 ha="center",
                 va="center",
                 fontsize=11,
-                color=COLORS["subtext"],
+                color=COLORS["paper"],
                 style="italic",
             )
             self.gate_canvas.axes.axis("off")
@@ -3514,7 +3622,9 @@ class FlowSomAnalyzerPro(QMainWindow):
         output_files = self._result.output_files or {}
         csv_path = output_files.get("cells_csv") or output_files.get("csv")
         if csv_path and Path(csv_path).exists():
-            QMessageBox.information(self, "Export CSV", f"Fichier CSV déjà exporté :\n{csv_path}")
+            QMessageBox.information(
+                self, "Export CSV", f"Fichier CSV déjà exporté :\n{csv_path}"
+            )
         else:
             try:
                 path, _ = QFileDialog.getSaveFileName(self, "Exporter CSV", "", "CSV Files (*.csv)")
@@ -3553,6 +3663,37 @@ class FlowSomAnalyzerPro(QMainWindow):
                 self._log(f" Dashboard MRD exporté : {dash_path}")
         except Exception as exc:
             _logger.warning("_export_mrd_dashboard: %s", exc)
+
+    def _on_curation_changed(self) -> None:
+        """
+        Slot connecté à HomeTab.curation_changed.
+        Appelé après chaque KEEP/DISCARD ou ajout/suppression de nœud expert.
+        Met à jour _result et patche silencieusement le HTML existant.
+        """
+        self._inject_human_curation()
+        if self._result is None or self._result.curated_nodes is None:
+            return
+        output_files = self._result.output_files or {}
+        html_path = output_files.get("html_report")
+        if not (html_path and Path(html_path).exists()):
+            return
+        try:
+            from flowsom_pipeline_pro.src.visualization.html_report import (
+                patch_curated_banner_in_html,
+            )
+
+            gauges = getattr(self._home_tab, "_last_gauges_data", None) or []
+            ok = patch_curated_banner_in_html(
+                html_path,
+                curated_mrd_percent=self._result.curated_mrd_percent or 0.0,
+                curated_mrd_cells=self._result.curated_mrd_cells or 0,
+                curated_nodes=self._result.curated_nodes,
+                algo_gauges=gauges,
+            )
+            if ok:
+                self._log(" HTML mis à jour (validation experte).")
+        except Exception as _e:
+            _logger.warning("_on_curation_changed patch HTML: %s", _e)
 
     def _open_html_report(self) -> None:
         self._inject_human_curation()
@@ -3966,7 +4107,7 @@ class FlowSomAnalyzerPro(QMainWindow):
 
             self.fcs_viz_canvas.clear_and_reset()
             ax = self.fcs_viz_canvas.axes
-            scatter_colors = COLORS["blue"]
+            scatter_colors = COLORS["info"]
             legend_handles = None
 
             if color_data is not None and plot_type == "Scatter":
@@ -4003,7 +4144,7 @@ class FlowSomAnalyzerPro(QMainWindow):
                         loc="upper right",
                         fontsize=7,
                         facecolor="#313244",
-                        labelcolor="#cdd6f4",
+                        labelcolor="#EEF2F7",
                         edgecolor="#45475a",
                         framealpha=0.9,
                         ncol=2 if len(legend_handles) > 10 else 1,
@@ -4011,8 +4152,8 @@ class FlowSomAnalyzerPro(QMainWindow):
             elif plot_type == "Densite":
                 h = ax.hist2d(x_data, y_data, bins=100, cmap="viridis", norm=mcolors.LogNorm())
                 cb = self.fcs_viz_canvas.fig.colorbar(h[3], ax=ax, label="Densité")
-                cb.ax.tick_params(colors=COLORS["subtext"])
-                cb.ax.yaxis.label.set_color(COLORS["subtext"])
+                cb.ax.tick_params(colors=COLORS["paper"])
+                cb.ax.yaxis.label.set_color(COLORS["paper"])
             elif plot_type == "Contour":
                 from scipy import stats as sp_stats
 
@@ -4032,7 +4173,7 @@ class FlowSomAnalyzerPro(QMainWindow):
                         y_data,
                         s=2,
                         alpha=0.5,
-                        c=COLORS["blue"],
+                        c=COLORS["info"],
                         edgecolors="none",
                         rasterized=True,
                     )
@@ -4061,12 +4202,12 @@ class FlowSomAnalyzerPro(QMainWindow):
             ax.set_title(
                 f"{x_marker} vs {y_marker}\n{subtitle}",
                 fontsize=12,
-                color=COLORS["text"],
+                color=COLORS["paper"],
                 fontweight="bold",
                 pad=12,
             )
-            ax.set_xlabel(x_marker, color=COLORS["text"], fontsize=11, fontweight="bold")
-            ax.set_ylabel(y_marker, color=COLORS["text"], fontsize=11, fontweight="bold")
+            ax.set_xlabel(x_marker, color=COLORS["paper"], fontsize=11, fontweight="bold")
+            ax.set_ylabel(y_marker, color=COLORS["paper"], fontsize=11, fontweight="bold")
             self.fcs_viz_canvas.fig.tight_layout(pad=1.5)
             self.fcs_viz_canvas.draw()
 
@@ -4227,8 +4368,33 @@ class FlowSomAnalyzerPro(QMainWindow):
 
 
 def main() -> None:
+    # Apply before QApplication() so Qt renders in native DPI instead of bitmap scaling.
+    if hasattr(Qt, "AA_EnableHighDpiScaling"):
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    if hasattr(Qt, "AA_UseHighDpiPixmaps"):
+        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    if hasattr(QApplication, "setHighDpiScaleFactorRoundingPolicy") and hasattr(
+        Qt, "HighDpiScaleFactorRoundingPolicy"
+    ):
+        QApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.RoundPreferFloor
+        )
+
     app = QApplication(sys.argv)
+    _register_embedded_fonts()
+
+    # Force Segoe UI as app-wide font for crisp native rendering on Windows
+    _app_font = QFont("Segoe UI", 10)
+    _app_font.setHintingPreference(QFont.PreferFullHinting)
+    _app_font.setStyleStrategy(QFont.PreferAntialias)
+    app.setFont(_app_font)
+
     app.setStyle("Fusion")
+    app.setApplicationName("PRISMA")
+    app.setOrganizationName("Magne Florian")
+    _ico = _asset_path("prisma_logo.ico")
+    if _ico.exists():
+        app.setWindowIcon(QIcon(str(_ico)))
     window = FlowSomAnalyzerPro()
     window.show()
     sys.exit(app.exec_())
@@ -4236,3 +4402,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

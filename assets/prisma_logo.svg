@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Background -->
+  <rect width="256" height="256" fill="#04070D"/>
+
+  <!-- Prism triangle (centered, tall) -->
+  <polygon points="90,28 152,200 28,200"
+    fill="rgba(255,255,255,0.025)"
+    stroke="rgba(255,255,255,0.20)"
+    stroke-width="1.5"/>
+
+  <!-- Refraction node -->
+  <circle cx="90" cy="114" r="4" fill="white" opacity="0.35"/>
+  <circle cx="90" cy="114" r="12" fill="white" opacity="0.04"/>
+
+  <!-- Refraction beams -->
+  <line x1="90" y1="114" x2="170" y2="56"  stroke="#7B52FF" stroke-width="1.6" opacity="0.85"/>
+  <line x1="90" y1="114" x2="170" y2="83"  stroke="#5BAAFF" stroke-width="1.3" opacity="0.65"/>
+  <line x1="90" y1="114" x2="170" y2="114" stroke="#39FF8A" stroke-width="2.0" opacity="0.95"/>
+  <line x1="90" y1="114" x2="170" y2="145" stroke="#FF9B3D" stroke-width="1.3" opacity="0.70"/>
+  <line x1="90" y1="114" x2="170" y2="174" stroke="#FF3D6E" stroke-width="1.6" opacity="0.85"/>
+
+  <!-- Scatter dots — V450/Lympho cluster -->
+  <circle cx="176" cy="54"  r="6"   fill="#7B52FF"/>
+  <circle cx="189" cy="46"  r="4"   fill="#7B52FF" opacity="0.55"/>
+  <circle cx="184" cy="64"  r="3"   fill="#7B52FF" opacity="0.40"/>
+
+  <!-- Scatter dots — V500/T-cell cluster -->
+  <circle cx="174" cy="82"  r="5"   fill="#5BAAFF" opacity="0.85"/>
+  <circle cx="186" cy="74"  r="3"   fill="#5BAAFF" opacity="0.50"/>
+
+  <!-- Scatter dots — FITC/Mono cluster (accent — brightest) -->
+  <circle cx="177" cy="113" r="7"   fill="#39FF8A"/>
+  <circle cx="191" cy="104" r="4.5" fill="#39FF8A" opacity="0.65"/>
+  <circle cx="192" cy="122" r="3.5" fill="#39FF8A" opacity="0.50"/>
+  <circle cx="204" cy="113" r="2.5" fill="#39FF8A" opacity="0.35"/>
+
+  <!-- Scatter dots — PE/Granulo cluster -->
+  <circle cx="174" cy="145" r="5.5" fill="#FF9B3D" opacity="0.90"/>
+  <circle cx="187" cy="137" r="3.5" fill="#FF9B3D" opacity="0.55"/>
+  <circle cx="185" cy="155" r="3"   fill="#FF9B3D" opacity="0.45"/>
+
+  <!-- Scatter dots — APC/MRD cluster -->
+  <circle cx="175" cy="174" r="5.5" fill="#FF3D6E"/>
+  <circle cx="188" cy="165" r="3"   fill="#FF3D6E" opacity="0.55"/>
+  <circle cx="187" cy="183" r="2.5" fill="#FF3D6E" opacity="0.45"/>
+</svg>
